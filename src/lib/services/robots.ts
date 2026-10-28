@@ -11,13 +11,14 @@ import { audit } from "./audit";
 import { sanitizeIncident, type IncidentView } from "./incidents";
 
 /** 고객에게 보여줄 수 있는 로봇 정보(내부 메모·제조사 ID 제외). */
-export type RobotView = Omit<Robot, "internalNote" | "vendorRobotId"> & { internalNote?: string; vendorRobotId?: string };
+export type RobotView = Omit<Robot, "internalNote" | "vendorRobotId" | "vendorMeta"> & { internalNote?: string; vendorRobotId?: string; vendorMeta?: Robot["vendorMeta"] };
 
 export function toRobotView(robot: Robot, user: User): RobotView {
   if (isCustomer(user)) {
     const view: RobotView = { ...robot };
     delete view.internalNote;
     delete view.vendorRobotId;
+    delete view.vendorMeta;
     return view;
   }
   return robot;

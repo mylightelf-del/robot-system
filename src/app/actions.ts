@@ -200,3 +200,33 @@ export async function relocateRobotAction(robotId: string, toSiteId: string, toF
 export async function setSiteManagerCanConfirmAction(value: boolean): Promise<ActionResult> {
   return run(async () => admin.setSiteManagerCanConfirm(await getCurrentUser(), value));
 }
+
+// ---- 제조사 연동(PUDU) ----
+export async function puduTestConnectionAction(): Promise<ActionResult & { robots?: Awaited<ReturnType<typeof admin.puduTestConnection>>["robots"] }> {
+  try {
+    const user = await getCurrentUser();
+    const r = await admin.puduTestConnection(user);
+    revalidatePath("/admin");
+    return r.ok ? { ok: true, message: r.message, robots: r.robots } : { ok: false, error: r.message };
+  } catch (e) {
+    if (!(e instanceof AppError)) console.error("[action] PUDU 연결 확인 오류:", e);
+    return { ok: false, error: e instanceof AppError ? e.message : `연결 실패: ${(e as Error).message}` };
+  }
+}
+export async function puduImportRobotsAction(siteId: string, floorId: string, sns: string[]): Promise<ActionResult> {
+  return run(async () => {
+    const n = await admin.puduImportRobots(await getCurrentUser(), siteId, floorId, sns);
+    return { message: `PUDU 로봇 ${n}대를 등록했습니다. 첫 상태는 워커 폴링 후 표시됩니다.` };
+  });
+}
+export async function puduSyncNowAction(job: "status" | "reports" | "catalog" | "events"): Promise<ActionResult> {
+  return run(async () => {
+    const user = await getCurrentUser();
+    if (user.role !== "HQ_ADMIN") throw new ForbiddenError("본사 관리자만 실행할 수 있습니다.");
+    const w = await import("@/worker/pudu");
+    const api = (await import("@/lib/vendors/pudu/puduAdapter")).createPuduApi();
+    const r = job === "status" ? await w.syncPuduStatus() : job === "reports" ? await w.syncPuduReports(api) : job === "catalog" ? await w.syncPuduCatalog(api) : await w.processPuduEvents();
+    if (!r.ok) throw new AppError(`${r.job} 실패: ${r.detail}`, "UNSUPPORTED");
+    return { message: `${r.job}: ${r.detail}` };
+  });
+}

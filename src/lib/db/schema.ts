@@ -98,6 +98,8 @@ export const robots = pgTable("robots", {
   active: boolean().notNull().default(true),
   supportedCommands: jsonb().$type<CommandType[]>().notNull(),
   internalNote: text().notNull().default(""),
+  /** 제조사 측 부가 정보(PUDU: shop_id, product_code, mac, nickname 등). 화면에는 직원에게만 노출. */
+  vendorMeta: jsonb().$type<Record<string, unknown>>(),
 });
 
 export const robotPlacements = pgTable(
@@ -441,3 +443,38 @@ export const appSettings = pgTable("app_settings", {
   commandAcceptedTimeoutSeconds: integer().notNull().default(60),
   staleThresholdMinutes: integer().notNull().default(15),
 });
+
+/** 제조사 콜백(Webhook) 원문 보관 + 비동기 처리 상태. 중복 키로 재시도 중복을 막는다. */
+export const vendorEvents = pgTable(
+  "vendor_events",
+  {
+    id: text().primaryKey(),
+    vendor: text().$type<Vendor>().notNull(),
+    eventType: text().notNull(),
+    vendorRobotId: text(),
+    /** 중복 제거 키(제조사+유형+SN+발생 시각 등). */
+    eventKey: text().notNull(),
+    receivedAt: isoTimestamp().notNull(),
+    occurredAt: isoTimestamp(),
+    traceId: text(),
+    payload: jsonb().notNull(),
+    processedAt: isoTimestamp(),
+    processError: text(),
+  },
+  (t) => [uniqueIndex("vendor_events_key").on(t.vendor, t.eventKey), index("vendor_events_pending_idx").on(t.processedAt, t.receivedAt)],
+);
+
+/** 제조사 동기화 작업 상태(마지막 실행·성공·오류·커서). 운영 감시 화면용. */
+export const vendorSyncState = pgTable(
+  "vendor_sync_state",
+  {
+    id: text().primaryKey(), // `${vendor}:${job}`
+    vendor: text().$type<Vendor>().notNull(),
+    job: text().notNull(),
+    lastRunAt: isoTimestamp(),
+    lastOkAt: isoTimestamp(),
+    lastError: text(),
+    cursor: jsonb().$type<Record<string, unknown>>().notNull().default({}),
+    stats: jsonb().$type<Record<string, unknown>>().notNull().default({}),
+  },
+);

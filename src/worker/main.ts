@@ -8,9 +8,14 @@
 import { closeDb } from "@/lib/db/client";
 import { purgeExpiredSessions } from "@/lib/auth/session";
 import { simulationTick } from "./simulation";
+import { processPuduEvents, puduLiveEnabled, PUDU_WINDOW_HOURS, syncPuduCatalog, syncPuduErrors, syncPuduReports, syncPuduStatus } from "./pudu";
+import { createPuduApi } from "@/lib/vendors/pudu/puduAdapter";
+import { vendorModes } from "@/lib/vendors";
 
 const tickSeconds = Number(process.env.SIMULATION_TICK_SECONDS ?? 2);
 const vendorMode = process.env.VENDOR_MODE ?? "sample";
+// 샘플 모드인 제조사가 하나라도 있으면(또는 샘플 적재 로봇이 남아 있을 수 있으므로) 시뮬레이션 틱을 돈다. 실제 연동 로봇은 틱에서 제외된다.
+const anySample = Object.values(vendorModes()).some((m) => m === "sample");
 let stopping = false;
 
 function log(msg: string) {
@@ -31,17 +36,39 @@ async function loop(name: string, intervalMs: number, fn: () => Promise<void>) {
 }
 
 async function main() {
-  log(`시작 — VENDOR_MODE=${vendorMode}, tick=${tickSeconds}s`);
+  log(`시작 — VENDOR_MODE=${vendorMode}, 제조사별 ${JSON.stringify(vendorModes())}, tick=${tickSeconds}s`);
   const jobs: Promise<void>[] = [];
-  if (vendorMode === "sample") {
+  if (anySample) {
     jobs.push(
       loop("simulation", tickSeconds * 1000, async () => {
         const r = await simulationTick();
         if (r.commands || r.runs) log(`시뮬레이션: 명령 ${r.commands} · 실적 ${r.runs} · 상태 ${r.statuses}`);
       }),
     );
-  } else {
-    log("live 모드: 제조사 주기 조회는 3단계에서 구현됩니다. 현재는 세션 정리만 수행합니다.");
+  }
+  if (puduLiveEnabled()) {
+    const api = createPuduApi();
+    const statusSec = Number(process.env.PUDU_POLL_STATUS_SECONDS ?? 60);
+    const reportsMin = Number(process.env.PUDU_POLL_REPORTS_MINUTES ?? 10);
+    const catalogMin = Number(process.env.PUDU_POLL_CATALOG_MINUTES ?? 60);
+    log(`PUDU live: 상태 ${statusSec}s · 보고서/장애 ${reportsMin}m · 작업/예약/소모품 ${catalogMin}m · 콜백 처리 5s`);
+    const report = (r: { job: string; ok: boolean; detail: string }) => log(`PUDU ${r.job}: ${r.ok ? "OK" : "실패"} — ${r.detail}`);
+    jobs.push(loop("pudu-status", statusSec * 1000, async () => report(await syncPuduStatus())));
+    jobs.push(
+      loop("pudu-reports", reportsMin * 60_000, async () => {
+        report(await syncPuduReports(api, PUDU_WINDOW_HOURS));
+        report(await syncPuduErrors(api, PUDU_WINDOW_HOURS));
+      }),
+    );
+    jobs.push(loop("pudu-catalog", catalogMin * 60_000, async () => report(await syncPuduCatalog(api))));
+    jobs.push(
+      loop("pudu-events", 5000, async () => {
+        const r = await processPuduEvents();
+        if (r.counts?.events) report(r);
+      }),
+    );
+  } else if (vendorMode !== "sample") {
+    log("live 모드이지만 PUDU 키가 설정되지 않았습니다(PUDU_API_APP_KEY/SECRET/CLUSTER). CenoBots 는 3단계에서 구현됩니다.");
   }
   jobs.push(
     loop("sessions", 60_000, async () => {

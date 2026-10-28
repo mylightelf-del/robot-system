@@ -6,7 +6,7 @@ import { Card, Empty, PageTitle } from "@/components/ui";
 import { AccessDenied } from "@/components/AccessDenied";
 import { Battery, StatusBadge } from "@/components/StatusBadge";
 import { formatDateTime, nowIso, relativeFromNow } from "@/lib/util/time";
-import { VENDOR_LABEL } from "@/lib/domain/commands";
+import { MODEL_LABEL, VENDOR_LABEL } from "@/lib/domain/commands";
 import { SiteFilter } from "@/components/SiteFilter";
 
 export default async function RobotsPage({ searchParams }: { searchParams: Promise<{ site?: string }> }) {
@@ -52,7 +52,7 @@ export default async function RobotsPage({ searchParams }: { searchParams: Promi
                       </Link>
                     </td>
                     <td>
-                      {VENDOR_LABEL[r.robot.vendor]} {r.robot.model}
+                      {VENDOR_LABEL[r.robot.vendor]} {MODEL_LABEL[r.robot.model]}
                     </td>
                     <td>
                       <Link href={`/sites/${r.site.id}?floor=${r.floor.id}`} className="hover:underline">

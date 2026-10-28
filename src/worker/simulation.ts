@@ -2,6 +2,7 @@ import { and, eq, inArray, isNotNull } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db/client";
 import { getRobot, listZonesByFloor, loadSettings, toStatus } from "@/lib/db/repo";
 import { advanceCommand, applyHeartbeat } from "@/lib/vendors/sample/simulation";
+import { isLiveRobot } from "@/lib/vendors";
 import { nowIso } from "@/lib/util/time";
 
 let lastTickAt: string | null = null;
@@ -57,9 +58,11 @@ export async function simulationTick(now: string = nowIso()): Promise<{ commands
     });
   }
 
-  // 하트비트(온라인 로봇)
+  // 하트비트(온라인 샘플 로봇). 실제 연동 로봇의 상태는 제조사 폴링·콜백이 갱신하므로 건드리지 않는다.
   const online = await db.select().from(schema.robotStatus).where(eq(schema.robotStatus.online, true));
   for (const row of online) {
+    const robot = await getRobot(row.robotId, db);
+    if (!robot || isLiveRobot(robot)) continue;
     const st = toStatus(row);
     if (applyHeartbeat(st, elapsedMin, robotsWithSimMission.has(st.robotId), now)) {
       await db.update(schema.robotStatus).set(st).where(eq(schema.robotStatus.robotId, st.robotId));

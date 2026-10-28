@@ -5,6 +5,7 @@ import { getOptionalUser } from "@/lib/auth/session";
 import { AppNav } from "@/components/AppNav";
 import { UserMenu } from "@/components/UserMenu";
 import { ROLE_LABEL } from "@/lib/domain/status";
+import { vendorModes } from "@/lib/vendors";
 
 export const metadata: Metadata = {
   title: "청소로봇 통합관제",
@@ -19,7 +20,9 @@ export const dynamic = "force-dynamic";
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
   const user = await getOptionalUser();
   const isCustomer = !!user && (user.role === "CUSTOMER_BASIC" || user.role === "CUSTOMER_CONTROL");
-  const sampleMode = (process.env.VENDOR_MODE ?? "sample") === "sample";
+  const modes = vendorModes();
+  const sampleMode = Object.values(modes).every((m) => m !== "live");
+  const liveVendors = (Object.keys(modes) as (keyof typeof modes)[]).filter((v) => modes[v] === "live");
   const envLabel = process.env.APP_ENV && process.env.APP_ENV !== "production" ? process.env.APP_ENV : null;
 
   return (
@@ -29,6 +32,12 @@ export default async function RootLayout({ children }: { children: React.ReactNo
           <div className="no-print bg-sample text-amber-900 text-xs sm:text-sm px-4 py-1.5 border-b border-amber-200 text-center">
             <strong>샘플 데이터 · 시뮬레이션 모드</strong> — 사업장명·모델별 대수·배치는 모두 가상입니다. 실제 로봇 명령은 전송되지 않습니다.
             {envLabel ? <span className="ml-2 rounded bg-amber-200 px-1.5 text-[11px]">{envLabel}</span> : null}
+          </div>
+        )}
+        {!sampleMode && (
+          <div className="no-print bg-blue-50 text-blue-900 text-xs sm:text-sm px-4 py-1.5 border-b border-blue-200 text-center">
+            <strong>실제 연동 중: {liveVendors.join(", ")}</strong> — 나머지 제조사 로봇은 샘플/미설정입니다. 명령은 실제 로봇에 전송됩니다.
+            {envLabel ? <span className="ml-2 rounded bg-blue-200 px-1.5 text-[11px]">{envLabel}</span> : null}
           </div>
         )}
         <header className="no-print bg-navy text-white">

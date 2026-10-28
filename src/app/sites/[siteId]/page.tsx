@@ -9,7 +9,7 @@ import { FloorMap } from "@/components/FloorMap";
 import { AutoRefresh } from "@/components/AutoRefresh";
 import { Battery, IncidentStatusBadge, SeverityBadge, StatusBadge } from "@/components/StatusBadge";
 import { formatDateTime, relativeFromNow } from "@/lib/util/time";
-import { VENDOR_LABEL } from "@/lib/domain/commands";
+import { MODEL_LABEL, VENDOR_LABEL } from "@/lib/domain/commands";
 
 export default async function SitePage({ params, searchParams }: { params: Promise<{ siteId: string }>; searchParams: Promise<{ floor?: string }> }) {
   const { siteId } = await params;
@@ -86,7 +86,7 @@ export default async function SitePage({ params, searchParams }: { params: Promi
                       <StatusBadge status={r.status.common} />
                     </div>
                     <div className="text-xs text-gray-500 mt-0.5">
-                      {VENDOR_LABEL[r.robot.vendor]} {r.robot.model} · {r.robot.id}
+                      {VENDOR_LABEL[r.robot.vendor]} {MODEL_LABEL[r.robot.model]} · {r.robot.id}
                     </div>
                     <div className="flex items-center gap-3 mt-1 text-xs">
                       <Battery pct={r.status.batteryPct} />

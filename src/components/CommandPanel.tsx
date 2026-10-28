@@ -65,15 +65,21 @@ export function CommandPanel({
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2 text-xs">
-        {isSimulation && <SimTag>샘플 어댑터 — 실제 전송 없음</SimTag>}
-        <label className="flex items-center gap-1">
-          시뮬레이션 시나리오
-          <select className="border rounded px-1 py-0.5" value={scenario} onChange={(e) => setScenario(e.target.value as Scenario)}>
-            <option value="NORMAL">정상 접수</option>
-            <option value="LOST_RESPONSE">응답 유실(타임아웃)</option>
-            <option value="REJECTED">제조사 거부</option>
-          </select>
-        </label>
+        {isSimulation ? (
+          <>
+            <SimTag>샘플 어댑터 — 실제 전송 없음</SimTag>
+            <label className="flex items-center gap-1">
+              시뮬레이션 시나리오
+              <select className="border rounded px-1 py-0.5" value={scenario} onChange={(e) => setScenario(e.target.value as Scenario)}>
+                <option value="NORMAL">정상 접수</option>
+                <option value="LOST_RESPONSE">응답 유실(타임아웃)</option>
+                <option value="REJECTED">제조사 거부</option>
+              </select>
+            </label>
+          </>
+        ) : (
+          <span className="rounded bg-blue-50 text-blue-900 border border-blue-200 px-1.5 py-0.5">실제 로봇에 전송됩니다 — 제조사 API({vendor}) 호출</span>
+        )}
       </div>
 
       <div className="flex flex-wrap gap-2 items-start">

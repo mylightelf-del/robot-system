@@ -182,3 +182,77 @@ export async function countPendingInvites(): Promise<number> {
 }
 
 export { hashPassword };
+
+// ---- 제조사 연동(PUDU) 관리 ----
+import { vendorModes } from "@/lib/vendors";
+import { createPuduApi } from "@/lib/vendors/pudu/puduAdapter";
+import { mapProductCode, PUDU_SUPPORTED_COMMANDS } from "@/lib/vendors/pudu/mapping";
+import { PUDU_CLUSTERS } from "@/lib/vendors/pudu/client";
+
+export async function getVendorStatus(user: User) {
+  assertAdmin(user);
+  const db = getDb();
+  const sync = await db.select().from(schema.vendorSyncState).orderBy(schema.vendorSyncState.id);
+  const pendingEvents = await db.select({ id: schema.vendorEvents.id }).from(schema.vendorEvents).where(isNull(schema.vendorEvents.processedAt));
+  const recentEvents = await db.select().from(schema.vendorEvents).orderBy(desc(schema.vendorEvents.receivedAt)).limit(10);
+  return {
+    modes: vendorModes(),
+    pudu: {
+      cluster: process.env.PUDU_API_CLUSTER ?? null,
+      clusterLabel: process.env.PUDU_API_CLUSTER ? (PUDU_CLUSTERS[process.env.PUDU_API_CLUSTER]?.label ?? "알 수 없음") : null,
+      keyConfigured: !!process.env.PUDU_API_APP_KEY && !!process.env.PUDU_API_APP_SECRET,
+      callbackConfigured: !!process.env.PUDU_CALLBACK_CODE,
+      callbackUrl: `${(process.env.APP_BASE_URL ?? "http://localhost:3000").replace(/\/$/, "")}/api/webhooks/pudu`,
+    },
+    sync,
+    pendingEvents: pendingEvents.length,
+    recentEvents: recentEvents.map((e) => ({ id: e.id, eventType: e.eventType, vendorRobotId: e.vendorRobotId, receivedAt: e.receivedAt, processedAt: e.processedAt, processError: e.processError })),
+  };
+}
+
+/** PUDU 연결 확인: Health Check → 매장·로봇 목록. 비밀값은 돌려주지 않는다. */
+export async function puduTestConnection(user: User): Promise<{ ok: boolean; message: string; robots: { sn: string; productCode: string; model: string | null; shopId: number; shopName: string; nickname: string; registered: boolean }[] }> {
+  assertAdmin(user);
+  const api = createPuduApi();
+  const ok = await api.healthCheck();
+  if (!ok) {
+    await audit(user, { siteId: null, robotId: null, action: "VENDOR:PUDU_TEST", params: {}, result: "ERROR", detail: "health check 실패", vendorTraceId: null });
+    return { ok: false, message: "Health Check 실패 — 키·클러스터·서명을 확인하세요.", robots: [] };
+  }
+  const page = await api.listRobots({ limit: 100 });
+  const known = new Set((await getDb().select({ sn: schema.robots.vendorRobotId }).from(schema.robots).where(eq(schema.robots.vendor, "PUDU"))).map((r) => r.sn));
+  const robots = (page.list ?? []).map((r) => ({ sn: r.sn, productCode: r.product_code, model: mapProductCode(r.product_code), shopId: r.shop_id, shopName: r.shop_name, nickname: r.nickname ?? "", registered: known.has(r.sn) }));
+  await audit(user, { siteId: null, robotId: null, action: "VENDOR:PUDU_TEST", params: { robots: robots.length }, result: "OK", detail: "health check 통과", vendorTraceId: null });
+  return { ok: true, message: `연결 확인: PUDU 로봇 ${robots.length}대 조회`, robots };
+}
+
+/** PUDU 로봇을 우리 사업장·층에 등록한다. 모델은 product_code 로만 정하고 알 수 없으면 등록을 거부한다. */
+export async function puduImportRobots(user: User, siteId: string, floorId: string, sns: string[]): Promise<number> {
+  assertAdmin(user);
+  const db = getDb();
+  const floor = await db.query.floors.findFirst({ where: and(eq(schema.floors.id, floorId), eq(schema.floors.siteId, siteId)) });
+  if (!floor) throw new ValidationError("사업장의 층을 선택하세요.");
+  const api = createPuduApi();
+  const page = await api.listRobots({ limit: 100 });
+  const bySn = new Map((page.list ?? []).map((r) => [r.sn, r]));
+  let n = 0;
+  for (const sn of sns) {
+    const r = bySn.get(sn);
+    if (!r) throw new ValidationError(`PUDU 로봇 목록에 없는 SN: ${sn}`);
+    const model = mapProductCode(r.product_code);
+    if (!model) throw new ValidationError(`SN ${sn} 의 product_code '${r.product_code}' 는 문서에 없는 모델입니다. 수동 지정 없이 보류합니다.`);
+    const exists = await db.query.robots.findFirst({ where: and(eq(schema.robots.vendor, "PUDU"), eq(schema.robots.vendorRobotId, sn)) });
+    if (exists) continue;
+    const seq = (await db.select({ id: schema.robots.id }).from(schema.robots)).length + 1;
+    const id = `PW-R-${String(seq).padStart(3, "0")}`;
+    const now = nowIso();
+    await db.transaction(async (tx) => {
+      await tx.insert(schema.robots).values({ id, vendor: "PUDU", model, vendorRobotId: sn, siteId, floorId, name: r.nickname || `${model} ${sn.slice(-4)}`, serial: sn, firmware: "", active: true, supportedCommands: PUDU_SUPPORTED_COMMANDS, internalNote: "", vendorMeta: { source: "api", shopId: r.shop_id, shopName: r.shop_name, productCode: r.product_code, mac: r.mac } });
+      await tx.insert(schema.robotPlacements).values({ id: newId("plc"), robotId: id, siteId, from: now, to: null });
+      await tx.insert(schema.robotStatus).values({ robotId: id, common: "UNKNOWN", raw: "등록 직후 — 첫 폴링 대기", online: false, batteryPct: null, pose: null, poseIsLastKnown: true, mapVersionId: floor.currentMapVersionId, currentMissionId: null, progressPct: null, lastReceivedAt: null, dataAt: null });
+      await audit(user, { siteId, robotId: id, action: "VENDOR:PUDU_IMPORT_ROBOT", params: { sn, productCode: r.product_code, model }, result: "OK", detail: null, vendorTraceId: null }, tx);
+    });
+    n += 1;
+  }
+  return n;
+}

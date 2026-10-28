@@ -1,32 +1,122 @@
-import type { ActualRun, MaintenanceItem, RobotStatus } from "@/lib/domain/types";
+import { eq } from "drizzle-orm";
+import type { ActualRun, Command, MaintenanceItem, Robot, RobotStatus } from "@/lib/domain/types";
 import type { SendResult, VendorAdapter } from "@/lib/vendors/adapter";
 import { AppError } from "@/lib/util/errors";
+import { getDb, schema } from "@/lib/db/client";
+import { getStatus } from "@/lib/db/repo";
+import { nowIso } from "@/lib/util/time";
+import { PuduApi } from "./api";
+import { configFromEnv, PuduApiError, PuduClient } from "./client";
+import { buildExecBodies, mapDetail, mapReportToRun } from "./mapping";
 
 /**
- * PUDU Cloud API 어댑터 — 미구현 스텁 (6단계에서 구현).
- *
- * 공식 진입점: https://open.pudutech.com/en , https://open.pudutech.com/en/cloud-api
- * MT1·CC1·BG1 모델별 API 지원표·인증·필드·명령 규격은 아직 확보/검증하지 않았다.
- * 본체 매뉴얼 기능을 외부 API 지원으로 판단하지 않는다. 형식을 추측해 구현하지 않는다.
+ * PUDU Cloud API 어댑터(실제 연동). 문서 근거: docs/06-PUDU-API-검토.md
+ * - sendCommand: CleanCommands(task/exec). HTTP SUCCESS 는 "접수"일 뿐이며 실행 확인은 워커의 상세 조회/콜백이 한다.
+ * - fetchStatus: robot/detail + status V2 를 공통 상태로 매핑.
+ * - fetchRuns: 청소 보고서 목록(최대 20건/페이지, 통계 API 지연 약 10분).
+ * - fetchMaintenance: 소모품 목록.
+ * 키·클러스터는 환경변수에서만 읽는다. 미설정이면 UNSUPPORTED 오류.
  */
+export function createPuduApi(): PuduApi {
+  const cfg = configFromEnv();
+  if (!cfg) throw new AppError("PUDU 연결이 설정되지 않았습니다(PUDU_API_APP_KEY / PUDU_API_APP_SECRET / PUDU_API_CLUSTER).", "UNSUPPORTED");
+  return new PuduApi(new PuduClient(cfg));
+}
+
+export function tzOffsetHours(tz: string): number {
+  // 시제품 범위: Asia/Seoul 고정 운영. 다른 시간대는 추후 라이브러리로 계산.
+  return tz === "Asia/Seoul" ? 9 : 0;
+}
+
 export class PuduAdapter implements VendorAdapter {
   readonly vendor = "PUDU" as const;
   readonly isSimulation = false;
+  private readonly api: PuduApi;
 
-  private notImplemented(): never {
-    throw new AppError("PUDU 실제 연동은 모델별 API 규격 검증 후(6단계) 구현됩니다.", "UNSUPPORTED");
+  constructor(api?: PuduApi) {
+    this.api = api ?? createPuduApi();
   }
 
-  async sendCommand(): Promise<SendResult> {
-    return this.notImplemented();
+  async sendCommand(robot: Robot, command: Command): Promise<SendResult> {
+    const sn = robot.vendorRobotId;
+    const status = await getStatus(robot.id);
+    let task: { vendorTaskId: string; version: number; name?: string } | null = null;
+    if (command.type === "START_TASK" || command.type === "RESUME") {
+      const taskId = command.type === "START_TASK" ? String(command.params.taskId ?? "") : (status?.currentMissionId ?? "");
+      const t = taskId ? await getDb().query.registeredTasks.findFirst({ where: eq(schema.registeredTasks.id, taskId) }) : null;
+      if (t?.vendorTaskRef) {
+        const [vendorTaskId, version] = t.vendorTaskRef.split("@");
+        task = { vendorTaskId, version: Number(version || 0), name: t.name };
+      } else if (command.type === "START_TASK") {
+        return { outcome: "REJECTED", vendorTraceId: null, message: "이 등록 작업에는 PUDU task_id/version 이 없습니다. 먼저 '등록 작업 동기화'를 실행하세요." };
+      }
+    }
+    const bodies = buildExecBodies(command.type, sn, task, status?.common ?? "UNKNOWN");
+    if (!bodies) return { outcome: "REJECTED", vendorTraceId: null, message: `PUDU 는 '${command.type}' 명령을 지원하지 않습니다(임시 영역 청소 API 없음).` };
+    let lastTrace: string | null = null;
+    try {
+      for (const body of bodies) {
+        const res = await this.api.execTask(body);
+        lastTrace = res.traceId ?? lastTrace;
+      }
+      return { outcome: "ACCEPTED", vendorTraceId: lastTrace, message: `PUDU 접수(type ${bodies.map((b) => `${b.type}/${b.clean.status}`).join(" → ")})` };
+    } catch (e) {
+      if (e instanceof PuduApiError) {
+        // 게이트웨이/업무 오류 응답이 있으면 '거부', 응답 자체가 없으면 '결과 불명'
+        return e.status === 0 ? { outcome: "TIMEOUT", vendorTraceId: e.traceId, message: e.message } : { outcome: "REJECTED", vendorTraceId: e.traceId, message: e.message };
+      }
+      return { outcome: "TIMEOUT", vendorTraceId: lastTrace, message: `응답 유실: ${(e as Error).message}` };
+    }
   }
-  async fetchStatus(): Promise<RobotStatus | null> {
-    return this.notImplemented();
+
+  async fetchStatus(robot: Robot): Promise<RobotStatus | null> {
+    const receivedAt = nowIso();
+    const detail = await this.api.cleanDetail(robot.vendorRobotId);
+    let v2 = null;
+    try {
+      v2 = await this.api.statusV2(robot.vendorRobotId);
+    } catch {
+      v2 = null; // V2 실패 시 상세만으로 판단(온라인 여부는 불명 → 상세 응답이 있으므로 온라인 가정하지 않고 raw 에 기록)
+    }
+    const m = mapDetail(detail, v2, receivedAt);
+    const prev = await getStatus(robot.id);
+    return {
+      robotId: robot.id,
+      common: m.common,
+      raw: m.raw,
+      online: m.online,
+      batteryPct: m.batteryPct,
+      pose: m.pose ?? prev?.pose ?? null,
+      poseIsLastKnown: !m.online || !m.pose,
+      mapVersionId: prev?.mapVersionId ?? null, // PUDU 지도 ↔ 우리 지도 버전 매핑은 실기 확인 후(지도 이름은 raw_payload 에 보관)
+      currentMissionId: m.currentMissionId,
+      progressPct: m.progressPct,
+      lastReceivedAt: receivedAt,
+      dataAt: m.dataAt,
+    };
   }
-  async fetchRuns(): Promise<ActualRun[]> {
-    return this.notImplemented();
+
+  async fetchRuns(robot: Robot, fromIso: string, toIso: string): Promise<ActualRun[]> {
+    const start = Math.floor(new Date(fromIso).getTime() / 1000);
+    const end = Math.floor(new Date(toIso).getTime() / 1000);
+    const tz = tzOffsetHours("Asia/Seoul");
+    const out: ActualRun[] = [];
+    const receivedAt = nowIso();
+    for (let offset = 0; offset < 2000; offset += 20) {
+      const page = await this.api.listCleanReports({ start_time: start, end_time: end, timezone_offset: tz, limit: 20, offset });
+      const list = (page.list ?? []).filter((r) => r.sn === robot.vendorRobotId);
+      for (const r of list) out.push(mapReportToRun(r, robot, receivedAt, null));
+      if ((page.list ?? []).length < 20) break;
+    }
+    return out;
   }
-  async fetchMaintenance(): Promise<MaintenanceItem[]> {
-    return this.notImplemented();
+
+  async fetchMaintenance(robot: Robot): Promise<MaintenanceItem[]> {
+    const page = await this.api.listComponents(robot.vendorRobotId);
+    return (page.list ?? []).map((c) => ({
+      name: `${c.name || c.type} 잔여 수명`,
+      remainingPct: c.life_time > 0 ? Math.max(0, Math.round((1 - c.cost_time / c.life_time) * 100)) : null,
+      source: "API",
+    }));
   }
 }

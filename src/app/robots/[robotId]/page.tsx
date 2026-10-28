@@ -11,7 +11,7 @@ import { CommandPanel } from "@/components/CommandPanel";
 import { InspectionPanel } from "@/components/InspectionPanel";
 import { Battery, CommandStateBadge, IncidentStatusBadge, SeverityBadge, StatusBadge } from "@/components/StatusBadge";
 import { formatDateTime, relativeFromNow } from "@/lib/util/time";
-import { VENDOR_LABEL } from "@/lib/domain/commands";
+import { MODEL_LABEL, VENDOR_LABEL } from "@/lib/domain/commands";
 import { COMMAND_LABEL, RUN_RESULT_LABEL } from "@/lib/domain/status";
 import { canRetry } from "@/lib/services/commands";
 
@@ -35,7 +35,7 @@ export default async function RobotPage({ params }: { params: Promise<{ robotId:
         title={`${d.robot.name}`}
         subtitle={
           <>
-            {VENDOR_LABEL[d.robot.vendor]} {d.robot.model} · 관리번호 {d.robot.id} ·{" "}
+            {VENDOR_LABEL[d.robot.vendor]} {MODEL_LABEL[d.robot.model]} · 관리번호 {d.robot.id} ·{" "}
             <Link href={`/sites/${d.site.id}?floor=${d.floor.id}`} className="underline">
               {d.site.name} / {d.floor.name}
             </Link>
@@ -162,7 +162,7 @@ export default async function RobotPage({ params }: { params: Promise<{ robotId:
             <KV
               items={[
                 { k: "제조사", v: VENDOR_LABEL[d.robot.vendor] },
-                { k: "모델", v: d.robot.model },
+                { k: "모델", v: MODEL_LABEL[d.robot.model] },
                 { k: "내부 관리번호", v: d.robot.id },
                 { k: "제조사 ID", v: customer ? <span className="text-gray-400">(고객 비공개)</span> : <code className="text-xs">{d.robot.vendorRobotId}</code> },
                 { k: "시리얼", v: d.robot.serial },
@@ -192,7 +192,8 @@ export default async function RobotPage({ params }: { params: Promise<{ robotId:
                     <td>{m.name}</td>
                     <td className="text-right">
                       {m.source === "UNSUPPORTED" ? <span className="text-gray-400 text-xs">API 미제공(미확인)</span> : m.source === "MANUAL" ? <span className="text-xs">수기</span> : m.remainingPct === null ? "미수신" : `${m.remainingPct}%`}
-                      {m.source === "API" && <span className="ml-1 text-[10px] text-amber-700">샘플</span>}
+                      {m.source === "API" && d.isSimulation && <span className="ml-1 text-[10px] text-amber-700">샘플</span>}
+                      {m.source === "API" && !d.isSimulation && <span className="ml-1 text-[10px] text-blue-700">API</span>}
                     </td>
                   </tr>
                 ))}

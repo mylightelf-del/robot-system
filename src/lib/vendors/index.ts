@@ -1,23 +1,52 @@
-import type { Robot } from "@/lib/domain/types";
+import type { Robot, Vendor } from "@/lib/domain/types";
 import type { VendorAdapter } from "./adapter";
 import { SampleAdapter } from "./sample/sampleAdapter";
 import { CenobotsAdapter } from "./cenobots/cenobotsAdapter";
 import { PuduAdapter } from "./pudu/puduAdapter";
+import { configFromEnv as puduConfigFromEnv } from "./pudu/client";
 
 /**
- * 어댑터 선택.
- * 환경변수 VENDOR_MODE=sample(기본) 이면 모든 로봇에 샘플 어댑터를 사용한다.
- * VENDOR_MODE=live 는 3단계 이후 실제 어댑터가 구현된 뒤에만 의미가 있다(현재는 UNSUPPORTED 오류).
+ * 어댑터 선택. 제조사별로 모드를 따로 둔다.
+ * - VENDOR_MODE=sample(기본) 이면 전부 샘플.
+ * - VENDOR_MODE=live 이면 제조사별 *_MODE(기본 live) 와 키 설정 여부에 따라 실제 어댑터. 키가 없으면 샘플로 두지 않고 "미설정" 상태로 보고한다.
  */
-export function getAdapter(robot: Robot): VendorAdapter {
-  const mode = process.env.VENDOR_MODE ?? "sample";
-  if (mode !== "live") return new SampleAdapter(robot.vendor);
-  switch (robot.vendor) {
+export type VendorMode = "sample" | "live" | "unconfigured";
+
+export function vendorMode(vendor: Vendor): VendorMode {
+  const global = process.env.VENDOR_MODE ?? "sample";
+  const own = process.env[`${vendor}_MODE`];
+  const mode = own ?? global;
+  if (mode !== "live") return "sample";
+  switch (vendor) {
+    case "PUDU":
+      return puduConfigFromEnv() ? "live" : "unconfigured";
     case "CENOBOTS":
-      return new CenobotsAdapter();
+      return "unconfigured"; // 3단계 구현 전
+    default:
+      return "unconfigured";
+  }
+}
+
+/**
+ * 실제 API 로 다루는 로봇인지. 제조사 모드가 live 이고, 제조사 API 에서 등록(vendorMeta.source="api")한 로봇만 실제로 본다.
+ * 샘플 적재 로봇(가상 SN)은 live 모드에서도 실제 API 에 조회·명령하지 않는다(실제/샘플 분리 원칙).
+ */
+export function isLiveRobot(robot: Pick<Robot, "vendor" | "vendorMeta">): boolean {
+  return vendorMode(robot.vendor) === "live" && robot.vendorMeta?.source === "api";
+}
+
+export function getAdapter(robot: Robot): VendorAdapter {
+  if (!isLiveRobot(robot)) return new SampleAdapter(robot.vendor);
+  switch (robot.vendor) {
     case "PUDU":
       return new PuduAdapter();
+    case "CENOBOTS":
+      return new CenobotsAdapter();
     default:
       return new SampleAdapter(robot.vendor);
   }
+}
+
+export function vendorModes(): Record<Vendor, VendorMode> {
+  return { PUDU: vendorMode("PUDU"), CENOBOTS: vendorMode("CENOBOTS"), BIB: vendorMode("BIB") };
 }

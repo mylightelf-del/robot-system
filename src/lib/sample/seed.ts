@@ -37,7 +37,10 @@ const SUPPORTED_BY_MODEL: Record<RobotModel, CommandType[]> = {
   L4: ["START_TASK", "PAUSE", "RESUME", "STOP", "GO_HOME", "AREA_CLEAN"],
   // PUDU: 모델별 API 미검증 — 시제품에서는 기본 제어만 시뮬레이션으로 가정.
   MT1: ["START_TASK", "PAUSE", "RESUME", "STOP", "GO_HOME"],
+  MT1_VAC: ["START_TASK", "PAUSE", "RESUME", "STOP", "GO_HOME"],
+  MT1_MAX: ["START_TASK", "PAUSE", "RESUME", "STOP", "GO_HOME"],
   CC1: ["START_TASK", "PAUSE", "RESUME", "STOP", "GO_HOME"],
+  CC1_PRO: ["START_TASK", "PAUSE", "RESUME", "STOP", "GO_HOME"],
   BG1: ["START_TASK", "PAUSE", "RESUME", "STOP", "GO_HOME"],
   J40: [],
 };
@@ -597,7 +600,10 @@ export function buildSampleStore(nowIso: string): StoreData {
   // ---- 점검 · 유지관리 -------------------------------------------------------------
   const inspectionItems: Record<string, string[]> = {
     MT1: ["청수 보충", "오수 처리", "브러시 청소", "필터 청소"],
+    MT1_VAC: ["먼지통 비우기", "브러시 청소", "필터 청소"],
+    MT1_MAX: ["청수 보충", "오수 처리", "브러시 청소", "필터 청소"],
     CC1: ["청수 보충", "오수 처리", "브러시 청소"],
+    CC1_PRO: ["청수 보충", "오수 처리", "브러시 청소"],
     BG1: ["청수 보충", "오수 처리", "브러시 청소", "흡입구 점검"],
     L4: ["먼지통 비우기", "브러시 청소", "필터 청소"],
     J40: [],

@@ -56,10 +56,25 @@ export const VENDOR_LABEL: Record<Vendor, string> = {
 
 export const MODEL_VENDOR: Record<RobotModel, Vendor> = {
   MT1: "PUDU",
+  MT1_VAC: "PUDU",
+  MT1_MAX: "PUDU",
   CC1: "PUDU",
+  CC1_PRO: "PUDU",
   BG1: "PUDU",
   L4: "CENOBOTS",
   J40: "BIB",
+};
+
+/** 화면 표시용 모델명(PUDU 문서의 Robot Types 표기). */
+export const MODEL_LABEL: Record<RobotModel, string> = {
+  MT1: "MT1",
+  MT1_VAC: "MT1 Vac",
+  MT1_MAX: "MT1 Max",
+  CC1: "CC1",
+  CC1_PRO: "CC1 Pro",
+  BG1: "BG1 (API 지원 미확인)",
+  L4: "L4",
+  J40: "J40",
 };
 
 /** 상태 전이 규칙: 현재 공통 상태에서 허용되는 명령. 충돌 방지용(샘플 기준). */

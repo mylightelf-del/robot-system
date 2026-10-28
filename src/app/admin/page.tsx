@@ -1,5 +1,6 @@
 import { getCurrentUser } from "@/lib/auth/session";
-import { getAdminData } from "@/lib/services/admin";
+import { getAdminData, getVendorStatus } from "@/lib/services/admin";
+import { PuduPanel } from "@/components/VendorPanel";
 import { AppError } from "@/lib/util/errors";
 import { Card, KV, PageTitle } from "@/components/ui";
 import { AccessDenied } from "@/components/AccessDenied";
@@ -15,6 +16,7 @@ export default async function AdminPage() {
   } catch (e) {
     return <AccessDenied reason={e instanceof AppError ? e.message : "접근할 수 없습니다."} />;
   }
+  const vendor = await getVendorStatus(user);
   const sites = d.sites.map((s) => ({ id: s.id, name: s.name }));
   const floors = d.floors.map((f) => ({ id: f.id, siteId: f.siteId, name: f.name, siteName: d.sites.find((s) => s.id === f.siteId)?.name ?? f.siteId }));
 
@@ -93,7 +95,28 @@ export default async function AdminPage() {
           <p className="text-xs text-gray-500 mt-2">이메일·알림톡 공급사, 발신 설정, 템플릿, 과금은 미정입니다. 시제품은 모의 발송만 합니다.</p>
         </Card>
 
-        <Card title="제조사 연결">
+        <Card title="제조사 연결 — PUDU Cloud API">
+          <PuduPanel live={vendor.modes.PUDU === "live"} keyConfigured={vendor.pudu.keyConfigured} cluster={vendor.pudu.cluster} clusterLabel={vendor.pudu.clusterLabel} callbackUrl={vendor.pudu.callbackUrl} callbackConfigured={vendor.pudu.callbackConfigured} floors={floors} />
+          <div className="mt-3 grid md:grid-cols-2 gap-3 text-xs">
+            <div className="border rounded p-2">
+              <div className="font-medium mb-1">동기화 상태</div>
+              {vendor.sync.length === 0 ? <div className="text-gray-500">아직 실행 기록 없음</div> : (
+                <table className="data">
+                  <thead><tr><th>작업</th><th>마지막 실행</th><th>마지막 성공</th><th>결과</th></tr></thead>
+                  <tbody>{vendor.sync.map((s) => <tr key={s.id}><td>{s.id}</td><td>{formatDateTime(s.lastRunAt)}</td><td>{formatDateTime(s.lastOkAt)}</td><td className={s.lastError ? "text-red-700" : "text-emerald-700"}>{s.lastError ?? JSON.stringify(s.stats)}</td></tr>)}</tbody>
+                </table>
+              )}
+            </div>
+            <div className="border rounded p-2">
+              <div className="font-medium mb-1">최근 콜백 이벤트 (미처리 {vendor.pendingEvents}건)</div>
+              {vendor.recentEvents.length === 0 ? <div className="text-gray-500">수신 기록 없음</div> : (
+                <ul className="space-y-0.5">{vendor.recentEvents.map((e) => <li key={e.id}><span className="text-gray-500">{formatDateTime(e.receivedAt)}</span> {e.eventType} {e.vendorRobotId ?? ""} {e.processedAt ? (e.processError ? <span className="text-red-700">오류: {e.processError}</span> : <span className="text-emerald-700">처리됨</span>) : <span className="text-amber-700">대기</span>}</li>)}</ul>
+              )}
+            </div>
+          </div>
+        </Card>
+
+        <Card title="제조사 연결 목록">
           <div className="grid md:grid-cols-2 gap-3">
             {d.vendorConnections.map((v) => (
               <div key={v.id} className="border rounded p-3 text-sm">

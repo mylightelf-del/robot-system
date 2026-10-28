@@ -5,6 +5,8 @@ import { hashPassword } from "@/lib/auth/password";
 import { nowIso } from "@/lib/util/time";
 
 const TABLES_IN_DELETE_ORDER = [
+  "vendor_events",
+  "vendor_sync_state",
   "sessions",
   "site_permissions",
   "notification_logs",

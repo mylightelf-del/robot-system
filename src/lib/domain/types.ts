@@ -6,7 +6,7 @@
  */
 
 export type Vendor = "PUDU" | "CENOBOTS" | "BIB";
-export type RobotModel = "MT1" | "CC1" | "BG1" | "L4" | "J40";
+export type RobotModel = "MT1" | "MT1_VAC" | "MT1_MAX" | "CC1" | "CC1_PRO" | "BG1" | "L4" | "J40";
 
 export type Role =
   | "HQ_ADMIN" // 본사 관리자
@@ -99,6 +99,11 @@ export interface Robot {
   supportedCommands: CommandType[];
   /** 내부 정비 메모 — 고객 화면에 노출하지 않는다. */
   internalNote: string;
+  /**
+   * 제조사 API 에서 받은 부가 정보(매장 ID, product_code, MAC 등). 고객 화면에 노출하지 않는다.
+   * source="api" 이면 제조사 API 에서 등록한 실제 로봇, 없으면 샘플 적재 로봇이다.
+   */
+  vendorMeta?: Record<string, unknown> | null;
 }
 
 export interface RobotPlacement {
