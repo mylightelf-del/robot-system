@@ -1,0 +1,64 @@
+@import "tailwindcss";
+
+:root {
+  --background: #f6f8fb;
+  --foreground: #10213a;
+  --navy: #14305a;
+  --navy-light: #244a85;
+  --sample: #fff4d6;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-navy: var(--navy);
+  --color-navy-light: var(--navy-light);
+  --color-sample: var(--sample);
+  --font-sans: var(--font-sans-kr);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans-kr), "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+}
+
+/* 기본 표 스타일 */
+table.data {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+table.data th {
+  text-align: left;
+  font-weight: 600;
+  color: #4b5563;
+  background: #f1f4f9;
+  padding: 0.5rem 0.625rem;
+  border-bottom: 1px solid #e5e7eb;
+  white-space: nowrap;
+}
+table.data td {
+  padding: 0.5rem 0.625rem;
+  border-bottom: 1px solid #eef0f4;
+  vertical-align: top;
+}
+table.data tr:hover td {
+  background: #fafbfd;
+}
+
+/* 인쇄(보고서 PDF) */
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  body {
+    background: #fff;
+  }
+  .print-page {
+    page-break-after: always;
+  }
+  .print-page:last-child {
+    page-break-after: auto;
+  }
+}
