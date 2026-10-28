@@ -253,14 +253,10 @@ describe("PUDU 클라이언트·어댑터·워커 (모의 서버)", () => {
     expect(state.execCalls.slice(-2).map((c) => (c.body as { clean: { status: number; task_id?: string } }).clean)).toMatchObject([{ status: 3, task_id: "897176785820073984" }, { status: 4, task_id: "897176785820073984" }]);
     await syncPuduStatus(new PuduAdapter(api)); // 303 → IDLE(취소 처리)
     expect((await db().query.commands.findFirst({ where: eq(schema.commands.id, stop.id) }))!.state).toBe("COMPLETED");
-    // 취소 직후 복귀는 제조사가 거부(CLEANBOT_CLEANING_CANCELED) → FAILED 로 남고, 대기 상태가 된 뒤 다시 보내면 접수
-    const homeEarly = await issueCommand(await user("u-hq"), { robotId: id, type: "GO_HOME" });
-    expect(homeEarly.state).toBe("FAILED");
-    expect(homeEarly.message).toContain("CLEANBOT_CLEANING_CANCELED");
-    state.taskCode = 0;
-    await syncPuduStatus(new PuduAdapter(api));
+    // 취소 직후(303)에는 제조사가 복귀를 거부(CLEANBOT_CLEANING_CANCELED) → 어댑터가 303 이 풀릴 때까지 기다렸다가 보낸다
     const home = await issueCommand(await user("u-hq"), { robotId: id, type: "GO_HOME" });
     expect(home.state).toBe("ACCEPTED");
+    expect(state.execCalls.filter((c) => (c.body as { message?: string }).message).length).toBe(0);
     expect(state.execCalls.at(-1)!.body).toMatchObject({ type: 5, clean: { status: 1, task_id: "897176785820073984" } }); // 마지막 작업(last_task)으로 보강
     await syncPuduStatus(new PuduAdapter(api)); // 102 → RETURNING
     expect((await db().query.commands.findFirst({ where: eq(schema.commands.id, home.id) }))!.state).toBe("EXECUTING");

@@ -13,7 +13,7 @@ export function mapCleanbotTaskCode(code: number | undefined | null): { common: 
   if (code === -200) return { common: "ERROR", label: "LostLocalization(위치 이상)" };
   if (code === -300) return { common: "IDLE", label: "Notice(경고)" };
   if (code === 301 || code === 402 || code === 101 || code === 502 || code === 601) return { common: "PAUSED", label: `일시정지(${code})` };
-  if (code === 303) return { common: "IDLE", label: "취소·종료 처리(303)" }; // 실기: 취소 직후 잠시 303, 곧 0(대기)
+  if (code === 303) return { common: "IDLE", label: "취소 처리 중(303)" }; // 실기: 취소 직후 15~20초 303, 곧 0(대기). 이때 복귀는 거부됨
   if (code === 304) return { common: "CLEANING", label: "청소 지점 이동(304)" }; // 실기: 시작 직후 이동 중. 이때 일시정지·취소·복귀는 거부됨(NOT_IN_THE_CLEANING_STATE / CLEANING_EN_ROUTE)
   if ((code >= 300 && code <= 315) || code === 710) return { common: "CLEANING", label: `청소(${code})` };
   if ((code >= 100 && code <= 107) || (code >= 400 && code <= 406) || (code >= 500 && code <= 505)) return { common: "RETURNING", label: `복귀/도킹(${code})` };

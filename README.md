@@ -58,6 +58,7 @@ PUDU 키 발급 후 첫 확인(DB 를 건드리지 않음, 비밀값 출력 없�
 npm run pudu:check                      # Health Check → 허용 매장(PUDU_SHOP_IDS)별 로봇 목록(product_code → 모델)
 npm run pudu:check -- --shops 포스코    # 매장 이름으로 shop_id 찾기(PUDU_SHOP_IDS 에 넣을 값)
 npm run pudu:check -- <SN>              # 해당 로봇의 상태·소모품·등록 작업·예약
+VENDOR_MODE=live npm run pudu:command-test -- <관리번호> <등록작업ID> --yes   # 실제 로봇 명령 시험(충전 중일 때만 시작, 실패 시 자동 복귀)
 ```
 
 ## 운영 배포 (요약)
@@ -74,4 +75,4 @@ PUDU: `PUDU_API_CLUSTER`(한국 계정은 `sea`) · `PUDU_API_APP_KEY` · `PUDU_
 
 ## 단계 계획 (인수인계 문서 9장)
 원래 순서는 3·4단계 CenoBots → 6단계 PUDU 였으나, 사용자 결정으로 **PUDU 를 먼저** 연동했다.
-1. 시제품 ✅  2. 기반 ✅  3. PUDU 읽기·제어·콜백 ✅  4. PUDU 실기 검증(읽기 ✅ · 명령·콜백·지도 매핑은 대기)  5. CenoBots 읽기·제어  6. 이벤트·알림·보고서 고도화 · 시범 운영 (BIB 는 후속)
+1. 시제품 ✅  2. 기반 ✅  3. PUDU 읽기·제어·콜백 ✅  4. PUDU 실기 검증(읽기 ✅ · 명령 ✅ CC1Pro 1대 · 콜백·지도 매핑은 대기)  5. CenoBots 읽기·제어  6. 이벤트·알림·보고서 고도화 · 시범 운영 (BIB 는 후속)

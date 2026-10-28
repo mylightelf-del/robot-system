@@ -53,6 +53,7 @@ export class PuduAdapter implements VendorAdapter {
       task = await this.resolveCurrentTask(robot);
       if (!task) return { outcome: "REJECTED", vendorTraceId: null, message: "로봇의 현재/마지막 작업 정보를 찾지 못해 명령을 보낼 수 없습니다('작업·예약·소모품 동기화' 후 다시 시도)." };
     }
+    if (command.type === "GO_HOME") await this.waitCancelSettled(sn);
     const bodies = buildExecBodies(command.type, sn, task, status?.common ?? "UNKNOWN");
     if (!bodies) return { outcome: "REJECTED", vendorTraceId: null, message: `PUDU 는 '${command.type}' 명령을 지원하지 않습니다.` };
     let lastTrace: string | null = null;
@@ -68,6 +69,20 @@ export class PuduAdapter implements VendorAdapter {
         return e.status === 0 ? { outcome: "TIMEOUT", vendorTraceId: e.traceId, message: e.message } : { outcome: "REJECTED", vendorTraceId: e.traceId, message: e.message };
       }
       return { outcome: "TIMEOUT", vendorTraceId: lastTrace, message: `응답 유실: ${(e as Error).message}` };
+    }
+  }
+
+  /** 실기: 취소 직후 약 15~20초는 코드 303(취소 처리 중)이며 이때 복귀(type 5)는 CLEANBOT_CLEANING_CANCELED 로 거부된다 → 303 이 풀릴 때까지 최대 40초 기다린다. */
+  private async waitCancelSettled(sn: string): Promise<void> {
+    for (let i = 0; i < 8; i++) {
+      let code: number | undefined;
+      try {
+        code = (await this.api.cleanDetail(sn)).cleanbot?.task;
+      } catch {
+        return;
+      }
+      if (code !== 303) return;
+      await new Promise((r) => setTimeout(r, 5000));
     }
   }
 

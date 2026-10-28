@@ -24,6 +24,7 @@ export interface MockState {
   reports: Record<string, unknown>[];
   errors: Record<string, unknown>[];
   failNext?: { status: number; message: string; path?: string } | null; // path 를 주면 그 경로의 다음 호출만 실패
+  cancelledAt?: number; // 취소(303) 시각 — 실기처럼 잠시 뒤 0(대기)으로 풀린다
 }
 
 export function defaultState(): MockState {
@@ -93,6 +94,7 @@ export function startMockPudu(state: MockState = defaultState()): Promise<{ url:
         case "/open-platform-service/v2/status/get_by_sn":
           return ok({ sn: url.searchParams.get("sn"), mac: "B4:ED:D5:75:6E:EB", timestamp: String(Math.floor(Date.now() / 1000)), battery: state.battery, is_charging: state.taskCode === 202 ? 1 : -1, run_state: state.runState, product_code: "CC1", charge_stage: "", charge_type: 2, move_state: "", remain_time: 0 });
         case "/cleanbot-service/v1/api/open/robot/detail":
+          if (state.taskCode === 303 && state.cancelledAt && Date.now() - state.cancelledAt > 1500) state.taskCode = 0; // 실기: 취소 처리 후 대기로
           return ok({ sn: url.searchParams.get("sn"), mac: "B4:ED:D5:75:6E:EB", nickname: "robot2", online: state.runState !== "OFFLINE", battery: state.battery, map: { name: "1#1#lobby", lv: 1, floor: "" }, shop: { id: Number(MOCK_SHOP), name: "Shop" }, position: { x: 12.3, y: -4.5, z: 0 }, last_task_start: 1761580800000, last_task_end: 1761584400000, cleanbot: { rising: 60, sewage: 20, task: state.taskCode, detail: "", last_mode: 2, last_task: "897176785820073984", clean: state.taskCode >= 300 && state.taskCode <= 315 ? { mode: 2, report_id: "rpt-live-1", result: { status: 1, percentage: 42, area: 120, time: 600 }, task: { task_id: "897176785820073984", version: 1694070080109, name: "1층 야간" } } : null } });
         case "/cleanbot-service/v1/api/open/task/list": {
           const product = url.searchParams.get("product");
@@ -114,7 +116,7 @@ export function startMockPudu(state: MockState = defaultState()): Promise<{ url:
           if (body.type === 5 && state.taskCode === 303) return send(500, { message: "CLEANBOT_CLEANING_CANCELED", trace_id: `${MOCK_KEY}_e` });
           if (body.type === 3 && body.clean?.status === 1) state.taskCode = 302;
           if (body.type === 3 && body.clean?.status === 3) state.taskCode = 301;
-          if (body.type === 3 && body.clean?.status === 4) state.taskCode = 303;
+          if (body.type === 3 && body.clean?.status === 4) { state.taskCode = 303; state.cancelledAt = Date.now(); }
           if (body.type === 5) state.taskCode = 102;
           return ok({ task_id: String(body.clean.task_id) });
         }
