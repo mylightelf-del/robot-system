@@ -42,7 +42,8 @@ async function main() {
   // 사전 점검
   const v2 = await api.statusV2(robot.vendorRobotId);
   const d = await api.cleanDetail(robot.vendorRobotId);
-  const charging = (d.cleanbot?.task === 202 || d.cleanbot?.task === 203) && v2.is_charging === 1;
+  // 실기: 도킹 직후에는 task=202 인데 V2 의 is_charging 이 -1 로 남아 있기도 하다 → 둘 중 하나면 충전 중으로 본다
+  const charging = d.cleanbot?.task === 202 || d.cleanbot?.task === 203 || v2.is_charging === 1;
   log(`사전 점검: ${robot.id} ${robot.name} sn=${robot.vendorRobotId} run_state=${v2.run_state} online=${d.online} task=${d.cleanbot?.task} is_charging=${v2.is_charging} battery=${d.battery} map=${d.map?.name} 진행 중=${d.cleanbot?.clean ? "있음" : "없음"}`);
   log(`시험 작업: ${task.name} (${task.vendorTaskRef})`);
   const okToStart = v2.run_state !== "OFFLINE" && d.online !== false && charging && (d.battery ?? 0) >= 30 && !d.cleanbot?.clean;

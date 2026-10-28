@@ -82,7 +82,7 @@ export async function issueCommand(user: User, input: IssueCommandInput): Promis
     if (dup) throw new ConflictError("같은 요청이 이미 처리되었습니다(중복 클릭).");
   }
   const pending = await db.query.commands.findFirst({
-    where: and(eq(schema.commands.robotId, robot.id), inArray(schema.commands.state, PENDING), notInArray(schema.commands.type, ["START_TASK", "AREA_CLEAN"]), gt(schema.commands.expiresAt, now)),
+    where: and(eq(schema.commands.robotId, robot.id), inArray(schema.commands.state, PENDING), notInArray(schema.commands.type, ["START_TASK", "RESUME", "AREA_CLEAN"]), gt(schema.commands.expiresAt, now)),
   });
   if (pending) {
     const who = (await listUsers(db)).find((u) => u.id === pending.userId)?.name ?? pending.userId;

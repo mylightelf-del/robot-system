@@ -5,7 +5,7 @@ import { AppError } from "@/lib/util/errors";
 import { getDb, schema } from "@/lib/db/client";
 import { getStatus } from "@/lib/db/repo";
 import { nowIso } from "@/lib/util/time";
-import { PuduApi } from "./api";
+import { type PuduCleanDetail, PuduApi } from "./api";
 import { configFromEnv, PuduApiError, PuduClient } from "./client";
 import { buildExecBodies, mapDetail, mapReportToRun } from "./mapping";
 
@@ -41,18 +41,20 @@ export class PuduAdapter implements VendorAdapter {
     const sn = robot.vendorRobotId;
     const status = await getStatus(robot.id);
     let task: { vendorTaskId: string; version: number; name?: string } | null = null;
-    if (command.type === "START_TASK" || command.type === "RESUME") {
-      const taskId = command.type === "START_TASK" ? String(command.params.taskId ?? "") : (status?.currentMissionId ?? "");
-      const t = taskId ? await getDb().query.registeredTasks.findFirst({ where: eq(schema.registeredTasks.id, taskId) }) : null;
-      if (t?.vendorTaskRef) {
-        const [vendorTaskId, version] = t.vendorTaskRef.split("@");
-        task = { vendorTaskId, version: Number(version || 0), name: t.name };
-      } else if (command.type === "START_TASK") {
-        return { outcome: "REJECTED", vendorTraceId: null, message: "이 등록 작업에는 PUDU task_id/version 이 없습니다. 먼저 '등록 작업 동기화'를 실행하세요." };
-      }
+    if (command.type === "START_TASK") {
+      const t = await getDb().query.registeredTasks.findFirst({ where: eq(schema.registeredTasks.id, String(command.params.taskId ?? "")) });
+      if (!t?.vendorTaskRef) return { outcome: "REJECTED", vendorTraceId: null, message: "이 등록 작업에는 PUDU task_id/version 이 없습니다. 먼저 '등록 작업 동기화'를 실행하세요." };
+      const [vendorTaskId, version] = t.vendorTaskRef.split("@");
+      task = { vendorTaskId, version: Number(version || 0), name: t.name };
+    } else if (command.type === "AREA_CLEAN") {
+      return { outcome: "REJECTED", vendorTraceId: null, message: "PUDU 는 'AREA_CLEAN' 명령을 지원하지 않습니다(임시 영역 청소 API 없음)." };
+    } else {
+      // 일시정지·재개·중단·복귀도 작업 정보가 필요하다(실기 확인). 진행 중 작업 → 없으면 마지막 작업(등록 작업에서 version 보강) 순으로 찾는다.
+      task = await this.resolveCurrentTask(robot);
+      if (!task) return { outcome: "REJECTED", vendorTraceId: null, message: "로봇의 현재/마지막 작업 정보를 찾지 못해 명령을 보낼 수 없습니다('작업·예약·소모품 동기화' 후 다시 시도)." };
     }
     const bodies = buildExecBodies(command.type, sn, task, status?.common ?? "UNKNOWN");
-    if (!bodies) return { outcome: "REJECTED", vendorTraceId: null, message: `PUDU 는 '${command.type}' 명령을 지원하지 않습니다(임시 영역 청소 API 없음).` };
+    if (!bodies) return { outcome: "REJECTED", vendorTraceId: null, message: `PUDU 는 '${command.type}' 명령을 지원하지 않습니다.` };
     let lastTrace: string | null = null;
     try {
       for (const body of bodies) {
@@ -69,6 +71,26 @@ export class PuduAdapter implements VendorAdapter {
     }
   }
 
+  /** 명령 본문에 넣을 작업: 상세의 진행 중 작업(task_id+version) → 마지막 작업(last_task)에 등록 작업의 version 을 붙임. */
+  private async resolveCurrentTask(robot: Robot): Promise<{ vendorTaskId: string; version: number; name?: string } | null> {
+    let detail: PuduCleanDetail | null = null;
+    try {
+      detail = await this.api.cleanDetail(robot.vendorRobotId);
+    } catch {
+      detail = null;
+    }
+    const running = detail?.cleanbot?.clean?.task;
+    if (running?.task_id && running.version) return { vendorTaskId: String(running.task_id), version: Number(running.version), name: running.name };
+    const lastId = running?.task_id ? String(running.task_id) : (detail?.cleanbot?.last_task ?? (robot.vendorMeta?.lastTask as string | undefined));
+    const tasks = await getDb().select().from(schema.registeredTasks).where(eq(schema.registeredTasks.robotId, robot.id));
+    const pick = (lastId && tasks.find((t) => t.vendorTaskRef?.startsWith(`${lastId}@`))) || null;
+    if (pick?.vendorTaskRef) {
+      const [vendorTaskId, version] = pick.vendorTaskRef.split("@");
+      return { vendorTaskId, version: Number(version || 0), name: pick.name };
+    }
+    return null;
+  }
+
   async fetchStatus(robot: Robot): Promise<RobotStatus | null> {
     const receivedAt = nowIso();
     const detail = await this.api.cleanDetail(robot.vendorRobotId);
@@ -79,6 +101,10 @@ export class PuduAdapter implements VendorAdapter {
       v2 = null; // V2 실패 시 상세만으로 판단(온라인 여부는 불명 → 상세 응답이 있으므로 온라인 가정하지 않고 raw 에 기록)
     }
     const m = mapDetail(detail, v2, receivedAt);
+    // 마지막 작업 ID 를 로봇에 기억해 둔다(상세 조회 실패 시 명령 본문의 task_id 로 사용)
+    if (m.lastTaskId && robot.vendorMeta?.lastTask !== m.lastTaskId) {
+      await getDb().update(schema.robots).set({ vendorMeta: { ...(robot.vendorMeta ?? {}), lastTask: m.lastTaskId } }).where(eq(schema.robots.id, robot.id));
+    }
     const prev = await getStatus(robot.id);
     return {
       robotId: robot.id,

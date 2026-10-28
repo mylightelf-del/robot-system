@@ -122,13 +122,25 @@ export class PuduClient {
       const message = String(json?.message ?? (res.ok ? "" : res.statusText));
       // 실기: 대부분 "SUCCESS", 기초 API 는 "success", healthCheck 는 "GetHealthCheck Success！request={}"
       const ok = res.status === 200 && (/success/i.test(message) || message.toLowerCase() === "ok");
-      return { ok, status: res.status, message, traceId: (json?.trace_id as string | undefined) ?? null, data: ok ? ((json?.data as T) ?? null) : null, raw: json ?? text };
+      // 실기: trace_id 가 "<ApiAppKey>_<uuid>" 꼴이라 키가 그대로 들어 있다 → 저장·표시 전에 키 접두사를 떼어낸다.
+      return { ok, status: res.status, message, traceId: this.maskTrace(json?.trace_id as string | undefined), data: ok ? ((json?.data as T) ?? null) : null, raw: this.maskRaw(json ?? text) };
     } finally {
       clearTimeout(timer);
     }
   }
 
   /** 실패를 예외로 바꿔 주는 헬퍼. */
+  private maskTrace(trace: string | undefined): string | null {
+    if (!trace) return null;
+    const prefix = `${this.cfg.apiAppKey}_`;
+    return trace.startsWith(prefix) ? trace.slice(prefix.length) : trace;
+  }
+  private maskRaw(raw: unknown): unknown {
+    if (typeof raw === "string") return raw.split(`${this.cfg.apiAppKey}_`).join("");
+    if (raw && typeof raw === "object" && typeof (raw as { trace_id?: unknown }).trace_id === "string") return { ...(raw as object), trace_id: this.maskTrace((raw as { trace_id: string }).trace_id) };
+    return raw;
+  }
+
   static unwrap<T>(res: PuduResponse<T>, what: string): T {
     if (!res.ok) throw new PuduApiError(`PUDU ${what} 실패: HTTP ${res.status} ${res.message || "(응답 없음)"}`, res.status, res.traceId, res.raw);
     return res.data as T;

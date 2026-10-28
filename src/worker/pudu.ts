@@ -105,7 +105,10 @@ export async function confirmPendingCommands(robot: Robot, common: string): Prom
     const ageSec = (new Date(now).getTime() - new Date(c.stateChangedAt).getTime()) / 1000;
     if (c.state === "ACCEPTED") {
       if (expectExecuting[c.type]?.includes(common)) {
-        await db.update(schema.commands).set({ state: "EXECUTING", stateChangedAt: now, message: `로봇 상태 ${common} 으로 실행 확인(폴링)` }).where(eq(schema.commands.id, c.id));
+        // 일시정지·중단처럼 한 번의 상태 변화로 끝나는 명령은 바로 완료 처리(실기: 일시정지 → 301 즉시)
+        const startedTask = c.type === "START_TASK" || c.type === "RESUME";
+        const done = !startedTask && (expectDone[c.type] ?? []).includes(common);
+        await db.update(schema.commands).set({ state: done ? "COMPLETED" : "EXECUTING", stateChangedAt: now, message: `로봇 상태 ${common} 으로 ${done ? "완료" : "실행"} 확인(폴링)` }).where(eq(schema.commands.id, c.id));
       } else if (ageSec > timeoutSec) {
         await db.update(schema.commands).set({ state: "UNKNOWN", stateChangedAt: now, message: `접수 후 ${Math.round(ageSec)}초 동안 실행 확인 없음 — 상태/보고서 확인 필요` }).where(eq(schema.commands.id, c.id));
       }

@@ -23,7 +23,7 @@ export interface MockState {
   requests: { method: string; path: string }[];
   reports: Record<string, unknown>[];
   errors: Record<string, unknown>[];
-  failNext?: { status: number; message: string } | null;
+  failNext?: { status: number; message: string; path?: string } | null; // path 를 주면 그 경로의 다음 호출만 실패
 }
 
 export function defaultState(): MockState {
@@ -68,7 +68,7 @@ export function startMockPudu(state: MockState = defaultState()): Promise<{ url:
       if (!date) return send(401, { message: "HMAC signature cannot be verified, a valid x-date header is required for HMAC Authentication." });
       if (req.method === "POST" && md5 !== contentMd5(bodyStr)) return send(401, { message: "HMAC signature does not match." });
       if (!verifySignature({ apiAppSecret: MOCK_SECRET, method: req.method ?? "GET", pathWithQuery: `${url.pathname}${url.search}`, date, md5, authorization: auth })) return send(401, { message: "HMAC signature does not match." });
-      if (state.failNext) {
+      if (state.failNext && (!state.failNext.path || state.failNext.path === path)) {
         const f = state.failNext;
         state.failNext = null;
         return send(f.status, { message: f.message, trace_id: `${MOCK_KEY}_fail` });
@@ -109,11 +109,14 @@ export function startMockPudu(state: MockState = defaultState()): Promise<{ url:
         case "/cleanbot-service/v1/api/open/task/exec": {
           const body = JSON.parse(bodyStr || "{}");
           state.execCalls.push({ path, body });
+          // 실기: 모든 명령에 clean.task_id 가 필요. 취소 직후(303) 복귀는 거부.
+          if (!body.clean?.task_id) return send(500, { message: "CLEANBOT_TASK_IS_EMPTY", trace_id: `${MOCK_KEY}_e` });
+          if (body.type === 5 && state.taskCode === 303) return send(500, { message: "CLEANBOT_CLEANING_CANCELED", trace_id: `${MOCK_KEY}_e` });
           if (body.type === 3 && body.clean?.status === 1) state.taskCode = 302;
           if (body.type === 3 && body.clean?.status === 3) state.taskCode = 301;
           if (body.type === 3 && body.clean?.status === 4) state.taskCode = 303;
-          if (body.type === 5) state.taskCode = 400;
-          return ok({ task_id: "T123" });
+          if (body.type === 5) state.taskCode = 102;
+          return ok({ task_id: String(body.clean.task_id) });
         }
         case "/data-board/v1/log/clean_task/query_list": {
           // 실기: sn 은 무시되고 shop_id 로만 걸러진다. shop_id 없는 보고서는 허용 매장 것으로 본다.

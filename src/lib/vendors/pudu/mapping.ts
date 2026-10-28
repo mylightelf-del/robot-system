@@ -13,6 +13,7 @@ export function mapCleanbotTaskCode(code: number | undefined | null): { common: 
   if (code === -200) return { common: "ERROR", label: "LostLocalization(위치 이상)" };
   if (code === -300) return { common: "IDLE", label: "Notice(경고)" };
   if (code === 301 || code === 402 || code === 101 || code === 502 || code === 601) return { common: "PAUSED", label: `일시정지(${code})` };
+  if (code === 303) return { common: "IDLE", label: "취소·종료 처리(303)" }; // 실기: 취소 직후 잠시 303, 곧 0(대기)
   if ((code >= 300 && code <= 315) || code === 710) return { common: "CLEANING", label: `청소(${code})` };
   if ((code >= 100 && code <= 107) || (code >= 400 && code <= 406) || (code >= 500 && code <= 505)) return { common: "RETURNING", label: `복귀/도킹(${code})` };
   if (code === 201 || code === 202 || code === 203) return { common: "CHARGING", label: `충전/보급(${code})` };
@@ -53,6 +54,8 @@ export interface MappedStatus {
   batteryPct: number | null;
   pose: { x: number; y: number; headingDeg: number } | null;
   mapName: string | null;
+  /** 진행 중 작업 또는 마지막 작업의 PUDU task_id — 상세 조회가 안 될 때 명령 본문에 쓰기 위해 로봇에 저장한다. */
+  lastTaskId: string | null;
   floor: string | null;
   progressPct: number | null;
   currentMissionId: string | null;
@@ -78,6 +81,7 @@ export function mapDetail(detail: PuduCleanDetail, statusV2: PuduStatusV2 | null
     batteryPct: typeof detail.battery === "number" ? detail.battery : (statusV2?.battery ?? null),
     pose: detail.position ? { x: detail.position.x, y: detail.position.y, headingDeg: 0 } : null, // 방향(yaw)은 상세 API 에 없음
     mapName: detail.map?.name ?? null,
+    lastTaskId: detail.cleanbot?.clean?.task?.task_id ? String(detail.cleanbot.clean.task.task_id) : (detail.cleanbot?.last_task ?? null),
     floor: detail.map?.floor ?? null,
     progressPct: common === "CLEANING" || common === "PAUSED" ? (result?.percentage ?? null) : null,
     currentMissionId: common === "CLEANING" || common === "PAUSED" ? (detail.cleanbot?.clean?.report_id ?? null) : null,
@@ -208,24 +212,29 @@ export function errorToIncidentKey(e: Pick<PuduErrorLog, "error_id" | "id" | "sn
  * 공통 명령 → CleanCommands 본문. STOP 은 "취소는 먼저 일시정지" 규칙 때문에 두 단계가 될 수 있어 배열로 돌려준다.
  * AREA_CLEAN 은 PUDU 에 임시 영역 API 가 없어 null.
  */
+/**
+ * 실기 확인(2026-10-29, CC1Pro): 모든 명령 본문에 clean.task_id(+version, name)가 있어야 한다.
+ * 없으면 일시정지·취소·복귀 모두 HTTP 500 CLEANBOT_TASK_IS_EMPTY. 취소 직후(코드 303) 복귀를 보내면 CLEANBOT_CLEANING_CANCELED 로 거부되고,
+ * 대기(0)로 바뀐 뒤 task 를 붙여 type 5 를 보내면 복귀(102)→도킹(501)→충전(202)으로 진행된다.
+ */
 export function buildExecBodies(type: CommandType, sn: string, task: { vendorTaskId: string; version: number; name?: string } | null, currentCommon: CommonStatus): PuduExecBody[] | null {
+  if (!task) return null; // 모든 명령에 작업 정보가 필요하다(실기 확인)
+  const ref = { task_id: task.vendorTaskId, version: task.version, name: task.name };
   switch (type) {
     case "START_TASK":
-      if (!task) return null;
-      return [{ sn, type: 3, clean: { status: 1, task_id: task.vendorTaskId, version: task.version, name: task.name } }];
     case "RESUME":
-      return [{ sn, type: 3, clean: { status: 1, ...(task ? { task_id: task.vendorTaskId, version: task.version } : {}) } }];
+      return [{ sn, type: 3, clean: { status: 1, ...ref } }];
     case "PAUSE":
-      return [{ sn, type: 3, clean: { status: 3 } }];
+      return [{ sn, type: 3, clean: { status: 3, ...ref } }];
     case "STOP":
       return currentCommon === "CLEANING" || currentCommon === "RETURNING"
         ? [
-            { sn, type: 3, clean: { status: 3 } },
-            { sn, type: 3, clean: { status: 4 } },
+            { sn, type: 3, clean: { status: 3, ...ref } },
+            { sn, type: 3, clean: { status: 4, ...ref } },
           ]
-        : [{ sn, type: 3, clean: { status: 4 } }];
+        : [{ sn, type: 3, clean: { status: 4, ...ref } }];
     case "GO_HOME":
-      return [{ sn, type: 5, clean: { status: 1 } }];
+      return [{ sn, type: 5, clean: { status: 1, ...ref } }];
     case "AREA_CLEAN":
     default:
       return null;

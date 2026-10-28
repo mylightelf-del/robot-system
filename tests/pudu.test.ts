@@ -70,13 +70,16 @@ describe("PUDU 매핑(문서 기준)", () => {
     expect(run.origin).toBe("PLANNED");
     expect(run.vendorRunId).toBe("r1");
   });
-  it("명령 → CleanCommands 본문. STOP 은 청소 중이면 일시정지 후 취소, AREA_CLEAN 은 미지원", () => {
-    expect(buildExecBodies("START_TASK", MOCK_SN, { vendorTaskId: "t1", version: 2 }, "IDLE")![0]).toMatchObject({ type: 3, clean: { status: 1, task_id: "t1", version: 2 } });
-    expect(buildExecBodies("STOP", MOCK_SN, null, "CLEANING")!.map((b) => b.clean.status)).toEqual([3, 4]);
-    expect(buildExecBodies("STOP", MOCK_SN, null, "PAUSED")!.map((b) => b.clean.status)).toEqual([4]);
-    expect(buildExecBodies("GO_HOME", MOCK_SN, null, "IDLE")![0].type).toBe(5);
-    expect(buildExecBodies("AREA_CLEAN", MOCK_SN, null, "IDLE")).toBeNull();
+  it("명령 → CleanCommands 본문. 모든 명령에 task_id/version, STOP 은 청소 중이면 일시정지 후 취소, AREA_CLEAN 은 미지원", () => {
+    const t = { vendorTaskId: "t1", version: 2, name: "n" };
+    expect(buildExecBodies("START_TASK", MOCK_SN, t, "IDLE")![0]).toMatchObject({ type: 3, clean: { status: 1, task_id: "t1", version: 2 } });
+    expect(buildExecBodies("PAUSE", MOCK_SN, t, "CLEANING")![0]).toMatchObject({ type: 3, clean: { status: 3, task_id: "t1", version: 2, name: "n" } });
+    expect(buildExecBodies("STOP", MOCK_SN, t, "CLEANING")!.map((b) => b.clean.status)).toEqual([3, 4]);
+    expect(buildExecBodies("STOP", MOCK_SN, t, "PAUSED")!.map((b) => b.clean.status)).toEqual([4]);
+    expect(buildExecBodies("GO_HOME", MOCK_SN, t, "IDLE")![0]).toMatchObject({ type: 5, clean: { status: 1, task_id: "t1" } });
+    expect(buildExecBodies("AREA_CLEAN", MOCK_SN, t, "IDLE")).toBeNull();
     expect(buildExecBodies("START_TASK", MOCK_SN, null, "IDLE")).toBeNull();
+    expect(buildExecBodies("PAUSE", MOCK_SN, null, "CLEANING")).toBeNull(); // 작업 정보 없이는 보내지 않는다(실기: TASK_IS_EMPTY)
   });
 });
 
@@ -230,11 +233,40 @@ describe("PUDU 클라이언트·어댑터·워커 (모의 서버)", () => {
     const task = (await db().query.registeredTasks.findFirst({ where: eq(schema.registeredTasks.id, `task-pudu-${MOCK_SN}-897176785820073984`) }))!;
     const cmd = await issueCommand(await user("u-hq"), { robotId: id, type: "START_TASK", params: { taskId: task.id } });
     expect(cmd.state).toBe("ACCEPTED");
-    expect(cmd.vendorTraceId).toMatch(/^test-app-key_/);
+    expect(cmd.vendorTraceId).toBeTruthy();
+    expect(cmd.vendorTraceId).not.toContain(MOCK_KEY); // trace_id 의 키 접두사는 떼고 저장
     expect(state.execCalls[0].body).toMatchObject({ sn: MOCK_SN, type: 3, clean: { status: 1, task_id: "897176785820073984", version: 1694070080109 } });
     expect(state.taskCode).toBe(302); // 모의 로봇이 청소 시작
     await syncPuduStatus(new PuduAdapter(api));
     expect((await db().query.commands.findFirst({ where: eq(schema.commands.id, cmd.id) }))!.state).toBe("EXECUTING");
+    // 일시정지 → 재개 → 중단(일시정지 후 취소) → 복귀: 모두 진행 중 작업의 task_id 를 붙인다
+    const pause = await issueCommand(await user("u-hq"), { robotId: id, type: "PAUSE" });
+    expect(pause.state).toBe("ACCEPTED");
+    expect(state.execCalls.at(-1)!.body).toMatchObject({ type: 3, clean: { status: 3, task_id: "897176785820073984", version: 1694070080109 } });
+    await syncPuduStatus(new PuduAdapter(api)); // 301 → PAUSED
+    expect((await db().query.commands.findFirst({ where: eq(schema.commands.id, pause.id) }))!.state).toBe("COMPLETED");
+    const resume = await issueCommand(await user("u-hq"), { robotId: id, type: "RESUME" });
+    expect(resume.state).toBe("ACCEPTED");
+    await syncPuduStatus(new PuduAdapter(api)); // 302
+    const stop = await issueCommand(await user("u-hq"), { robotId: id, type: "STOP" });
+    expect(stop.state).toBe("ACCEPTED");
+    expect(state.execCalls.slice(-2).map((c) => (c.body as { clean: { status: number; task_id?: string } }).clean)).toMatchObject([{ status: 3, task_id: "897176785820073984" }, { status: 4, task_id: "897176785820073984" }]);
+    await syncPuduStatus(new PuduAdapter(api)); // 303 → IDLE(취소 처리)
+    expect((await db().query.commands.findFirst({ where: eq(schema.commands.id, stop.id) }))!.state).toBe("COMPLETED");
+    // 취소 직후 복귀는 제조사가 거부(CLEANBOT_CLEANING_CANCELED) → FAILED 로 남고, 대기 상태가 된 뒤 다시 보내면 접수
+    const homeEarly = await issueCommand(await user("u-hq"), { robotId: id, type: "GO_HOME" });
+    expect(homeEarly.state).toBe("FAILED");
+    expect(homeEarly.message).toContain("CLEANBOT_CLEANING_CANCELED");
+    state.taskCode = 0;
+    await syncPuduStatus(new PuduAdapter(api));
+    const home = await issueCommand(await user("u-hq"), { robotId: id, type: "GO_HOME" });
+    expect(home.state).toBe("ACCEPTED");
+    expect(state.execCalls.at(-1)!.body).toMatchObject({ type: 5, clean: { status: 1, task_id: "897176785820073984" } }); // 마지막 작업(last_task)으로 보강
+    await syncPuduStatus(new PuduAdapter(api)); // 102 → RETURNING
+    expect((await db().query.commands.findFirst({ where: eq(schema.commands.id, home.id) }))!.state).toBe("EXECUTING");
+    state.taskCode = 202;
+    await syncPuduStatus(new PuduAdapter(api));
+    expect((await db().query.commands.findFirst({ where: eq(schema.commands.id, home.id) }))!.state).toBe("COMPLETED");
     // 영역 청소는 PUDU 미지원 → 지원 명령 목록에 없음
     const robot = (await db().query.robots.findFirst({ where: eq(schema.robots.id, id) }))!;
     expect(robot.supportedCommands).not.toContain("AREA_CLEAN");
@@ -242,19 +274,23 @@ describe("PUDU 클라이언트·어댑터·워커 (모의 서버)", () => {
 
   it("명령: 제조사 오류 응답은 FAILED, 서버 무응답은 결과 불명", async () => {
     const id = await registerMockRobot();
+    await syncPuduCatalog(api); // 복귀 명령도 마지막 작업 정보가 필요
     await syncPuduStatus(new PuduAdapter(api));
-    state.failNext = { status: 200, message: "CLEANBOT_ROBOT_OFFLINE" };
+    state.failNext = { status: 200, message: "CLEANBOT_ROBOT_OFFLINE", path: "/cleanbot-service/v1/api/open/task/exec" };
     const c1 = await issueCommand(await user("u-hq"), { robotId: id, type: "GO_HOME" });
     expect(c1.state).toBe("FAILED");
     expect(c1.message).toContain("CLEANBOT_ROBOT_OFFLINE");
     // 무응답: 존재하지 않는 서버
     process.env.PUDU_API_BASE_URL = "http://127.0.0.1:9/pudu-entry";
     process.env.PUDU_API_TIMEOUT_MS = "500";
-    await db().update(schema.robotStatus).set({ common: "IDLE" }).where(eq(schema.robotStatus.robotId, id));
-    const c2 = await issueCommand(await user("u-site-a"), { robotId: id, type: "GO_HOME" });
-    expect(c2.state).toBe("UNKNOWN");
-    process.env.PUDU_API_BASE_URL = mock.url;
-    delete process.env.PUDU_API_TIMEOUT_MS;
+    try {
+      await db().update(schema.robotStatus).set({ common: "IDLE" }).where(eq(schema.robotStatus.robotId, id));
+      const c2 = await issueCommand(await user("u-site-a"), { robotId: id, type: "GO_HOME" });
+      expect(c2.state).toBe("UNKNOWN"); // 상세 조회가 안 돼도 기억해 둔 마지막 작업으로 본문을 만들고, 무응답은 결과 불명
+    } finally {
+      process.env.PUDU_API_BASE_URL = mock.url;
+      delete process.env.PUDU_API_TIMEOUT_MS;
+    }
   });
 
   it("콜백: CallbackCode 검증, 중복 재시도 무시, 역순 이벤트는 상태를 덮지 않음, 명령 확인", async () => {
@@ -318,6 +354,7 @@ describe("PUDU 클라이언트·어댑터·워커 (모의 서버)", () => {
 
   it("접수 후 실행 확인이 없으면 타임아웃으로 결과 불명", async () => {
     const id = await registerMockRobot();
+    await syncPuduCatalog(api);
     await syncPuduStatus(new PuduAdapter(api));
     const cmd = await issueCommand(await user("u-hq"), { robotId: id, type: "GO_HOME" });
     state.taskCode = 0; // 로봇이 반응하지 않음
