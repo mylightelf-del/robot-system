@@ -62,20 +62,7 @@ export async function syncPuduStatus(adapter: PuduAdapter = new PuduAdapter()): 
     let failed = 0;
     for (const robot of robots) {
       try {
-        const st = await adapter.fetchStatus(robot);
-        if (!st) continue;
-        const prev = await getStatus(robot.id, db);
-        // 역순 방어: 데이터 발생 시각이 기존보다 과거면 상태 본문은 덮지 않고 수신 시각만 갱신
-        if (prev?.dataAt && st.dataAt && st.dataAt < prev.dataAt) {
-          await db.update(schema.robotStatus).set({ lastReceivedAt: st.lastReceivedAt }).where(eq(schema.robotStatus.robotId, robot.id));
-          continue;
-        }
-        await db
-          .insert(schema.robotStatus)
-          .values({ ...st, rawPayload: { source: "poll", raw: st.raw } })
-          .onConflictDoUpdate({ target: schema.robotStatus.robotId, set: { ...st, rawPayload: { source: "poll", raw: st.raw } } });
-        updated += 1;
-        await confirmPendingCommands(robot, st.common);
+        if (await pollRobotStatus(robot, adapter)) updated += 1;
       } catch (e) {
         failed += 1;
         // 조회 실패는 '미수신'으로 남긴다(상태를 지어내지 않음). 임계 초과 시 대시보드가 수신 지연으로 표시.
@@ -84,6 +71,25 @@ export async function syncPuduStatus(adapter: PuduAdapter = new PuduAdapter()): 
     }
     return { detail: `로봇 ${robots.length}대 중 갱신 ${updated}, 실패 ${failed}`, counts: { robots: robots.length, updated, failed } };
   });
+}
+
+/** 로봇 1대 폴링: 상세+V2 → robot_status 갱신 → 처리 중 명령 확인. 갱신했으면 true(역순 데이터면 false). */
+export async function pollRobotStatus(robot: Robot, adapter: PuduAdapter = new PuduAdapter()): Promise<boolean> {
+  const db = getDb();
+  const st = await adapter.fetchStatus(robot);
+  if (!st) return false;
+  const prev = await getStatus(robot.id, db);
+  // 역순 방어: 데이터 발생 시각이 기존보다 과거면 상태 본문은 덮지 않고 수신 시각만 갱신
+  if (prev?.dataAt && st.dataAt && st.dataAt < prev.dataAt) {
+    await db.update(schema.robotStatus).set({ lastReceivedAt: st.lastReceivedAt }).where(eq(schema.robotStatus.robotId, robot.id));
+    return false;
+  }
+  await db
+    .insert(schema.robotStatus)
+    .values({ ...st, rawPayload: { source: "poll", raw: st.raw } })
+    .onConflictDoUpdate({ target: schema.robotStatus.robotId, set: { ...st, rawPayload: { source: "poll", raw: st.raw } } });
+  await confirmPendingCommands(robot, st.common);
+  return true;
 }
 
 /** 접수(ACCEPTED) 된 PUDU 명령을 로봇 상태로 확인해 실행확인/완료/결과불명으로 바꾼다. */
