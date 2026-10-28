@@ -15,13 +15,15 @@ import { proxy } from "@/proxy";
 import { POST } from "@/app/api/webhooks/pudu/route";
 import { NextRequest } from "next/server";
 import { getDb, resetAndSeed, schema, user } from "./helpers";
-import { MOCK_KEY, MOCK_SECRET, MOCK_SN, startMockPudu, type MockState } from "./pudu-mock-server";
+import { MOCK_KEY, MOCK_SECRET, MOCK_SHOP, MOCK_SN, OTHER_SN, startMockPudu, type MockState } from "./pudu-mock-server";
 
 describe("PUDU 서명(공식 알고리즘)", () => {
   it("쿼리는 키 사전순·배열은 쉼표·빈 값은 키만, 서명 경로는 디코딩된 쿼리", () => {
     const q = buildQuery({ b: "2", a: "###Special Character Test", c: "3", arr: ["x", "y"], empty: "" });
     expect(q.forSign).toBe("a=###Special Character Test&arr=x,y&b=2&c=3&empty");
     expect(q.encoded).toBe("a=%23%23%23Special%20Character%20Test&arr=x,y&b=2&c=3&empty");
+    // 값이 undefined 인 키는 보내지 않는다(실기: 키만 보내면 빈 값 필터로 해석돼 0건)
+    expect(buildQuery({ shop_id: "1", product_code: undefined, limit: 5 }).forSign).toBe("limit=5&shop_id=1");
   });
 
   it("서명 문자열 형식과 Content-MD5(hex→base64), /release 접두사 제거", () => {
@@ -92,7 +94,8 @@ describe("PUDU 클라이언트·어댑터·워커 (모의 서버)", () => {
     process.env.PUDU_API_APP_SECRET = MOCK_SECRET;
     process.env.PUDU_API_BASE_URL = mock.url;
     process.env.PUDU_CALLBACK_CODE = "cb-secret-32bytes-xxxxxxxxxxxxxxxx";
-    api = new PuduApi(new PuduClient({ apiAppKey: MOCK_KEY, apiAppSecret: MOCK_SECRET, baseUrl: mock.url }));
+    process.env.PUDU_SHOP_IDS = MOCK_SHOP;
+    api = new PuduApi(new PuduClient({ apiAppKey: MOCK_KEY, apiAppSecret: MOCK_SECRET, baseUrl: mock.url, shopIds: [MOCK_SHOP] }));
   });
   afterAll(async () => {
     await mock.close();
@@ -113,16 +116,27 @@ describe("PUDU 클라이언트·어댑터·워커 (모의 서버)", () => {
   }
 
   it("잘못된 키는 문서의 인증 오류 문구로 거부된다", async () => {
-    const bad = new PuduApi(new PuduClient({ apiAppKey: MOCK_KEY, apiAppSecret: "wrong", baseUrl: mock.url }));
+    const bad = new PuduApi(new PuduClient({ apiAppKey: MOCK_KEY, apiAppSecret: "wrong", baseUrl: mock.url, shopIds: [] }));
     await expect(bad.listShops()).rejects.toThrow(/HMAC signature does not match/);
   });
 
-  it("연결 확인: health check → 로봇 목록(모델 매핑, 미지원 코드는 보류)", async () => {
+  it("연결 확인: health check → 허용 매장의 로봇만(모델 매핑, 미지원 코드는 보류, 허용 밖 매장은 조회·등록 불가)", async () => {
     const r = await puduTestConnection(await user("u-hq"));
     expect(r.ok).toBe(true);
     expect(r.robots.find((x) => x.sn === MOCK_SN)?.model).toBe("CC1");
     expect(r.robots.find((x) => x.productCode === "PuduBot")?.model).toBeNull();
+    expect(r.robots.find((x) => x.sn === OTHER_SN)).toBeUndefined(); // 다른 고객사 매장의 로봇은 보이지 않는다
+    expect(r.robots.every((x) => x.shopId === MOCK_SHOP)).toBe(true);
     await expect(puduImportRobots(await user("u-hq"), "site-01", "site-01-f1", ["OP2023090702"])).rejects.toThrow(/문서에 없는 모델/);
+    await expect(puduImportRobots(await user("u-hq"), "site-01", "site-01-f1", [OTHER_SN])).rejects.toThrow(/허용 매장/);
+    // 허용 매장이 없으면 인증은 통과해도 로봇을 내보내지 않는다
+    const saved = process.env.PUDU_SHOP_IDS;
+    process.env.PUDU_SHOP_IDS = "";
+    const none = await puduTestConnection(await user("u-hq"));
+    expect(none.ok).toBe(false);
+    expect(none.message).toContain("PUDU_SHOP_IDS");
+    expect(none.robots.length).toBe(0);
+    process.env.PUDU_SHOP_IDS = saved;
   });
 
   it("live 모드에서도 샘플 적재 로봇은 실제 API 에 조회·명령하지 않는다(실제/샘플 분리)", async () => {
@@ -161,13 +175,20 @@ describe("PUDU 클라이언트·어댑터·워커 (모의 서버)", () => {
     expect(st.poseIsLastKnown).toBe(true);
   });
 
-  it("작업·예약·소모품 동기화 → 등록 작업(vendorTaskRef)·제조사 예약(읽기 전용)·소모품 잔여 수명", async () => {
+  it("작업·예약·소모품 동기화 → 등록 작업(vendorTaskRef, product 필수)·예약에만 있는 작업도 등록·제조사 예약(읽기 전용)·소모품 잔여 수명", async () => {
     const id = await registerMockRobot();
+    const robot = (await db().query.robots.findFirst({ where: eq(schema.robots.id, id) }))!;
+    expect(robot.vendorMeta?.product).toBe("cleanbot"); // 등록 시 소모품 응답의 product 를 저장
+    state.requests = [];
     const r = await syncPuduCatalog(api);
     expect(r.ok).toBe(true);
+    expect(state.requests.some((q) => q.path === "/cleanbot-service/v1/api/open/task/list?product=cleanbot")).toBe(true);
     const tasks = await db().select().from(schema.registeredTasks).where(eq(schema.registeredTasks.robotId, id));
-    expect(tasks[0]?.vendorTaskRef).toBe("897176785820073984@1694070080109");
-    const sch = await db().select().from(schema.schedules).where(eq(schema.schedules.taskId, tasks[0].id));
+    const main = tasks.find((t) => t.vendorTaskRef === "897176785820073984@1694070080109")!;
+    expect(main).toBeTruthy();
+    // task/list 에는 없고 예약에만 있는 작업도 등록 작업으로 들어온다(실기: task/list 가 비어 있는 로봇)
+    expect(tasks.find((t) => t.vendorTaskRef === "1276527192427741184@1790831844170")?.name).toBe("우천시 회전문");
+    const sch = await db().select().from(schema.schedules).where(eq(schema.schedules.taskId, main.id));
     expect(sch[0]).toMatchObject({ time: "22:00", executor: "VENDOR", enabled: true });
     expect(sch[0].daysOfWeek).toEqual([1, 2, 3, 4, 5]);
     const mnt = await db().select().from(schema.maintenanceItems).where(eq(schema.maintenanceItems.robotId, id));
@@ -185,6 +206,8 @@ describe("PUDU 클라이언트·어댑터·워커 (모의 서버)", () => {
     expect(done.waterL).toBe(2.5);
     expect(done.origin).toBe("PLANNED");
     expect(runs.find((x) => x.vendorRunId === "894770283318874113")?.result).toBe("ABORTED");
+    // 다른 고객사 매장의 보고서는 조회 대상이 아니다(shop_id 필터)
+    expect((await db().select().from(schema.actualRuns).where(eq(schema.actualRuns.vendorRobotId, OTHER_SN))).length).toBe(0);
     const r2 = await syncPuduReports(api, 24 * 30);
     expect(r2.counts?.inserted).toBe(0);
   });
@@ -196,13 +219,15 @@ describe("PUDU 클라이언트·어댑터·워커 (모의 서버)", () => {
     const incs = await db().select().from(schema.incidents).where(eq(schema.incidents.robotId, id));
     expect(incs.length).toBe(1);
     expect(incs[0]).toMatchObject({ code: "CleanSewageFull", severity: "HIGH", status: "OPEN" });
+    // 과거 로그 적재는 현재 상태를 덮지 않는다(실기에서 정상 로봇이 ERROR 로 표시되던 문제)
+    expect((await db().query.robotStatus.findFirst({ where: eq(schema.robotStatus.robotId, id) }))!.common).not.toBe("ERROR");
   });
 
   it("명령: 등록 작업 실행 → 접수(ACCEPTED, trace_id) → 폴링으로 실행 확인(EXECUTING)", async () => {
     const id = await registerMockRobot();
     await syncPuduCatalog(api);
     await syncPuduStatus(new PuduAdapter(api));
-    const task = (await db().query.registeredTasks.findFirst({ where: eq(schema.registeredTasks.robotId, id) }))!;
+    const task = (await db().query.registeredTasks.findFirst({ where: eq(schema.registeredTasks.id, `task-pudu-${MOCK_SN}-897176785820073984`) }))!;
     const cmd = await issueCommand(await user("u-hq"), { robotId: id, type: "START_TASK", params: { taskId: task.id } });
     expect(cmd.state).toBe("ACCEPTED");
     expect(cmd.vendorTraceId).toMatch(/^test-app-key_/);
@@ -236,7 +261,7 @@ describe("PUDU 클라이언트·어댑터·워커 (모의 서버)", () => {
     const id = await registerMockRobot();
     await syncPuduCatalog(api);
     await syncPuduStatus(new PuduAdapter(api));
-    const task = (await db().query.registeredTasks.findFirst({ where: eq(schema.registeredTasks.robotId, id) }))!;
+    const task = (await db().query.registeredTasks.findFirst({ where: eq(schema.registeredTasks.id, `task-pudu-${MOCK_SN}-897176785820073984`) }))!;
     const cmd = await issueCommand(await user("u-hq"), { robotId: id, type: "START_TASK", params: { taskId: task.id } });
     const now = Math.floor(Date.now() / 1000);
     const begin = { callback_type: "notifyCleanStatus", data: { task_id: "897176785820073984", task_name: "1층 야간", status: "BEGIN", task_time: now, remark: "", sn: MOCK_SN, mac: "B4", timestamp: now, task_method: "", notify_timestamp: now * 1000 } };

@@ -42,6 +42,7 @@ const SUPPORTED_BY_MODEL: Record<RobotModel, CommandType[]> = {
   CC1: ["START_TASK", "PAUSE", "RESUME", "STOP", "GO_HOME"],
   CC1_PRO: ["START_TASK", "PAUSE", "RESUME", "STOP", "GO_HOME"],
   BG1: ["START_TASK", "PAUSE", "RESUME", "STOP", "GO_HOME"],
+  BG1_PRO: ["START_TASK", "PAUSE", "RESUME", "STOP", "GO_HOME"],
   J40: [],
 };
 

@@ -96,7 +96,7 @@ export default async function AdminPage() {
         </Card>
 
         <Card title="제조사 연결 — PUDU Cloud API">
-          <PuduPanel live={vendor.modes.PUDU === "live"} keyConfigured={vendor.pudu.keyConfigured} cluster={vendor.pudu.cluster} clusterLabel={vendor.pudu.clusterLabel} callbackUrl={vendor.pudu.callbackUrl} callbackConfigured={vendor.pudu.callbackConfigured} floors={floors} />
+          <PuduPanel live={vendor.modes.PUDU === "live"} keyConfigured={vendor.pudu.keyConfigured} cluster={vendor.pudu.cluster} clusterLabel={vendor.pudu.clusterLabel} callbackUrl={vendor.pudu.callbackUrl} callbackConfigured={vendor.pudu.callbackConfigured} shopIds={vendor.pudu.shopIds} floors={floors} />
           <div className="mt-3 grid md:grid-cols-2 gap-3 text-xs">
             <div className="border rounded p-2">
               <div className="font-medium mb-1">동기화 상태</div>

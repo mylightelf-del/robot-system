@@ -6,7 +6,7 @@
  */
 
 export type Vendor = "PUDU" | "CENOBOTS" | "BIB";
-export type RobotModel = "MT1" | "MT1_VAC" | "MT1_MAX" | "CC1" | "CC1_PRO" | "BG1" | "L4" | "J40";
+export type RobotModel = "MT1" | "MT1_VAC" | "MT1_MAX" | "CC1" | "CC1_PRO" | "BG1" | "BG1_PRO" | "L4" | "J40";
 
 export type Role =
   | "HQ_ADMIN" // 본사 관리자

@@ -186,8 +186,9 @@ export { hashPassword };
 // ---- 제조사 연동(PUDU) 관리 ----
 import { vendorModes } from "@/lib/vendors";
 import { createPuduApi } from "@/lib/vendors/pudu/puduAdapter";
-import { mapProductCode, PUDU_SUPPORTED_COMMANDS } from "@/lib/vendors/pudu/mapping";
-import { PUDU_CLUSTERS } from "@/lib/vendors/pudu/client";
+import type { PuduRobot } from "@/lib/vendors/pudu/api";
+import { mapProductCode, productParamFor, PUDU_SUPPORTED_COMMANDS } from "@/lib/vendors/pudu/mapping";
+import { PUDU_CLUSTERS, parseShopIds } from "@/lib/vendors/pudu/client";
 
 export async function getVendorStatus(user: User) {
   assertAdmin(user);
@@ -201,6 +202,7 @@ export async function getVendorStatus(user: User) {
       cluster: process.env.PUDU_API_CLUSTER ?? null,
       clusterLabel: process.env.PUDU_API_CLUSTER ? (PUDU_CLUSTERS[process.env.PUDU_API_CLUSTER]?.label ?? "알 수 없음") : null,
       keyConfigured: !!process.env.PUDU_API_APP_KEY && !!process.env.PUDU_API_APP_SECRET,
+      shopIds: parseShopIds(process.env.PUDU_SHOP_IDS),
       callbackConfigured: !!process.env.PUDU_CALLBACK_CODE,
       callbackUrl: `${(process.env.APP_BASE_URL ?? "http://localhost:3000").replace(/\/$/, "")}/api/webhooks/pudu`,
     },
@@ -210,20 +212,36 @@ export async function getVendorStatus(user: User) {
   };
 }
 
-/** PUDU 연결 확인: Health Check → 매장·로봇 목록. 비밀값은 돌려주지 않는다. */
-export async function puduTestConnection(user: User): Promise<{ ok: boolean; message: string; robots: { sn: string; productCode: string; model: string | null; shopId: number; shopName: string; nickname: string; registered: boolean }[] }> {
+export type PuduRobotRow = { sn: string; productCode: string; model: string | null; shopId: string; shopName: string; nickname: string; registered: boolean };
+
+/**
+ * PUDU 연결 확인: Health Check → 허용 매장(PUDU_SHOP_IDS)별 로봇 목록. 비밀값은 돌려주지 않는다.
+ * 실기 확인(2026-10): 대리점 키는 다른 고객사 매장 수천 곳·로봇 수천 대가 모두 보이므로, 허용 매장 밖의 로봇은 조회·표시하지 않는다.
+ */
+export async function puduTestConnection(user: User): Promise<{ ok: boolean; message: string; robots: PuduRobotRow[] }> {
   assertAdmin(user);
   const api = createPuduApi();
+  const shopIds = parseShopIds(process.env.PUDU_SHOP_IDS);
   const ok = await api.healthCheck();
   if (!ok) {
     await audit(user, { siteId: null, robotId: null, action: "VENDOR:PUDU_TEST", params: {}, result: "ERROR", detail: "health check 실패", vendorTraceId: null });
     return { ok: false, message: "Health Check 실패 — 키·클러스터·서명을 확인하세요.", robots: [] };
   }
-  const page = await api.listRobots({ limit: 100 });
+  if (shopIds.length === 0) {
+    await audit(user, { siteId: null, robotId: null, action: "VENDOR:PUDU_TEST", params: {}, result: "OK", detail: "health check 통과, 허용 매장 미설정", vendorTraceId: null });
+    return { ok: false, message: "인증은 통과했지만 허용 매장(PUDU_SHOP_IDS)이 없습니다. 서버 .env 에 우리 매장의 shop_id 를 넣으세요(`npm run pudu:check -- --shops 검색어` 로 찾을 수 있음).", robots: [] };
+  }
   const known = new Set((await getDb().select({ sn: schema.robots.vendorRobotId }).from(schema.robots).where(eq(schema.robots.vendor, "PUDU"))).map((r) => r.sn));
-  const robots = (page.list ?? []).map((r) => ({ sn: r.sn, productCode: r.product_code, model: mapProductCode(r.product_code), shopId: r.shop_id, shopName: r.shop_name, nickname: r.nickname ?? "", registered: known.has(r.sn) }));
-  await audit(user, { siteId: null, robotId: null, action: "VENDOR:PUDU_TEST", params: { robots: robots.length }, result: "OK", detail: "health check 통과", vendorTraceId: null });
-  return { ok: true, message: `연결 확인: PUDU 로봇 ${robots.length}대 조회`, robots };
+  const robots: PuduRobotRow[] = [];
+  for (const shopId of shopIds) {
+    const page = await api.listRobots({ shop_id: shopId, limit: 100 });
+    for (const r of page.list ?? []) {
+      if (String(r.shop_id) !== shopId) continue; // 서버가 필터를 무시해도 허용 매장 밖은 버린다
+      robots.push({ sn: r.sn, productCode: r.product_code, model: mapProductCode(r.product_code), shopId: String(r.shop_id), shopName: r.shop_name, nickname: r.nickname ?? "", registered: known.has(r.sn) });
+    }
+  }
+  await audit(user, { siteId: null, robotId: null, action: "VENDOR:PUDU_TEST", params: { shops: shopIds.length, robots: robots.length }, result: "OK", detail: "health check 통과", vendorTraceId: null });
+  return { ok: true, message: `연결 확인: 허용 매장 ${shopIds.length}곳에서 PUDU 로봇 ${robots.length}대 조회`, robots };
 }
 
 /** PUDU 로봇을 우리 사업장·층에 등록한다. 모델은 product_code 로만 정하고 알 수 없으면 등록을 거부한다. */
@@ -233,21 +251,34 @@ export async function puduImportRobots(user: User, siteId: string, floorId: stri
   const floor = await db.query.floors.findFirst({ where: and(eq(schema.floors.id, floorId), eq(schema.floors.siteId, siteId)) });
   if (!floor) throw new ValidationError("사업장의 층을 선택하세요.");
   const api = createPuduApi();
-  const page = await api.listRobots({ limit: 100 });
-  const bySn = new Map((page.list ?? []).map((r) => [r.sn, r]));
+  const shopIds = parseShopIds(process.env.PUDU_SHOP_IDS);
+  if (shopIds.length === 0) throw new ValidationError("허용 매장(PUDU_SHOP_IDS)이 설정되지 않아 등록할 수 없습니다.");
+  const bySn = new Map<string, PuduRobot>();
+  for (const shopId of shopIds) {
+    const page = await api.listRobots({ shop_id: shopId, limit: 100 });
+    for (const r of page.list ?? []) if (String(r.shop_id) === shopId) bySn.set(r.sn, r);
+  }
   let n = 0;
   for (const sn of sns) {
     const r = bySn.get(sn);
-    if (!r) throw new ValidationError(`PUDU 로봇 목록에 없는 SN: ${sn}`);
+    if (!r) throw new ValidationError(`허용 매장의 PUDU 로봇 목록에 없는 SN: ${sn}`);
     const model = mapProductCode(r.product_code);
     if (!model) throw new ValidationError(`SN ${sn} 의 product_code '${r.product_code}' 는 문서에 없는 모델입니다. 수동 지정 없이 보류합니다.`);
     const exists = await db.query.robots.findFirst({ where: and(eq(schema.robots.vendor, "PUDU"), eq(schema.robots.vendorRobotId, sn)) });
     if (exists) continue;
+    // task/list 에 필요한 product 값은 소모품 응답에서 가져온다(없으면 표 추정값).
+    let product: string | null = null;
+    try {
+      product = (await api.listComponents(sn, 5)).list?.[0]?.product ?? null;
+    } catch {
+      product = null;
+    }
+    product = product ?? productParamFor(r.product_code);
     const seq = (await db.select({ id: schema.robots.id }).from(schema.robots)).length + 1;
     const id = `PW-R-${String(seq).padStart(3, "0")}`;
     const now = nowIso();
     await db.transaction(async (tx) => {
-      await tx.insert(schema.robots).values({ id, vendor: "PUDU", model, vendorRobotId: sn, siteId, floorId, name: r.nickname || `${model} ${sn.slice(-4)}`, serial: sn, firmware: "", active: true, supportedCommands: PUDU_SUPPORTED_COMMANDS, internalNote: "", vendorMeta: { source: "api", shopId: r.shop_id, shopName: r.shop_name, productCode: r.product_code, mac: r.mac } });
+      await tx.insert(schema.robots).values({ id, vendor: "PUDU", model, vendorRobotId: sn, siteId, floorId, name: r.nickname || `${model} ${sn.slice(-4)}`, serial: sn, firmware: "", active: true, supportedCommands: PUDU_SUPPORTED_COMMANDS, internalNote: "", vendorMeta: { source: "api", shopId: String(r.shop_id), shopName: r.shop_name, productCode: r.product_code, product, mac: r.mac } });
       await tx.insert(schema.robotPlacements).values({ id: newId("plc"), robotId: id, siteId, from: now, to: null });
       await tx.insert(schema.robotStatus).values({ robotId: id, common: "UNKNOWN", raw: "등록 직후 — 첫 폴링 대기", online: false, batteryPct: null, pose: null, poseIsLastKnown: true, mapVersionId: floor.currentMapVersionId, currentMissionId: null, progressPct: null, lastReceivedAt: null, dataAt: null });
       await audit(user, { siteId, robotId: id, action: "VENDOR:PUDU_IMPORT_ROBOT", params: { sn, productCode: r.product_code, model }, result: "OK", detail: null, vendorTraceId: null }, tx);

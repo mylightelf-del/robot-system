@@ -7,7 +7,8 @@ import { newId } from "@/lib/util/random";
 import { addMinutes, nowIso } from "@/lib/util/time";
 import { vendorMode } from "@/lib/vendors";
 import { PuduAdapter, createPuduApi, tzOffsetHours } from "@/lib/vendors/pudu/puduAdapter";
-import { customerMessageFor, errorToIncidentKey, mapErrorLevel, mapReportToRun } from "@/lib/vendors/pudu/mapping";
+import { customerMessageFor, errorToIncidentKey, mapErrorLevel, mapReportToRun, productParamFor } from "@/lib/vendors/pudu/mapping";
+import { parseShopIds } from "@/lib/vendors/pudu/client";
 import type { PuduApi, PuduCleanReportSummary, PuduErrorLog } from "@/lib/vendors/pudu/api";
 import { pendingPuduEvents, type PuduCallback } from "@/lib/vendors/pudu/webhook";
 
@@ -124,8 +125,9 @@ export async function syncPuduReports(api: PuduApi = createPuduApi(), windowHour
     const tz = tzOffsetHours("Asia/Seoul");
     let seen = 0;
     let inserted = 0;
-    for (let offset = 0; offset < 10000; offset += 20) {
-      const page = await api.listCleanReports({ start_time: start, end_time: end, timezone_offset: tz, limit: 20, offset });
+    // 실기 확인: 통계 API 는 sn 으로 걸러지지 않고 shop_id 로만 걸러진다 → 허용 매장별로 조회하고 등록 로봇의 SN 만 적재한다.
+    for (const shopId of parseShopIds(process.env.PUDU_SHOP_IDS)) for (let offset = 0; offset < 10000; offset += 20) {
+      const page = await api.listCleanReports({ start_time: start, end_time: end, shop_id: shopId, timezone_offset: tz, limit: 20, offset });
       const list: PuduCleanReportSummary[] = page.list ?? [];
       for (const r of list) {
         seen += 1;
@@ -134,7 +136,7 @@ export async function syncPuduReports(api: PuduApi = createPuduApi(), windowHour
         if (r.status !== 4 && r.status !== 6 && r.status !== 3 && r.status !== 5) continue; // 진행 중 보고서는 종료 후 적재
         let detail = r;
         try {
-          detail = await api.cleanReportDetail({ sn: r.sn, report_id: r.report_id, start_time: start, end_time: end, timezone_offset: tz });
+          detail = await api.cleanReportDetail({ sn: r.sn, report_id: r.report_id, start_time: start, end_time: end, timezone_offset: tz, shop_id: shopId });
         } catch {
           /* 상세 실패 시 요약으로 적재 */
         }
@@ -171,15 +173,16 @@ export async function syncPuduErrors(api: PuduApi = createPuduApi(), windowHours
     const start = end - windowHours * 3600;
     let seen = 0;
     let inserted = 0;
-    for (let offset = 0; offset < 10000; offset += 20) {
-      const page = await api.listErrors({ start_time: start, end_time: end, timezone_offset: tzOffsetHours("Asia/Seoul"), limit: 20, offset });
+    for (const shopId of parseShopIds(process.env.PUDU_SHOP_IDS)) for (let offset = 0; offset < 10000; offset += 20) {
+      const page = await api.listErrors({ start_time: start, end_time: end, shop_id: shopId, timezone_offset: tzOffsetHours("Asia/Seoul"), limit: 20, offset });
       const list: PuduErrorLog[] = page.list ?? [];
       for (const e of list) {
         seen += 1;
         const robot = bySn.get(e.sn);
         if (!robot) continue;
         const occurredAt = e.task_time ? new Date(e.task_time.replace(" ", "T") + (e.task_time.includes("+") || e.task_time.endsWith("Z") ? "" : "+09:00")).toISOString() : nowIso();
-        if (await upsertIncidentFromError(robot, { code: e.error_type, level: e.error_level, detail: e.error_detail, key: errorToIncidentKey(e), occurredAt, payload: e, notify: false })) inserted += 1;
+        // 로그 동기화는 과거 이력 적재이므로 현재 상태를 덮지 않는다(실기: 며칠 전 로그로 정상 로봇이 ERROR 로 표시되는 문제). 현재 상태는 상세 폴링(task=-100/-200)이 정한다.
+        if (await upsertIncidentFromError(robot, { code: e.error_type, level: e.error_level, detail: e.error_detail, key: errorToIncidentKey(e), occurredAt, payload: e, notify: false, touchStatus: false })) inserted += 1;
       }
       if (list.length < 20) break;
     }
@@ -187,7 +190,7 @@ export async function syncPuduErrors(api: PuduApi = createPuduApi(), windowHours
   });
 }
 
-async function upsertIncidentFromError(robot: Robot, e: { code: string; level: string; detail: string; key: string; occurredAt: string; payload: unknown; notify: boolean }): Promise<boolean> {
+async function upsertIncidentFromError(robot: Robot, e: { code: string; level: string; detail: string; key: string; occurredAt: string; payload: unknown; notify: boolean; touchStatus: boolean }): Promise<boolean> {
   const db = getDb();
   const dup = await db.query.incidents.findFirst({ where: eq(schema.incidents.vendorEventId, e.key) });
   if (dup) return false;
@@ -219,7 +222,7 @@ async function upsertIncidentFromError(robot: Robot, e: { code: string; level: s
     const { actions: _a, notifications: _n, ...row } = inc;
     await tx.insert(schema.incidents).values({ ...row, rawPayload: e.payload }).onConflictDoNothing();
     if (logs.length) await tx.insert(schema.notificationLogs).values(logs.map((l) => ({ ...l, incidentId: inc.id })));
-    if (severity === "HIGH" || severity === "CRITICAL") {
+    if (e.touchStatus && (severity === "HIGH" || severity === "CRITICAL")) {
       await tx.update(schema.robotStatus).set({ common: "ERROR", raw: `ERROR:${e.code}`, lastReceivedAt: nowIso(), dataAt: e.occurredAt }).where(eq(schema.robotStatus.robotId, robot.id));
     }
   });
@@ -236,20 +239,28 @@ export async function syncPuduCatalog(api: PuduApi = createPuduApi()): Promise<S
     let components = 0;
     for (const robot of robots) {
       const sn = robot.vendorRobotId;
-      const taskPage = await api.listCleanTasks({ sn });
-      for (const t of taskPage.item ?? taskPage.list ?? []) {
-        if (t.status === -1) continue;
+      const upsertTask = async (t: { task_id: string; version: number; name: string; mode?: number }) => {
         const id = `task-pudu-${sn}-${t.task_id}`;
-        const row = { id, siteId: robot.siteId, robotId: robot.id, name: t.name, zoneIds: [] as string[], mode: (t.config?.mode === 1 ? "SCRUB" : "SWEEP") as "SCRUB" | "SWEEP", vendorTaskRef: `${t.task_id}@${t.version}` };
+        const row = { id, siteId: robot.siteId, robotId: robot.id, name: t.name, zoneIds: [] as string[], mode: (t.mode === 1 ? "SCRUB" : "SWEEP") as "SCRUB" | "SWEEP", vendorTaskRef: `${t.task_id}@${t.version}` };
         await db.insert(schema.registeredTasks).values(row).onConflictDoUpdate({ target: schema.registeredTasks.id, set: { name: row.name, mode: row.mode, vendorTaskRef: row.vendorTaskRef, siteId: robot.siteId } });
         tasks += 1;
+      };
+      // task/list 는 product 가 필수(실기 확인). 등록 시 저장한 값 → 추정표 순으로 쓰고, 둘 다 없으면 예약의 task_list 로만 채운다.
+      const product = (robot.vendorMeta?.product as string | undefined) ?? productParamFor(robot.vendorMeta?.productCode as string | undefined);
+      if (product) {
+        const taskPage = await api.listCleanTasks({ sn, product });
+        for (const t of taskPage.item ?? taskPage.list ?? []) {
+          if (t.status === -1) continue;
+          await upsertTask({ task_id: t.task_id, version: t.version, name: t.name, mode: t.config?.mode ?? t.mode });
+        }
       }
       const cronPage = await api.listCron(sn);
       for (const c of cronPage.list ?? []) {
         for (const t of c.task_list ?? []) {
           const taskId = `task-pudu-${sn}-${t.task_id}`;
+          // 예약에 걸린 작업이 task/list 에 없더라도(실기: 일부 로봇은 task/list 가 비어 있음) 예약 항목으로 등록 작업을 만든다.
           const exists = await db.query.registeredTasks.findFirst({ where: eq(schema.registeredTasks.id, taskId) });
-          if (!exists) continue;
+          if (!exists) await upsertTask({ task_id: t.task_id, version: t.task_version, name: t.name, mode: t.clean_mode ?? t.mode });
           const s: Schedule = { id: `sch-pudu-${sn}-${c.cron_id}-${t.task_id}`, taskId, daysOfWeek: (c.weeks ?? []).map((w) => w % 7), time: `${String(c.hour).padStart(2, "0")}:${String(c.minute).padStart(2, "0")}`, enabled: c.cron_status === "open", executor: "VENDOR" };
           await db.insert(schema.schedules).values(s).onConflictDoUpdate({ target: schema.schedules.id, set: { daysOfWeek: s.daysOfWeek, time: s.time, enabled: s.enabled } });
           crons += 1;
@@ -341,7 +352,8 @@ async function applyEvent(cb: PuduCallback, occurredAt: string): Promise<void> {
     case "robotErrorNotice":
     case "robotErrorWarning": {
       const key = errorToIncidentKey({ error_id: String(cb.data.error_id ?? ""), id: "", sn, task_time: String(cb.data.timestamp ?? ""), error_type: String(cb.data.error_type ?? "") });
-      await upsertIncidentFromError(robot, { code: String(cb.data.error_type ?? "UNKNOWN"), level: String(cb.data.error_level ?? "Error"), detail: String(cb.data.error_detail ?? ""), key, occurredAt, payload: cb, notify: cb.callback_type === "robotErrorNotice" });
+      // 실시간 콜백은 현재 상태를 ERROR 로 바꾼다(단, 더 새로운 상태 데이터가 이미 있으면 덮지 않는다).
+      await upsertIncidentFromError(robot, { code: String(cb.data.error_type ?? "UNKNOWN"), level: String(cb.data.error_level ?? "Error"), detail: String(cb.data.error_detail ?? ""), key, occurredAt, payload: cb, notify: cb.callback_type === "robotErrorNotice", touchStatus: !stale });
       return;
     }
     default:

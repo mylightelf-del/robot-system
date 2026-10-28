@@ -102,8 +102,11 @@ export class PuduAdapter implements VendorAdapter {
     const tz = tzOffsetHours("Asia/Seoul");
     const out: ActualRun[] = [];
     const receivedAt = nowIso();
+    // 실기: 통계 API 는 shop_id 로만 걸러진다. 등록 시 저장한 매장 ID 가 없으면 조회할 수 없다.
+    const shopId = robot.vendorMeta?.shopId as string | number | undefined;
+    if (!shopId) return out;
     for (let offset = 0; offset < 2000; offset += 20) {
-      const page = await this.api.listCleanReports({ start_time: start, end_time: end, timezone_offset: tz, limit: 20, offset });
+      const page = await this.api.listCleanReports({ start_time: start, end_time: end, shop_id: shopId, timezone_offset: tz, limit: 20, offset });
       const list = (page.list ?? []).filter((r) => r.sn === robot.vendorRobotId);
       for (const r of list) out.push(mapReportToRun(r, robot, receivedAt, null));
       if ((page.list ?? []).length < 20) break;

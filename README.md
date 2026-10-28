@@ -3,7 +3,7 @@
 포스코와이드의 여러 사업장 청소로봇(PUDU MT1·CC1·BG1, CenoBots L4)을 본사·현장·고객사가 권한별로 관리하는 웹 시스템입니다.
 현재 **3단계(PUDU 연동)** 까지 구현: 7개 화면(1단계) + PostgreSQL 영속 저장 · 로그인(초대 링크) · 서버 세션 · 사업장별 인가 · 감사 이력 · 백그라운드 워커 · Docker 배포 구성(2단계) + **PUDU Cloud API 연동**(서명 인증, 상태·보고서·장애·작업·예약·소모품 동기화, 명령 전송, 콜백 수신, 관리 화면 연결·로봇 등록).
 
-> PUDU 연동은 공식 문서 규격의 **모의 서버로만 시험**했고 실제 서버·로봇으로는 아직 호출하지 않았습니다(`docs/07` 4장). 키를 서버 `.env` 에 넣고 `VENDOR_MODE=live`(또는 `PUDU_MODE=live`)로 켜면 PUDU API 에서 등록한 로봇만 실제로 동작하고, 샘플 적재 로봇은 계속 시뮬레이션으로 남습니다. CenoBots 는 아직 샘플입니다. `VENDOR_MODE=sample`(기본) 에서는 가상 사업장 5곳·로봇 20대 샘플과 시뮬레이션 어댑터가 동작하며, 화면 상단에 표시됩니다.
+> PUDU 연동은 모의 서버 시험 후 **실서버에 읽기 전용으로 확인**해 응답 차이를 반영했습니다(상태·보고서·장애·작업·예약·소모품 적재 확인). 실제 로봇에 **명령은 아직 보내지 않았습니다**(`docs/07` 3-3·4장). 키를 서버 `.env` 에 넣고 `VENDOR_MODE=live`(또는 `PUDU_MODE=live`)로 켜면 PUDU API 에서 등록한 로봇만 실제로 동작하고, 샘플 적재 로봇은 계속 시뮬레이션으로 남습니다. CenoBots 는 아직 샘플입니다. `VENDOR_MODE=sample`(기본) 에서는 가상 사업장 5곳·로봇 20대 샘플과 시뮬레이션 어댑터가 동작하며, 화면 상단에 표시됩니다.
 
 ## 문서
 | 문서 | 내용 |
@@ -55,8 +55,9 @@ BASE_URL=http://localhost:3000 node scripts/screenshots.js   # 화면 스크린�
 ```
 PUDU 키 발급 후 첫 확인(DB 를 건드리지 않음, 비밀값 출력 없음):
 ```bash
-npm run pudu:check            # Health Check → 매장 목록 → 로봇 목록(product_code → 모델)
-npm run pudu:check -- <SN>    # + 해당 로봇의 상태·등록 작업·예약·소모품
+npm run pudu:check                      # Health Check → 허용 매장(PUDU_SHOP_IDS)별 로봇 목록(product_code → 모델)
+npm run pudu:check -- --shops 포스코    # 매장 이름으로 shop_id 찾기(PUDU_SHOP_IDS 에 넣을 값)
+npm run pudu:check -- <SN>              # 해당 로봇의 상태·소모품·등록 작업·예약
 ```
 
 ## 운영 배포 (요약)
@@ -69,8 +70,8 @@ docker compose run --rm worker npx tsx scripts/bootstrap-admin.ts "이름" admin
 
 ## 환경변수
 `.env.example` 참고. 제조사 API 키·DB 비밀번호는 서버의 `.env` 에만 두고 저장소·대화에 붙여 넣지 않습니다.
-PUDU: `PUDU_API_CLUSTER`(cn|sea|de|us, 발급 계정의 클러스터) · `PUDU_API_APP_KEY` · `PUDU_API_APP_SECRET` · `PUDU_CALLBACK_CODE`(콜백 URL `https://<도메인>/api/webhooks/pudu` 등록 시 발급) · 폴링 주기(`PUDU_POLL_*`).
+PUDU: `PUDU_API_CLUSTER`(한국 계정은 `sea`) · `PUDU_API_APP_KEY` · `PUDU_API_APP_SECRET` · **`PUDU_SHOP_IDS`**(허용 매장 shop_id, 콤마 구분 — 대리점 키는 다른 고객사 로봇까지 보이므로 필수) · `PUDU_CALLBACK_CODE`(콜백 URL `https://<도메인>/api/webhooks/pudu` 등록 시 발급) · 폴링 주기(`PUDU_POLL_*`).
 
 ## 단계 계획 (인수인계 문서 9장)
 원래 순서는 3·4단계 CenoBots → 6단계 PUDU 였으나, 사용자 결정으로 **PUDU 를 먼저** 연동했다.
-1. 시제품 ✅  2. 기반 ✅  3. PUDU 읽기·제어·콜백 ✅(모의 서버 시험, 실기 검증 대기)  4. PUDU 실기 검증·매핑 확정  5. CenoBots 읽기·제어  6. 이벤트·알림·보고서 고도화 · 시범 운영 (BIB 는 후속)
+1. 시제품 ✅  2. 기반 ✅  3. PUDU 읽기·제어·콜백 ✅  4. PUDU 실기 검증(읽기 ✅ · 명령·콜백·지도 매핑은 대기)  5. CenoBots 읽기·제어  6. 이벤트·알림·보고서 고도화 · 시범 운영 (BIB 는 후속)

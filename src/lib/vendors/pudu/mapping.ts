@@ -38,7 +38,9 @@ export function mapProductCode(code: string | undefined): RobotModel | null {
     case "mt1max":
       return "MT1_MAX";
     case "bg1":
-      return "BG1"; // 문서에 카테고리 없음 — 실제 응답으로만 확인
+      return "BG1"; // 실기 로봇 목록에 product_code "BG1" 존재 확인(2026-10). 청소 API 응답은 미확인
+    case "bg1pro":
+      return "BG1_PRO"; // 실기 로봇 목록에 "BG1Pro" 존재 확인
     default:
       return null;
   }
@@ -63,10 +65,12 @@ export interface MappedStatus {
 export function mapDetail(detail: PuduCleanDetail, statusV2: PuduStatusV2 | null, receivedAtIso: string): MappedStatus {
   const code = detail.cleanbot?.task;
   const mapped = mapCleanbotTaskCode(code);
-  const offline = mapRunState(statusV2?.run_state) === "OFFLINE";
+  // 실기: 상세 응답에 online(boolean) 이 있고, V2 의 run_state=OFFLINE 과 함께 본다. 둘 중 하나라도 오프라인이면 오프라인.
+  const offline = mapRunState(statusV2?.run_state) === "OFFLINE" || detail.online === false;
   const common: CommonStatus = offline ? "OFFLINE" : mapped.common;
   const result = detail.cleanbot?.clean?.result;
-  const dataAt = statusV2?.timestamp ? new Date(statusV2.timestamp * 1000).toISOString() : receivedAtIso;
+  const ts = Number(statusV2?.timestamp ?? 0); // 실기에서는 문자열
+  const dataAt = ts > 0 ? new Date(ts * 1000).toISOString() : receivedAtIso;
   return {
     common,
     raw: `task=${code ?? "-"} ${mapped.label}${statusV2 ? ` run_state=${statusV2.run_state}` : ""}${detail.cleanbot?.detail ? ` detail=${detail.cleanbot.detail}` : ""}`,
@@ -134,6 +138,32 @@ export function mapReportToRun(
   };
 }
 
+/**
+ * task/list 의 필수 product 파라미터. 실기 확인(2026-10): 소모품·예약 응답의 product 값과 같고 대소문자 무관.
+ * CC1→cc1(또는 cleanbot), CC1Pro→cc1Pro, MT1→mt1, MT1Vac→mt1Pro(!), MT1Max→mt1Max. BG1 은 미확인(추정값).
+ * 등록 시 소모품 응답에서 실제 값을 vendorMeta.product 에 저장하고, 없을 때만 이 표를 쓴다.
+ */
+export function productParamFor(productCode: string | undefined): string | null {
+  switch ((productCode ?? "").replace(/[\s_-]/g, "").toLowerCase()) {
+    case "cc1":
+      return "cc1";
+    case "cc1pro":
+      return "cc1Pro";
+    case "mt1":
+      return "mt1";
+    case "mt1vac":
+      return "mt1Pro";
+    case "mt1max":
+      return "mt1Max";
+    case "bg1":
+      return "bg1"; // 미확인
+    case "bg1pro":
+      return "bg1Pro"; // 미확인
+    default:
+      return null;
+  }
+}
+
 export function mapErrorLevel(level: string | undefined): Severity {
   switch ((level ?? "").toLowerCase()) {
     case "fatal":
@@ -155,6 +185,8 @@ export const PUDU_ERROR_MESSAGES: Record<string, string> = {
   CleanAgentEmpty: "세제가 부족합니다.",
   TrashFull: "먼지통이 가득 찼습니다.",
   LostLocalization: "위치 인식에 실패하여 작업이 중단되었습니다.",
+  FullOfSewage: "오수통이 가득 차 작업이 중단되었습니다.", // 실기 로그에서 확인(CC1Pro)
+  CoverPlate: "덮개(커버 플레이트) 이상이 감지되었습니다. 현장 확인이 필요합니다.", // 실기 로그에서 확인(MT1)
   LowBatteryLevel: "배터리가 부족합니다.",
   EmergencyStop: "비상 정지 버튼이 눌렸습니다.",
   PlanFailOverTime: "경로 계획에 실패하여 이동할 수 없습니다.",

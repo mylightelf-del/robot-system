@@ -3,7 +3,7 @@ import { signRequest, type QueryValue } from "./signing";
 /**
  * PUDU 개방 플랫폼 HTTP 클라이언트.
  * - 클러스터는 환경변수 PUDU_API_CLUSTER(cn/sea/de/us) 로 지정하며 기본값을 두지 않는다(공식 지침).
- * - 모든 요청은 HMAC-SHA1 서명. 성공 판정은 HTTP 200 + message === "SUCCESS" (일부 통계 API 는 "ok").
+ * - 모든 요청은 HMAC-SHA1 서명. 성공 판정은 HTTP 200 + message 에 success 포함(실기: "SUCCESS"/"success"/"GetHealthCheck Success！…") 또는 "ok".
  * - 통계/로그 API 는 동일 카테고리 동시 1건 제한이 있어 호출을 직렬화한다.
  */
 export const PUDU_CLUSTERS: Record<string, { hostname: string; label: string }> = {
@@ -23,6 +23,11 @@ export interface PuduConfig {
   baseUrl?: string;
   timeoutMs?: number;
   language?: string; // Language 헤더(통계 API 상세 문구 언어), 예: ko-KR
+  /**
+   * 허용 매장(shop_id) 목록. 실기 확인 결과 대리점 키는 다른 고객사의 매장·로봇까지 모두 보이고(수천 대),
+   * 통계 API(보고서·장애 로그)는 sn 으로 걸러지지 않고 shop_id 로만 걸러진다. 그래서 우리 매장만 명시한다.
+   */
+  shopIds: string[];
 }
 
 export interface PuduResponse<T> {
@@ -46,6 +51,14 @@ export class PuduApiError extends Error {
   }
 }
 
+/** "602550006, 641450007" → ["602550006","641450007"]. 실기에서 shop_id 는 문자열로 온다(목록 API)거나 숫자(상세 API)라 문자열로 통일한다. */
+export function parseShopIds(raw: string | undefined): string[] {
+  return (raw ?? "")
+    .split(/[,\s]+/)
+    .map((s) => s.trim())
+    .filter((s) => /^\d+$/.test(s));
+}
+
 export function configFromEnv(): PuduConfig | null {
   const apiAppKey = process.env.PUDU_API_APP_KEY;
   const apiAppSecret = process.env.PUDU_API_APP_SECRET;
@@ -53,7 +66,7 @@ export function configFromEnv(): PuduConfig | null {
   const baseUrl = process.env.PUDU_API_BASE_URL;
   if (!apiAppKey || !apiAppSecret) return null;
   if (!baseUrl && !(cluster && PUDU_CLUSTERS[cluster])) return null;
-  return { apiAppKey, apiAppSecret, cluster, baseUrl, timeoutMs: Number(process.env.PUDU_API_TIMEOUT_MS ?? 15000), language: process.env.PUDU_API_LANGUAGE ?? "ko-KR" };
+  return { apiAppKey, apiAppSecret, cluster, baseUrl, timeoutMs: Number(process.env.PUDU_API_TIMEOUT_MS ?? 15000), language: process.env.PUDU_API_LANGUAGE ?? "ko-KR", shopIds: parseShopIds(process.env.PUDU_SHOP_IDS) };
 }
 
 export class PuduClient {
@@ -107,7 +120,8 @@ export class PuduClient {
         json = null;
       }
       const message = String(json?.message ?? (res.ok ? "" : res.statusText));
-      const ok = res.status === 200 && (message === "SUCCESS" || message.toLowerCase() === "ok" || message.toLowerCase() === "success");
+      // 실기: 대부분 "SUCCESS", 기초 API 는 "success", healthCheck 는 "GetHealthCheck Success！request={}"
+      const ok = res.status === 200 && (/success/i.test(message) || message.toLowerCase() === "ok");
       return { ok, status: res.status, message, traceId: (json?.trace_id as string | undefined) ?? null, data: ok ? ((json?.data as T) ?? null) : null, raw: json ?? text };
     } finally {
       clearTimeout(timer);

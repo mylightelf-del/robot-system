@@ -99,3 +99,43 @@
 - [ ] 콜백 수신(CallbackCode, 재시도 중복, 순서)
 - [ ] 명령 시험(지정 로봇·시간): 시작→일시정지→재개→취소→복귀, 접수 후 상세 조회로 실행 확인까지 걸리는 시간
 - [ ] 동시 호출 제한(통계 API 1건)에 맞춘 폴링 주기 확정
+
+## 9. 실기 확인 결과 (2026-10-28, 발급 키로 읽기 전용 호출)
+
+사용자가 전달한 ApiAppKey/ApiAppSecret 으로 `sea` 클러스터(css-open-platform.pudutech.com)에 접속해 **읽기 API 만** 호출했다. 명령(exec)은 보내지 않았다. 문서와 다른 점은 모두 코드에 반영했다(괄호 안이 반영 위치).
+
+| 항목 | 문서 | 실제 응답 | 반영 |
+|---|---|---|---|
+| 인증 | HMAC-SHA1 | 첫 호출부터 통과. 클러스터는 `sea` 가 맞음 | - |
+| 키의 범위 | (언급 없음) | **대리점(VD ROBOTICS) 전체 키** — 매장 4,154곳, 로봇 6,724대(다른 고객사 포함)가 보임 | 허용 매장 `PUDU_SHOP_IDS` 없이는 live 로 켜지지 않음. 조회·등록·동기화 모두 허용 매장 안에서만(`vendors/index.ts`, `services/admin.ts`, `worker/pudu.ts`) |
+| 성공 message | `SUCCESS` | 대부분 `SUCCESS`, 기초 API 는 `success`, healthCheck 는 `GetHealthCheck Success！request={}` | `/success/i` 로 판정(`client.ts`) |
+| 매장 목록 필드 | `id`, `name` | `shop_id`(문자열), `shop_name`, `company_id`, `company_name` | 타입·스크립트 수정(`api.ts`, `pudu-check.ts`) |
+| 로봇 목록 | - | `shop_id` 문자열(미배정은 `"0"`), `first_active_time` 있음. **`shop_id` 로 걸러짐** | 매장별 조회 |
+| 값 없는 쿼리 키 | 빈 값은 키만 | 키만 보내면(`product_code`) 빈 값 필터로 해석돼 0건 | undefined 는 아예 보내지 않음(`signing.ts buildQuery`) |
+| 보고서·장애 로그 필터 | `sn` 가능 | **`sn`·`mac` 무시**(전체 로봇 보고서 6,749건/장애 65만 건이 나옴), **`shop_id` 로만 걸러짐** | 허용 매장별 조회 후 등록 로봇 SN 만 적재(`worker/pudu.ts`, `puduAdapter.fetchRuns`) |
+| task/list | `sn` | **`product` 필수**(없으면 `PARAM_ERROR`). 값은 소모품/예약 응답의 `product` 와 같고 대소문자 무관: CC1→`cc1`(또는 `cleanbot`), CC1Pro→`cc1Pro`, MT1→`mt1`, **MT1Vac→`mt1Pro`**, MT1Max→`mt1Max` | 등록 시 소모품 응답의 product 를 `vendorMeta.product` 에 저장, 없으면 표(`mapping.productParamFor`) |
+| task/list 결과 | - | 일부 로봇은 비어 있고 예약(cron)의 `task_list` 에만 작업이 있음 | 예약 항목으로도 등록 작업 생성 |
+| error_level | `Fatal/Error/Warning/Event` | 대문자 `ERROR`, `WARNING` | 대소문자 무시 |
+| statusV2.timestamp | 숫자 | 문자열 `"1793208176"` | `Number()` |
+| 상세 응답 | - | `online`(boolean), `last_task_start/end`(ms), `cleanbot.clean.result` 에 `percentage/remaining_time/cost_water/cost_battery/task_area` 포함, `detail` 문구는 Language 헤더대로 한국어("위치를 잃어버렸습니다") | `online=false` 도 오프라인으로 판정 |
+| product_code | 표의 5종 | `BG1`, `BG1Pro` 존재(각 1대, 매장 미배정), `PuduSH1`(476대) 도 있음 | `BG1_PRO` 모델 추가. SH1 은 범위 밖(보류) |
+| 상태 코드 | - | 충전 중 `202`, 대기 `0`, 오프라인 로봇은 `-200`·`400` 등 마지막 값이 남음 | 오프라인 우선 규칙으로 처리 |
+| 위치 | 단위 미기재 | 미터로 보임(1,229㎡ 층에서 x≈-68, y≈-34) | 샘플 지도와의 매핑은 미해결(10장) |
+| 소모품 | - | CC1Pro 5종, MT1 6종(한국어 이름), `cost_time/life_time` 초 | 잔여 % = 1 - cost/life |
+| 장애 유형 | 문서 목록 | 실기에서 `LostLocalization(OdomSlip)`, `FullOfSewage`, `CoverPlate`, `Costmap` 확인 | 고객 문구 추가 |
+
+### 포스코와이드 매장 (매장 검색 `--shops 포스코와이드` 결과)
+| shop_id | 매장명 | 로봇 |
+|---|---|---|
+| 602550006 | 2604_포스코와이드(선릉센터) | CC1Pro 3대 |
+| 641450007 | 2610_포스코와이드(포스코이앤씨 단기) | MT1 3대 |
+| 637250014 | 2609_포스코와이드(성남분당) | MT1 1대 |
+| 611150001 | 2603_포스코광양포항POC | CC1 2대 (매장명에 '와이드' 없음, 로봇 닉네임으로 확인) |
+| 604450015 / 605250015 / 606450001 | 2601_포스코와이드, _room, (세윤)_remote | 배달로봇(BellaBot) 또는 로봇 없음 — 범위 밖 |
+
+## 10. 남은 확인 사항 (명령 시험·지도)
+- 명령(exec) 전 과정: 접수 → 상세 폴링/콜백으로 실행 확인 → 완료까지의 시간. 지정 로봇·시간에 시험.
+- 중단(STOP)의 "일시정지 후 취소" 순서가 실제로 필요한지.
+- 콜백: URL·CallbackCode 등록 후 수신 확인.
+- 지도: 상세의 `map.name`("1#2#포스코센터1층_")·position(m)을 우리 층·샘플 지도 좌표와 맞추는 규칙. 현재는 샘플 지도 위에 미터 좌표를 그대로 찍는다.
+- BG1/BG1Pro 의 청소 API 응답(현재 매장 미배정이라 상세 조회 불가).

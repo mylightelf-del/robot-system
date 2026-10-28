@@ -29,6 +29,8 @@ export function buildQuery(params: Record<string, QueryValue>): { encoded: strin
   const raw: string[] = [];
   for (const key of Object.keys(params).sort()) {
     const value = params[key];
+    // 값이 없는(undefined/null) 파라미터는 아예 보내지 않는다. 실기 확인: 키만 보내면("product_code") 서버가 빈 값 필터로 해석해 결과가 0건이 된다.
+    if (value === undefined || value === null) continue;
     if (Array.isArray(value)) {
       const items = value.filter((v) => v !== null && v !== undefined && String(v) !== "").map(String);
       if (items.length === 0) {

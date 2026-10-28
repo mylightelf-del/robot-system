@@ -61,6 +61,7 @@ export const MODEL_VENDOR: Record<RobotModel, Vendor> = {
   CC1: "PUDU",
   CC1_PRO: "PUDU",
   BG1: "PUDU",
+  BG1_PRO: "PUDU",
   L4: "CENOBOTS",
   J40: "BIB",
 };
@@ -72,7 +73,8 @@ export const MODEL_LABEL: Record<RobotModel, string> = {
   MT1_MAX: "MT1 Max",
   CC1: "CC1",
   CC1_PRO: "CC1 Pro",
-  BG1: "BG1 (API 지원 미확인)",
+  BG1: "BG1 (청소 API 실기 미확인)",
+  BG1_PRO: "BG1 Pro (청소 API 실기 미확인)",
   L4: "L4",
   J40: "J40",
 };

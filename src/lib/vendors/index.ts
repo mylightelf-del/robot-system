@@ -18,8 +18,11 @@ export function vendorMode(vendor: Vendor): VendorMode {
   const mode = own ?? global;
   if (mode !== "live") return "sample";
   switch (vendor) {
-    case "PUDU":
-      return puduConfigFromEnv() ? "live" : "unconfigured";
+    case "PUDU": {
+      // 키·클러스터에 더해 허용 매장(PUDU_SHOP_IDS)이 있어야 live. 대리점 키는 다른 고객사 로봇까지 보이므로 매장 제한 없이는 켜지 않는다.
+      const cfg = puduConfigFromEnv();
+      return cfg && cfg.shopIds.length > 0 ? "live" : "unconfigured";
+    }
     case "CENOBOTS":
       return "unconfigured"; // 3단계 구현 전
     default:

@@ -4,7 +4,7 @@ import { useState } from "react";
 import { puduImportRobotsAction, puduSyncNowAction, puduTestConnectionAction } from "@/app/actions";
 import { btn, ResultLine, useAction } from "./ActionButton";
 
-type PuduRobotRow = { sn: string; productCode: string; model: string | null; shopId: number; shopName: string; nickname: string; registered: boolean };
+type PuduRobotRow = { sn: string; productCode: string; model: string | null; shopId: string; shopName: string; nickname: string; registered: boolean };
 
 export function PuduPanel({
   live,
@@ -13,6 +13,7 @@ export function PuduPanel({
   clusterLabel,
   callbackUrl,
   callbackConfigured,
+  shopIds,
   floors,
 }: {
   live: boolean;
@@ -21,6 +22,7 @@ export function PuduPanel({
   clusterLabel: string | null;
   callbackUrl: string;
   callbackConfigured: boolean;
+  shopIds: string[];
   floors: { id: string; siteId: string; name: string; siteName: string }[];
 }) {
   const { pending, result, run } = useAction();
@@ -36,7 +38,9 @@ export function PuduPanel({
         <span>클러스터: <b>{cluster ? `${cluster} (${clusterLabel})` : "미지정"}</b></span>
         <span>키: <b>{keyConfigured ? "서버 환경변수에 설정됨" : "없음"}</b></span>
         <span>콜백 URL: <code className="bg-gray-100 px-1">{callbackUrl}</code> · CallbackCode {callbackConfigured ? "설정됨" : "없음"}</span>
+        <span>허용 매장(shop_id): <b>{shopIds.length ? shopIds.join(", ") : "없음"}</b></span>
       </div>
+      {keyConfigured && shopIds.length === 0 && <p className="text-xs text-amber-800">허용 매장(PUDU_SHOP_IDS)이 없어 실제 연동이 켜지지 않습니다. 대리점 키는 다른 고객사의 로봇까지 보이므로 우리 매장의 shop_id 만 서버 .env 에 적습니다(찾기: <code>npm run pudu:check -- --shops 검색어</code>).</p>}
       {!keyConfigured && <p className="text-xs text-amber-800">서버의 .env 에 PUDU_API_CLUSTER / PUDU_API_APP_KEY / PUDU_API_APP_SECRET 을 넣고 VENDOR_MODE=live(또는 PUDU_MODE=live)로 재시작하면 실제 연동이 켜집니다. 키는 화면에서 입력하지 않습니다.</p>}
       <div className="flex flex-wrap gap-2">
         <button
