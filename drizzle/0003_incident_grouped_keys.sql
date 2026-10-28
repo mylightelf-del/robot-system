@@ -1,0 +1,1 @@
+ALTER TABLE "incidents" ADD COLUMN "grouped_event_ids" jsonb DEFAULT '[]'::jsonb NOT NULL;

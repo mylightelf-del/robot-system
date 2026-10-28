@@ -1,6 +1,7 @@
 import { getCurrentUser } from "@/lib/auth/session";
 import { getAdminData, getVendorStatus } from "@/lib/services/admin";
 import { PuduPanel } from "@/components/VendorPanel";
+import { NewSiteForm, SiteCard } from "@/components/SitePanels";
 import { AppError } from "@/lib/util/errors";
 import { Card, KV, PageTitle } from "@/components/ui";
 import { AccessDenied } from "@/components/AccessDenied";
@@ -57,26 +58,35 @@ export default async function AdminPage() {
         </Card>
 
         <Card title="사업장 · 층 · 구역 · 로봇 배치">
+          <div className="mb-3"><NewSiteForm /></div>
           <div className="grid md:grid-cols-2 gap-4">
             {d.sites.map((s) => (
-              <div key={s.id} className="border rounded p-3 text-sm">
-                <div className="font-semibold text-navy">{s.name}</div>
-                <div className="text-xs text-gray-500">{s.address} · {s.timezone} · 샘플</div>
-                <ul className="mt-1 space-y-1">
-                  {d.floors.filter((f) => f.siteId === s.id).map((f) => {
-                    const mv = d.mapVersions.find((m) => m.id === f.currentMapVersionId);
-                    return (
-                      <li key={f.id}>
-                        <span className="font-medium">{f.name}</span> <span className="text-xs text-gray-500">지도 v{mv?.version}{mv?.corners ? "" : " · 모서리 좌표 없음"}</span>
-                        <div className="text-xs text-gray-600">구역: {d.zones.filter((z) => z.floorId === f.id).map((z) => `${z.name}(${z.areaM2}㎡)`).join(", ")}</div>
-                        <div className="text-xs text-gray-600">로봇: {d.robots.filter((r) => r.floorId === f.id).map((r) => `${r.name}[${VENDOR_LABEL[r.vendor]} ${r.model}]`).join(", ") || "없음"}</div>
-                      </li>
-                    );
-                  })}
-                </ul>
-              </div>
+              <SiteCard
+                key={s.id}
+                site={{
+                  id: s.id,
+                  name: s.name,
+                  address: s.address,
+                  timezone: s.timezone,
+                  isSample: s.isSample,
+                  hasPuduRobot: d.robots.some((r) => r.siteId === s.id && r.vendor === "PUDU" && r.vendorMeta?.source === "api"),
+                  floors: d.floors
+                    .filter((f) => f.siteId === s.id)
+                    .map((f) => {
+                      const mv = d.mapVersions.find((m) => m.id === f.currentMapVersionId);
+                      return {
+                        id: f.id,
+                        name: f.name,
+                        map: mv ? { id: mv.id, version: mv.version, vendor: mv.vendor ?? null, vendorMapName: mv.vendorMapName ?? null, imageUrl: mv.imageUrl ?? null, widthPx: mv.widthPx, heightPx: mv.heightPx, hasCorners: !!mv.corners } : null,
+                        zones: d.zones.filter((z) => z.floorId === f.id).length,
+                        robots: d.robots.filter((r) => r.floorId === f.id).map((r) => `${r.name}[${VENDOR_LABEL[r.vendor]} ${r.model}]`),
+                      };
+                    }),
+                }}
+              />
             ))}
           </div>
+          <p className="text-xs text-gray-500 mt-2">사업장·층은 여기서 만들고, PUDU 로봇을 배치한 층은 『PUDU 지도 가져오기』로 실제 지도(이미지·구역)를 연결합니다. 로봇·층·실적이 있는 항목은 삭제할 수 없습니다(이력 보존).</p>
           <div className="mt-3 border-t pt-3">
             <div className="text-sm font-medium mb-1">로봇 사업장 이동</div>
             <RelocateForm robots={d.robots.map((r) => ({ id: r.id, name: r.name, siteId: r.siteId }))} floors={floors} />

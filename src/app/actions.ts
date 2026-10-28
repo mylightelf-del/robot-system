@@ -230,3 +230,57 @@ export async function puduSyncNowAction(job: "status" | "reports" | "catalog" | 
     return { message: `${r.job}: ${r.detail}` };
   });
 }
+
+// ---- 사업장·층·지도 (본사 관리자) ----
+import * as sitesSvc from "@/lib/services/sites";
+export async function createSiteAction(input: { name: string; address: string; timezone?: string }): Promise<ActionResult> {
+  return run(async () => {
+    const r = await sitesSvc.createSite(await getCurrentUser(), input);
+    return { message: `사업장 '${input.name}' 을(를) 만들었습니다. 층을 추가하세요.`, id: r.id };
+  });
+}
+export async function updateSiteAction(siteId: string, input: { name?: string; address?: string; timezone?: string }): Promise<ActionResult> {
+  return run(async () => {
+    await sitesSvc.updateSite(await getCurrentUser(), siteId, input);
+    return { message: "사업장 정보를 저장했습니다." };
+  });
+}
+export async function deleteSiteAction(siteId: string): Promise<ActionResult> {
+  return run(async () => {
+    await sitesSvc.deleteSite(await getCurrentUser(), siteId);
+    return { message: "사업장을 삭제했습니다." };
+  });
+}
+export async function createFloorAction(siteId: string, name: string): Promise<ActionResult> {
+  return run(async () => {
+    const r = await sitesSvc.createFloor(await getCurrentUser(), siteId, name);
+    return { message: `층 '${name}' 을(를) 만들었습니다(빈 지도 v1).`, id: r.id };
+  });
+}
+export async function renameFloorAction(floorId: string, name: string): Promise<ActionResult> {
+  return run(async () => {
+    await sitesSvc.renameFloor(await getCurrentUser(), floorId, name);
+    return { message: "층 이름을 저장했습니다." };
+  });
+}
+export async function deleteFloorAction(floorId: string): Promise<ActionResult> {
+  return run(async () => {
+    await sitesSvc.deleteFloor(await getCurrentUser(), floorId);
+    return { message: "층을 삭제했습니다." };
+  });
+}
+export async function listPuduMapsAction(siteId: string): Promise<ActionResult & { maps?: { name: string; floor: string; is_used?: number }[] }> {
+  try {
+    const r = await sitesSvc.listPuduMapsForSite(await getCurrentUser(), siteId);
+    return { ok: true, message: `PUDU 매장 ${r.shopId} 의 지도 ${r.maps.length}개`, maps: r.maps };
+  } catch (e) {
+    if (!(e instanceof AppError)) console.error("[action] 처리 오류:", e);
+    return { ok: false, error: errorMessage(e) };
+  }
+}
+export async function importPuduMapAction(floorId: string, mapName: string): Promise<ActionResult> {
+  return run(async () => {
+    const r = await sitesSvc.importPuduMap(await getCurrentUser(), floorId, mapName);
+    return { message: `지도 v${r.version} 으로 가져왔습니다(구역 ${r.zones}개). 로봇 위치는 다음 폴링부터 이 지도 위에 표시됩니다.`, id: r.mapVersionId };
+  });
+}

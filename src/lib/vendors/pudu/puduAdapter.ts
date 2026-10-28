@@ -3,7 +3,8 @@ import type { ActualRun, Command, MaintenanceItem, Robot, RobotStatus } from "@/
 import type { SendResult, VendorAdapter } from "@/lib/vendors/adapter";
 import { AppError } from "@/lib/util/errors";
 import { getDb, schema } from "@/lib/db/client";
-import { getStatus } from "@/lib/db/repo";
+import { getFloor, getMapVersion, getStatus } from "@/lib/db/repo";
+import { worldToPixel } from "@/lib/domain/types";
 import { nowIso } from "@/lib/util/time";
 import { type PuduCleanDetail, PuduApi } from "./api";
 import { configFromEnv, PuduApiError, PuduClient } from "./client";
@@ -121,15 +122,35 @@ export class PuduAdapter implements VendorAdapter {
       await getDb().update(schema.robots).set({ vendorMeta: { ...(robot.vendorMeta ?? {}), lastTask: m.lastTaskId } }).where(eq(schema.robots.id, robot.id));
     }
     const prev = await getStatus(robot.id);
+    // 지도 연결: 층의 현재 지도가 제조사 지도(이미지·해상도·원점)이고 로봇이 보고한 지도 이름과 같으면 월드 좌표(m)를 픽셀로 변환해 그린다.
+    // 이름이 다르면 mapVersionId 를 "pudu:<이름>" 으로 두어 화면이 '지도 불일치'를 알린다. 층 지도가 샘플(제조사 정보 없음)이면 위치는 그리지 않는다(미터를 px 로 오인하지 않도록).
+    const floor = await getFloor(robot.floorId);
+    const map = floor ? await getMapVersion(floor.currentMapVersionId) : undefined;
+    let pose: RobotStatus["pose"] = null;
+    let mapVersionId: string | null = prev?.mapVersionId ?? null;
+    if (map?.vendor === "PUDU" && map.vendorMapName) {
+      if (m.mapName === map.vendorMapName) {
+        mapVersionId = map.id;
+        if (m.pose) {
+          const px = worldToPixel(map, m.pose.x, m.pose.y);
+          pose = px ? { x: Math.round(px.x), y: Math.round(px.y), headingDeg: m.pose.headingDeg } : null;
+        }
+      } else if (m.mapName) {
+        mapVersionId = `pudu:${m.mapName}`;
+      }
+    } else {
+      mapVersionId = null; // 샘플 지도에는 제조사 좌표를 그리지 않는다
+    }
+    const rawWithPos = m.pose ? `${m.raw} pos=(${m.pose.x.toFixed(1)}, ${m.pose.y.toFixed(1)})m map=${m.mapName ?? "-"}` : m.raw;
     return {
       robotId: robot.id,
       common: m.common,
-      raw: m.raw,
+      raw: rawWithPos,
       online: m.online,
       batteryPct: m.batteryPct,
-      pose: m.pose ?? prev?.pose ?? null,
-      poseIsLastKnown: !m.online || !m.pose,
-      mapVersionId: prev?.mapVersionId ?? null, // PUDU 지도 ↔ 우리 지도 버전 매핑은 실기 확인 후(지도 이름은 raw_payload 에 보관)
+      pose: pose ?? (map?.vendor === "PUDU" ? prev?.pose ?? null : null),
+      poseIsLastKnown: !m.online || !pose,
+      mapVersionId,
       currentMissionId: m.currentMissionId,
       progressPct: m.progressPct,
       lastReceivedAt: receivedAt,

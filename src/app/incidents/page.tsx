@@ -69,6 +69,11 @@ export default async function IncidentsPage({ searchParams }: { searchParams: Pr
                       <span className="text-xs text-gray-500" title={formatDateTime(i.occurredAt)}>
                         {relativeFromNow(i.occurredAt, now)} 발생
                       </span>
+                      {i.occurrences > 1 && (
+                        <span className="text-xs bg-amber-100 text-amber-900 rounded px-1.5" title={i.lastOccurredAt ? `최근 ${formatDateTime(i.lastOccurredAt)}` : undefined}>
+                          반복 {i.occurrences}회{i.lastOccurredAt ? ` · 최근 ${relativeFromNow(i.lastOccurredAt, now)}` : ""}
+                        </span>
+                      )}
                       {overdue && <span className="text-xs bg-red-100 text-red-800 rounded px-1.5">미조치 {i.minutesOpen}분 — 확대 통보 기준({escalate(i.siteId)}분) 초과</span>}
                     </div>
                     <div className="mt-1 text-sm">

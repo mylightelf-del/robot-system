@@ -64,7 +64,7 @@ export default async function RobotPage({ params }: { params: Promise<{ robotId:
                 items={[
                   { k: "마지막 수신", v: <>{formatDateTime(st.lastReceivedAt, tz)} <span className="text-xs text-gray-500">({relativeFromNow(st.lastReceivedAt, d.now)})</span></> },
                   { k: "데이터 발생", v: formatDateTime(st.dataAt, tz) },
-                  { k: "위치", v: st.pose ? `${st.poseIsLastKnown ? "마지막 보고 위치" : "현재 위치"} (${Math.round(st.pose.x)}, ${Math.round(st.pose.y)}) 방향 ${st.pose.headingDeg}°` : "미수신" },
+                  { k: "위치", v: st.pose ? `${st.poseIsLastKnown ? "마지막 보고 위치" : "현재 위치"} (지도 px ${Math.round(st.pose.x)}, ${Math.round(st.pose.y)})` : !d.isSimulation && !d.map?.imageUrl ? <span className="text-amber-700">지도 미연결 — 관리 설정에서 이 층에 제조사 지도를 가져오면 표시됩니다</span> : "미수신" },
                   { k: "지도 버전", v: st.mapVersionId ?? "미수신" },
                   { k: "현재 작업", v: st.currentMissionId ?? "없음" },
                 ]}

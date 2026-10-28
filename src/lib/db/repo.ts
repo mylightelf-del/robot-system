@@ -124,6 +124,8 @@ export async function assembleIncidents(rows: (typeof schema.incidents.$inferSel
     assigneeId: r.assigneeId,
     resolvedAt: r.resolvedAt,
     vendorEventId: r.vendorEventId,
+    occurrences: r.occurrences ?? 1,
+    lastOccurredAt: r.lastOccurredAt ?? null,
     actions: actions.filter((a) => a.incidentId === r.id).map(({ incidentId: _i, ...a }) => a),
     notifications: logs.filter((n) => n.incidentId === r.id).map(({ incidentId: _i, ...n }) => n),
   }));

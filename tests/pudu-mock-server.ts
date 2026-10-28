@@ -25,6 +25,7 @@ export interface MockState {
   errors: Record<string, unknown>[];
   failNext?: { status: number; message: string; path?: string } | null; // path 를 주면 그 경로의 다음 호출만 실패
   cancelledAt?: number; // 취소(303) 시각 — 실기처럼 잠시 뒤 0(대기)으로 풀린다
+  mapName?: string; // 상세 응답의 map.name (기본 1#1#lobby)
 }
 
 export function defaultState(): MockState {
@@ -43,6 +44,8 @@ export function defaultState(): MockState {
     ],
     errors: [
       { id: "e1", sn: MOCK_SN, mac: "B4:ED:D5:75:6E:EB", product_code: "CC1", upload_time: "2026-10-27 23:10:00", task_time: "2026-10-27 23:05:00", soft_version: "2.19.0", hard_version: "1", os_version: "1", error_level: "ERROR", error_type: "CleanSewageFull", error_detail: "sewage tank full", error_id: "err-0001" },
+      // 같은 로봇·같은 코드가 25분 뒤 다시 발생 → 새 장애가 아니라 묶음(occurrences 2)
+      { id: "e3", sn: MOCK_SN, mac: "B4:ED:D5:75:6E:EB", product_code: "CC1", upload_time: "2026-10-27 23:35:00", task_time: "2026-10-27 23:30:00", soft_version: "2.19.0", hard_version: "1", os_version: "1", error_level: "ERROR", error_type: "CleanSewageFull", error_detail: "sewage tank full again", error_id: "err-0002" },
       { id: "e2", sn: OTHER_SN, mac: "AA:AA", product_code: "CC1", upload_time: "2026-10-27 23:10:00", task_time: "2026-10-27 23:05:00", soft_version: "2.19.0", hard_version: "1", os_version: "1", error_level: "WARNING", error_type: "LostLocalization", error_detail: "OdomSlip", error_id: "err-other", shop_id: OTHER_SHOP },
     ],
     failNext: null,
@@ -95,7 +98,19 @@ export function startMockPudu(state: MockState = defaultState()): Promise<{ url:
           return ok({ sn: url.searchParams.get("sn"), mac: "B4:ED:D5:75:6E:EB", timestamp: String(Math.floor(Date.now() / 1000)), battery: state.battery, is_charging: state.taskCode === 202 ? 1 : -1, run_state: state.runState, product_code: "CC1", charge_stage: "", charge_type: 2, move_state: "", remain_time: 0 });
         case "/cleanbot-service/v1/api/open/robot/detail":
           if (state.taskCode === 303 && state.cancelledAt && Date.now() - state.cancelledAt > 1500) state.taskCode = 0; // 실기: 취소 처리 후 대기로
-          return ok({ sn: url.searchParams.get("sn"), mac: "B4:ED:D5:75:6E:EB", nickname: "robot2", online: state.runState !== "OFFLINE", battery: state.battery, map: { name: "1#1#lobby", lv: 1, floor: "" }, shop: { id: Number(MOCK_SHOP), name: "Shop" }, position: { x: 12.3, y: -4.5, z: 0 }, last_task_start: 1761580800000, last_task_end: 1761584400000, cleanbot: { rising: 60, sewage: 20, task: state.taskCode, detail: "", last_mode: 2, last_task: "897176785820073984", clean: state.taskCode >= 300 && state.taskCode <= 315 ? { mode: 2, report_id: "rpt-live-1", result: { status: 1, percentage: 42, area: 120, time: 600 }, task: { task_id: "897176785820073984", version: 1694070080109, name: "1층 야간" } } : null } });
+          return ok({ sn: url.searchParams.get("sn"), mac: "B4:ED:D5:75:6E:EB", nickname: "robot2", online: state.runState !== "OFFLINE", battery: state.battery, map: { name: state.mapName ?? "1#1#lobby", lv: 1, floor: "" }, shop: { id: Number(MOCK_SHOP), name: "Shop" }, position: { x: 12.3, y: -4.5, z: 0 }, last_task_start: 1761580800000, last_task_end: 1761584400000, cleanbot: { rising: 60, sewage: 20, task: state.taskCode, detail: "", last_mode: 2, last_task: "897176785820073984", clean: state.taskCode >= 300 && state.taskCode <= 315 ? { mode: 2, report_id: "rpt-live-1", result: { status: 1, percentage: 42, area: 120, time: 600 }, task: { task_id: "897176785820073984", version: 1694070080109, name: "1층 야간" } } : null } });
+        case "/map-service/v1/open/list":
+          return ok({ shop_id: Number(MOCK_SHOP), list: [{ name: "1#1#lobby", floor: "1", is_used: 1 }, { name: "-1#0#basement", floor: "-1", is_used: 2 }] });
+        case "/map-service/v1/open/map": {
+          if (url.searchParams.get("map_name") !== "1#1#lobby") return send(200, { message: "MAP_NOT_FOUND", trace_id: trace });
+          // 실기 구조: 이미지 URL·px 크기·해상도(m/px)·원점(좌하단 월드 좌표 m)·요소(area 는 [x1,y1,x2,y2,…] m)
+          return ok({ map_name: "1#1#lobby", map_code: "abc", url: "https://example.invalid/maps/lobby.png", width: 1000, height: 800, resolution: 0.05, origin: [-10, -20, 0], element_list: [
+            { id: "a1", name: "로비 중앙", type: "area", mode: "", vector_list: [0, 0, 10, 0, 10, 5, 0, 5] },
+            { id: "a2", name: "", type: "area", mode: "", vector_list: [20, 0, 30, 0, 30, 10] },
+            { id: "s1", name: "워크스테이션1", type: "chargeWorkStation", mode: "", vector_list: [-0.4, 0, 0] },
+            { id: "f1", name: "", type: "forbidden", mode: "", vector_list: [1, 1, 2, 1, 2, 2] },
+          ], zone_list: [] });
+        }
         case "/cleanbot-service/v1/api/open/task/list": {
           const product = url.searchParams.get("product");
           if (!product) return send(200, { trace_id: trace, message: "PARAM_ERROR" });

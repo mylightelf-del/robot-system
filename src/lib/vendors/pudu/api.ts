@@ -181,6 +181,33 @@ export interface PuduExecBody {
   };
 }
 
+// ---- 지도 (실기 확인 2026-10-29: map-service) ----
+export interface PuduMapListItem {
+  name: string; // "1#2#포스코센터1층_"
+  floor: string; // "1", "-1"
+  is_used?: number; // 1 사용 중, 2 미사용
+}
+/** 요소 좌표는 m. area/forbidden 의 vector_list 는 [x1,y1,x2,y2,…] 평면, source/chargeWorkStation 은 [x,y,yaw]. */
+export interface PuduMapElement {
+  id: string;
+  name: string;
+  type: string; // source | area | forbidden | chargeWorkStation | charging_pile | track | …
+  mode?: string;
+  vector_list: number[];
+  clean_path_list?: { x: number; y: number; z: number }[];
+}
+export interface PuduMapDetail {
+  map_name: string;
+  map_code?: string;
+  url: string; // 지도 이미지(PNG)
+  width: number; // px
+  height: number; // px
+  resolution: number; // m/px
+  origin: number[]; // [x, y, z] — 이미지 좌하단의 월드 좌표(m) (OPEN_MAP_RENDER 참고 구현 기준)
+  element_list?: PuduMapElement[];
+  zone_list?: { id: string; type: string; zone_node_list: { vector_list: number[] }[] }[];
+}
+
 export class PuduApi {
   constructor(readonly client: PuduClient) {}
 
@@ -221,6 +248,16 @@ export class PuduApi {
 
   async listComponents(sn: string, limit = 50, offset = 0): Promise<Paged<PuduComponent>> {
     return PuduClient.unwrap(await this.client.get<Paged<PuduComponent>>("/cleanbot-service/v1/api/open/component/list", { sn, limit, offset }), "소모품 목록");
+  }
+
+  /** 로봇이 쓸 수 있는 지도 목록(매장 단위). */
+  async listMaps(sn: string): Promise<{ list?: PuduMapListItem[]; shop_id?: number | string }> {
+    return PuduClient.unwrap(await this.client.get<{ list?: PuduMapListItem[]; shop_id?: number | string }>("/map-service/v1/open/list", { sn }), "지도 목록");
+  }
+
+  /** 지도 상세(이미지 URL·해상도·원점·요소). map_name 의 # 은 쿼리 인코딩된다. */
+  async mapDetail(shopId: string | number, mapName: string): Promise<PuduMapDetail> {
+    return PuduClient.unwrap(await this.client.get<PuduMapDetail>("/map-service/v1/open/map", { shop_id: shopId, map_name: mapName }), "지도 상세");
   }
 
   async execTask(body: PuduExecBody): Promise<{ task_id?: string; traceId: string | null }> {

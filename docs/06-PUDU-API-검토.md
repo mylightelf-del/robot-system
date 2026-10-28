@@ -161,3 +161,17 @@
 6. 도킹 직후에는 상세 `task=202` 인데 V2 `is_charging=-1`, `run_state=BUSY` 가 몇 분 남는다 → "충전 중" 판정은 둘 중 하나로.
 
 관찰된 상태 코드(실기): 0 대기 · 102 복귀 이동 · 202/203 충전 · 301 일시정지 · 302 청소 · 303 취소 처리 중 · 304 청소 지점 이동 · 400(오프라인 MT1 의 마지막 값) · 501/504 도킹 · -200 위치 상실(오프라인 로봇의 마지막 값).
+
+## 12. 지도 API (실기 확인 2026-10-29)
+
+문서 메뉴 "Map information" 아래에 있다(처음 검토 때 빠졌던 부분). 둘 다 GET, 서명 동일.
+
+| API | 경로 | 요청 | 응답(실기) |
+|---|---|---|---|
+| AvailableMaps | `/map-service/v1/open/list` | `sn` | `{ shop_id, list: [{ name: "1#2#포스코센터1층_", floor: "1" }] }` — 매장 단위 목록. 선릉 10개 |
+| GetMapDetailV2 | `/map-service/v1/open/map` | `shop_id`, `map_name`(# 은 쿼리 인코딩) | `{ map_name, map_code, url(PNG, PUDU S3), width, height(px), resolution(m/px, 0.05), origin:[x,y,z](m), element_list, zone_list }` |
+
+- 좌표 변환(참고 구현 OPEN_MAP_RENDER 와 동일, ROS 지도 관례): `u = (x - origin.x) / resolution`, `v = height - (y - origin.y) / resolution`. 로봇 상세의 `position`(m)에 그대로 적용하면 도크(≈0,0)가 지도의 충전소 위치에 찍힌다(실기 확인: px 558,125).
+- `element_list` 요소: `area`(청소 구역, `vector_list`=[x1,y1,x2,y2,…] m, `name` 있음) · `source`(지점, `mode`=return_point 등, [x,y,yaw]) · `chargeWorkStation`(워크스테이션) · `forbidden`(금지 구역). `zone_list` 에는 `RGBDFuncLimitArea` 등 기능 제한 구역.
+- 상세의 `map.name` 과 지도 이름이 같으면 로봇이 그 지도 위에 있는 것이다. 다른 지도를 보고하면 우리 화면은 『지도 불일치』로 표시한다.
+- 실시간 위치 전용 API(`/open-platform-service/v1/robot/get_position`)도 있으나 10초 캐시이고 상세 API 에 같은 값이 있어 쓰지 않는다. `notifyRobotPose` 콜백은 콜백 등록 후 검토.

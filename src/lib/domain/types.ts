@@ -74,6 +74,18 @@ export interface MapVersion {
   heightPx: number;
   /** 오래된 지도는 null 일 수 있다. null 이면 영역 명령을 차단한다. */
   corners: MapCorners | null;
+  /** 제조사 지도에서 가져온 경우. 샘플 지도는 모두 없음. */
+  vendor?: Vendor | null;
+  vendorMapName?: string | null; // 예: PUDU "1#2#포스코센터1층_"
+  imageUrl?: string | null;
+  resolution?: number | null; // m/px
+  origin?: [number, number] | null; // 이미지 좌하단 픽셀의 월드 좌표(m) — ROS 지도 관례
+}
+
+/** 월드 좌표(m) → 이미지 픽셀. ROS/PUDU 관례: u=(x-ox)/res, v=height-(y-oy)/res */
+export function worldToPixel(map: Pick<MapVersion, "heightPx" | "resolution" | "origin">, x: number, y: number): { x: number; y: number } | null {
+  if (!map.resolution || !map.origin) return null;
+  return { x: (x - map.origin[0]) / map.resolution, y: map.heightPx - (y - map.origin[1]) / map.resolution };
 }
 
 export interface Zone {
@@ -262,6 +274,9 @@ export interface Incident {
   resolvedAt: string | null;
   /** 제조사 이벤트 ID(중복 제거용). */
   vendorEventId: string | null;
+  /** 같은 코드의 반복 발생 횟수(묶음). */
+  occurrences?: number;
+  lastOccurredAt?: string | null;
   actions: IncidentAction[];
   notifications: NotificationLog[];
 }

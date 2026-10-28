@@ -22,6 +22,9 @@ export interface IncidentView {
   rawMessage: string | null; // 고객에게는 null
   customerMessage: string;
   occurredAt: string;
+  /** 같은 코드 반복 발생 횟수(묶음)와 최근 발생 시각. */
+  occurrences: number;
+  lastOccurredAt: string | null;
   status: Incident["status"];
   acknowledgedAt: string | null;
   assigneeName: string | null;
@@ -52,6 +55,8 @@ export function sanitizeIncident(i: Incident, user: User, ctx: NameContext): Inc
     rawMessage: customer ? null : i.rawMessage,
     customerMessage: i.customerMessage,
     occurredAt: i.occurredAt,
+    occurrences: i.occurrences ?? 1,
+    lastOccurredAt: i.lastOccurredAt ?? null,
     status: i.status,
     acknowledgedAt: i.acknowledgedAt,
     assigneeName: customer ? (i.assigneeId ? "담당자 지정됨" : null) : ctx.assigneeName,

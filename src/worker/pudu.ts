@@ -203,7 +203,23 @@ async function upsertIncidentFromError(robot: Robot, e: { code: string; level: s
   const db = getDb();
   const dup = await db.query.incidents.findFirst({ where: eq(schema.incidents.vendorEventId, e.key) });
   if (dup) return false;
+  const grouped = await db.select({ id: schema.incidents.id }).from(schema.incidents).where(sql`${schema.incidents.groupedEventIds} ? ${e.key}`);
+  if (grouped.length) return false; // 이미 묶음으로 집계된 발생
   const severity = mapErrorLevel(e.level);
+  // 묶음: 같은 로봇·같은 코드의 미해결 장애가 최근 INCIDENT_GROUP_HOURS 안에 있으면 새로 만들지 않고 횟수·최근 발생 시각만 갱신한다.
+  const open = await db
+    .select()
+    .from(schema.incidents)
+    .where(and(eq(schema.incidents.robotId, robot.id), eq(schema.incidents.code, e.code), inArray(schema.incidents.status, ["OPEN", "ACKED", "ASSIGNED", "IN_PROGRESS"])));
+  const recent = open.find((i) => Math.abs(new Date(e.occurredAt).getTime() - new Date(i.lastOccurredAt ?? i.occurredAt).getTime()) <= INCIDENT_GROUP_HOURS * 3600_000);
+  if (recent) {
+    const newer = e.occurredAt > (recent.lastOccurredAt ?? recent.occurredAt);
+    await db
+      .update(schema.incidents)
+      .set({ occurrences: recent.occurrences + 1, lastOccurredAt: newer ? e.occurredAt : (recent.lastOccurredAt ?? recent.occurredAt), groupedEventIds: [...(recent.groupedEventIds ?? []), e.key], ...(newer ? { rawMessage: `[${e.level}] ${e.code}: ${e.detail}`, rawPayload: e.payload } : {}) })
+      .where(eq(schema.incidents.id, recent.id));
+    return false;
+  }
   const site = await getSite(robot.siteId, db);
   const inc: Incident = {
     id: newId("inc"),
@@ -219,6 +235,8 @@ async function upsertIncidentFromError(robot: Robot, e: { code: string; level: s
     assigneeId: null,
     resolvedAt: null,
     vendorEventId: e.key,
+    occurrences: 1,
+    lastOccurredAt: e.occurredAt,
     actions: [],
     notifications: [],
   };
@@ -375,5 +393,7 @@ export function puduLiveEnabled(): boolean {
   return vendorMode("PUDU") === "live";
 }
 
+/** 같은 로봇·같은 코드의 반복 발생을 한 장애로 묶는 시간 창(시간). */
+export const INCIDENT_GROUP_HOURS = Number(process.env.INCIDENT_GROUP_HOURS ?? 6);
 export const PUDU_WINDOW_HOURS = Number(process.env.PUDU_POLL_WINDOW_HOURS ?? 48);
 export { addMinutes };

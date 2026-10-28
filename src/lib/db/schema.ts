@@ -69,6 +69,12 @@ export const mapVersions = pgTable("map_versions", {
   widthPx: integer().notNull(),
   heightPx: integer().notNull(),
   corners: jsonb().$type<MapCorners | null>(),
+  // 제조사 지도(실기: PUDU GetMapDetailV2) — 이미지 URL, 해상도(m/px), 원점(이미지 좌하단의 월드 좌표 m). 샘플 지도는 모두 null.
+  vendor: text().$type<Vendor>(),
+  vendorMapName: text(),
+  imageUrl: text(),
+  resolution: doublePrecision(),
+  origin: jsonb().$type<[number, number] | null>(),
 });
 
 export const zones = pgTable("zones", {
@@ -264,6 +270,11 @@ export const incidents = pgTable(
     resolvedAt: isoTimestamp(),
     vendorEventId: text(),
     rawPayload: jsonb(),
+    // 같은 로봇·같은 코드의 반복 발생은 새 장애를 만들지 않고 횟수만 늘린다(실기: 위치 상실 경고가 하루 수 건).
+    occurrences: integer().notNull().default(1),
+    lastOccurredAt: isoTimestamp(),
+    /** 묶인 반복 발생의 제조사 이벤트 키(재동기화 시 중복 집계 방지). */
+    groupedEventIds: jsonb().$type<string[]>().notNull().default([]),
   },
   (t) => [uniqueIndex("incidents_vendor_event_key").on(t.vendorEventId), index("incidents_site_idx").on(t.siteId, t.occurredAt)],
 );

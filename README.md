@@ -1,7 +1,7 @@
 # 청소로봇 통합관제 시스템
 
 포스코와이드의 여러 사업장 청소로봇(PUDU MT1·CC1·BG1, CenoBots L4)을 본사·현장·고객사가 권한별로 관리하는 웹 시스템입니다.
-현재 **3단계(PUDU 연동)** 까지 구현: 7개 화면(1단계) + PostgreSQL 영속 저장 · 로그인(초대 링크) · 서버 세션 · 사업장별 인가 · 감사 이력 · 백그라운드 워커 · Docker 배포 구성(2단계) + **PUDU Cloud API 연동**(서명 인증, 상태·보고서·장애·작업·예약·소모품 동기화, 명령 전송, 콜백 수신, 관리 화면 연결·로봇 등록).
+현재 **3단계(PUDU 연동)·운영 준비** 까지 구현: 7개 화면(1단계) + PostgreSQL 영속 저장 · 로그인(초대 링크) · 서버 세션 · 사업장별 인가 · 감사 이력 · 백그라운드 워커 · Docker 배포 구성(2단계) + **PUDU Cloud API 연동**(서명 인증, 상태·보고서·장애·작업·예약·소모품 동기화, 명령 전송, 콜백 수신, 관리 화면 연결·로봇 등록).
 
 > PUDU 연동은 모의 서버 시험 후 **실서버에 읽기 전용으로 확인**해 응답 차이를 반영했습니다(상태·보고서·장애·작업·예약·소모품 적재 확인). 실제 로봇에 **명령은 아직 보내지 않았습니다**(`docs/07` 3-3·4장). 키를 서버 `.env` 에 넣고 `VENDOR_MODE=live`(또는 `PUDU_MODE=live`)로 켜면 PUDU API 에서 등록한 로봇만 실제로 동작하고, 샘플 적재 로봇은 계속 시뮬레이션으로 남습니다. CenoBots 는 아직 샘플입니다. `VENDOR_MODE=sample`(기본) 에서는 가상 사업장 5곳·로봇 20대 샘플과 시뮬레이션 어댑터가 동작하며, 화면 상단에 표시됩니다.
 
@@ -15,7 +15,8 @@
 | `docs/04-2단계-기반-보고.md` | 2단계 구현·테스트 보고, 완료/미완료, 다음 단계 |
 | `docs/05-배포-운영-가이드.md` | Lightsail 설치, Cloudflare, 백업·복구, 감시, 키 교체, PUDU 연동 켜기 |
 | `docs/06-PUDU-API-검토.md` | PUDU Cloud API 공식 문서 검토: 인증·클러스터·endpoint·상태 코드·콜백, 설계 결정, 실기 검증 체크리스트 |
-| `docs/07-PUDU-연동-보고.md` | PUDU 연동 구현·시험 보고, 미확인 항목, 사용자가 준비할 것 |
+| `docs/07-PUDU-연동-보고.md` | PUDU 연동 구현·시험 보고(모의 서버·실서버·명령 실기), 미확인 항목 |
+| `docs/08-운영준비-보고.md` | 사업장·층 관리, PUDU 지도 가져오기·로봇 위치 변환, 장애 묶음 |
 | `src/lib/vendors/cenobots/README.md` | CenoBots 어댑터 구현 전 메모 |
 
 ## 로컬 실행
@@ -44,7 +45,7 @@ PostgreSQL 이 없다면 `.env` 에 `POSTGRES_PASSWORD` 를 넣고 `docker compo
 ```bash
 npm run typecheck
 npm run lint
-npm test            # vitest, 실제 PostgreSQL(DATABASE_URL_TEST) 사용 — 57건(PUDU 모의 서버 포함)
+npm test            # vitest, 실제 PostgreSQL(DATABASE_URL_TEST) 사용 — 59건(PUDU 모의 서버 포함)
 npm run build       # standalone 빌드
 ```
 브라우저 자동 조작(선택, Playwright 필요): 웹·워커 실행 중에
@@ -75,4 +76,4 @@ PUDU: `PUDU_API_CLUSTER`(한국 계정은 `sea`) · `PUDU_API_APP_KEY` · `PUDU_
 
 ## 단계 계획 (인수인계 문서 9장)
 원래 순서는 3·4단계 CenoBots → 6단계 PUDU 였으나, 사용자 결정으로 **PUDU 를 먼저** 연동했다.
-1. 시제품 ✅  2. 기반 ✅  3. PUDU 읽기·제어·콜백 ✅  4. PUDU 실기 검증(읽기 ✅ · 명령 ✅ CC1Pro 1대 · 콜백·지도 매핑은 대기)  5. CenoBots 읽기·제어  6. 이벤트·알림·보고서 고도화 · 시범 운영 (BIB 는 후속)
+1. 시제품 ✅  2. 기반 ✅  3. PUDU 읽기·제어·콜백 ✅  4. PUDU 실기 검증(읽기 ✅ · 명령 ✅ CC1Pro 1대 · 지도 ✅ · 콜백 등록 대기)  4-1. 운영 준비(사업장·층·지도 관리, 장애 묶음) ✅  5. CenoBots 읽기·제어  6. 이벤트·알림·보고서 고도화 · 시범 운영 (BIB 는 후속)

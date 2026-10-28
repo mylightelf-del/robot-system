@@ -15,6 +15,20 @@
       "when": 1793203009971,
       "tag": "0001_pudu_events",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1793226444891,
+      "tag": "0002_sites_maps_incidents",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1793226843342,
+      "tag": "0003_incident_grouped_keys",
+      "breakpoints": true
     }
   ]
 }

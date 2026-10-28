@@ -107,7 +107,7 @@ describe("PUDU 클라이언트·어댑터·워커 (모의 서버)", () => {
   });
   beforeEach(async () => {
     await resetAndSeed();
-    Object.assign(state, { taskCode: 0, runState: "IDLE", battery: 77, execCalls: [], requests: [], failNext: null });
+    Object.assign(state, { taskCode: 0, runState: "IDLE", battery: 77, execCalls: [], requests: [], failNext: null, mapName: undefined });
   });
 
   async function registerMockRobot(): Promise<string> {
@@ -170,7 +170,8 @@ describe("PUDU 클라이언트·어댑터·워커 (모의 서버)", () => {
     expect(st.common).toBe("CLEANING");
     expect(st.progressPct).toBe(42);
     expect(st.batteryPct).toBe(77);
-    expect(st.pose).toMatchObject({ x: 12.3, y: -4.5 });
+    expect(st.pose).toBeNull(); // 샘플 지도 층: 미터 좌표를 px 로 그리지 않는다(제조사 지도를 가져온 층에서만 변환) — tests/sites.test.ts
+    expect(st.raw).toContain("pos=(12.3, -4.5)m map=1#1#lobby");
     state.runState = "OFFLINE";
     r = await syncPuduStatus(new PuduAdapter(api));
     st = (await db().query.robotStatus.findFirst({ where: eq(schema.robotStatus.robotId, id) }))!;
@@ -221,7 +222,9 @@ describe("PUDU 클라이언트·어댑터·워커 (모의 서버)", () => {
     await syncPuduErrors(api, 24 * 30);
     const incs = await db().select().from(schema.incidents).where(eq(schema.incidents.robotId, id));
     expect(incs.length).toBe(1);
-    expect(incs[0]).toMatchObject({ code: "CleanSewageFull", severity: "HIGH", status: "OPEN" });
+    expect(incs[0]).toMatchObject({ code: "CleanSewageFull", severity: "HIGH", status: "OPEN", occurrences: 2 }); // 25분 뒤 재발생은 묶음
+    expect(incs[0].lastOccurredAt).toBe("2026-10-27T14:30:00.000Z");
+    expect(incs[0].rawMessage).toContain("again");
     // 과거 로그 적재는 현재 상태를 덮지 않는다(실기에서 정상 로봇이 ERROR 로 표시되던 문제)
     expect((await db().query.robotStatus.findFirst({ where: eq(schema.robotStatus.robotId, id) }))!.common).not.toBe("ERROR");
   });

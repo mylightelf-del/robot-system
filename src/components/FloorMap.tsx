@@ -26,7 +26,7 @@ const FILL: Record<CommonStatus, string> = {
 };
 
 /**
- * 층 지도(샘플). 실제 지도 이미지는 제조사 API(지도 이미지·모서리 좌표)로 교체한다.
+ * 층 지도. 제조사 지도를 가져온 층은 지도 이미지(imageUrl) 위에, 아니면 샘플 틀 위에 구역·로봇을 그린다. 좌표는 모두 px(지도 이미지 기준).
  * - 구역 선택 모드(selectable): 구역 클릭으로 선택, 빈 곳 클릭으로 사용자 정의 영역 점 추가.
  * - 오프라인 로봇은 점선 원 + "마지막 위치" 로 구분한다.
  */
@@ -75,7 +75,11 @@ export function FloorMap({
         }}
       >
         <rect x={0} y={0} width={W} height={H} fill="#f8fafc" />
-        <rect x={40} y={40} width={W - 80} height={H - 80} fill="none" stroke="#cbd5e1" strokeWidth={3} />
+        {map.imageUrl ? (
+          <image href={map.imageUrl} x={0} y={0} width={W} height={H} preserveAspectRatio="none" />
+        ) : (
+          <rect x={40} y={40} width={W - 80} height={H - 80} fill="none" stroke="#cbd5e1" strokeWidth={3} />
+        )}
         {zones.map((z) => {
           const sel = selectedZoneIds.includes(z.id);
           const pts = z.polygon.map((p) => p.join(",")).join(" ");
@@ -91,7 +95,7 @@ export function FloorMap({
               }}
               className={selectable ? "cursor-pointer" : ""}
             >
-              <polygon points={pts} fill={sel ? "#bfdbfe" : "#e2e8f0"} stroke={sel ? "#1d4ed8" : "#94a3b8"} strokeWidth={sel ? 4 : 2} />
+              <polygon points={pts} fill={sel ? "rgba(191,219,254,0.8)" : map.imageUrl ? "rgba(226,232,240,0.35)" : "#e2e8f0"} stroke={sel ? "#1d4ed8" : "#94a3b8"} strokeWidth={sel ? 4 : 2} />
               <text x={cx} y={cy} textAnchor="middle" fontSize={26} fill="#334155">
                 {z.name}
               </text>
@@ -142,7 +146,7 @@ export function FloorMap({
         })}
       </svg>
       <div className="absolute left-2 bottom-2 bg-white/90 rounded px-2 py-1 text-[11px] text-gray-600 border">
-        샘플 지도 · 원 안 숫자=배터리% · 삼각형=진행 방향 · 점선 원=마지막 보고 위치(오프라인)
+        {map.imageUrl ? `제조사 지도(${map.vendor ?? ""} ${map.vendorMapName ?? ""})` : "샘플 지도"} · 원 안 숫자=배터리% · 삼각형=진행 방향 · 점선 원=마지막 보고 위치(오프라인)
       </div>
     </div>
   );
