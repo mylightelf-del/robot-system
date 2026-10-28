@@ -1,14 +1,15 @@
 import type { AuditLog, User } from "@/lib/domain/types";
-import type { StoreData } from "@/lib/store/data";
+import { getDb, schema } from "@/lib/db/client";
+import type { DbLike } from "@/lib/db/repo";
 import { newId } from "@/lib/util/random";
 import { nowIso } from "@/lib/util/time";
 
-/** 감사 기록: 사용자, 사업장, 로봇, 행위, 파라미터, 시각, 결과, 제조사 추적 ID. */
-export function audit(
-  data: StoreData,
-  user: User,
+/** 감사 기록: 사용자, 사업장, 로봇, 행위, 파라미터, 시각, 결과, 제조사 추적 ID. DB 에 영속 저장. */
+export async function audit(
+  user: Pick<User, "id" | "name">,
   entry: Omit<AuditLog, "id" | "at" | "userId" | "userName"> & { at?: string },
-): AuditLog {
+  db: DbLike = getDb(),
+): Promise<AuditLog> {
   const log: AuditLog = {
     id: newId("aud"),
     at: entry.at ?? nowIso(),
@@ -22,6 +23,6 @@ export function audit(
     detail: entry.detail,
     vendorTraceId: entry.vendorTraceId,
   };
-  data.audit.unshift(log);
+  await db.insert(schema.auditLogs).values(log);
   return log;
 }

@@ -6,6 +6,7 @@ import { COMMAND_LABEL, ROLE_LABEL } from "@/lib/domain/status";
 import {
   addRecipientAction,
   createUserAction,
+  reissueInviteAction,
   relocateRobotAction,
   removeRecipientAction,
   resetSampleAction,
@@ -19,7 +20,7 @@ import { ActionButton, btn, ResultLine, useAction } from "./ActionButton";
 const CMDS: CommandType[] = ["START_TASK", "PAUSE", "RESUME", "STOP", "GO_HOME", "AREA_CLEAN"];
 const ROLES: Role[] = ["HQ_ADMIN", "SITE_MANAGER", "CUSTOMER_BASIC", "CUSTOMER_CONTROL"];
 
-export function UserRow({ u, sites, selfId }: { u: User; sites: { id: string; name: string }[]; selfId: string }) {
+export function UserRow({ u, sites, selfId, auth }: { u: User; sites: { id: string; name: string }[]; selfId: string; auth: { hasPassword: boolean; inviteLink: string | null; lastLoginAt: string | null } }) {
   const { pending, result, run } = useAction();
   const [siteIds, setSiteIds] = useState(u.sitePermissions.map((p) => p.siteId));
   const [cmds, setCmds] = useState<CommandType[]>(u.sitePermissions[0]?.allowedCommands ?? []);
@@ -29,7 +30,10 @@ export function UserRow({ u, sites, selfId }: { u: User; sites: { id: string; na
         <div className="font-medium">{u.name}</div>
         <div className="text-xs text-gray-500">{u.email}</div>
       </td>
-      <td>{ROLE_LABEL[u.role]}</td>
+      <td>
+        {ROLE_LABEL[u.role]}
+        <div className="text-[11px] text-gray-500">{auth.hasPassword ? "비밀번호 설정됨" : "초대 대기"}{auth.lastLoginAt ? "" : " · 로그인 기록 없음"}</div>
+      </td>
       <td>
         <div className="flex flex-wrap gap-1">
           {sites.map((s) => (
@@ -69,8 +73,13 @@ export function UserRow({ u, sites, selfId }: { u: User; sites: { id: string; na
               {u.active ? "비활성화" : "활성화"}
             </ActionButton>
           )}
+          <button type="button" className={btn.small} disabled={pending} onClick={() => { if (window.confirm("초대 링크를 재발급하면 이 사용자의 기존 로그인이 모두 종료됩니다. 계속할까요?")) run(() => reissueInviteAction(u.id)); }}>
+            초대 재발급
+          </button>
         </div>
+        {auth.inviteLink && <div className="text-[11px] text-amber-800 break-all mt-1">초대 링크(유효): {auth.inviteLink}</div>}
         <ResultLine result={result} />
+        {result?.ok && result.link && <div className="text-[11px] text-amber-800 break-all">새 초대 링크: {result.link}</div>}
       </td>
     </tr>
   );
@@ -115,9 +124,15 @@ export function NewUserForm({ sites }: { sites: { id: string; name: string }[] }
         </div>
       )}
       <button type="button" className={btn.primary} disabled={pending} onClick={() => run(() => createUserAction({ name, email, role, siteIds, allowedCommands: cmds }))}>
-        사용자 추가 (샘플)
+        사용자 등록 + 초대 링크 발급
       </button>
       <ResultLine result={result} />
+      {result?.ok && result.link && (
+        <div className="rounded border border-amber-200 bg-amber-50 p-2 text-xs text-amber-900 break-all">
+          초대 링크(72시간 유효, 1회용): <b>{result.link}</b>
+          <div className="mt-1 text-[11px]">이메일 발송 연동(5단계) 전까지는 이 링크를 직접 전달하세요.</div>
+        </div>
+      )}
     </div>
   );
 }
@@ -207,16 +222,20 @@ export function RelocateForm({ robots, floors }: { robots: { id: string; name: s
   );
 }
 
-export function SettingsPanel({ siteManagerCanConfirm }: { siteManagerCanConfirm: boolean }) {
+export function SettingsPanel({ siteManagerCanConfirm, allowSampleReset }: { siteManagerCanConfirm: boolean; allowSampleReset: boolean }) {
   return (
     <div className="flex flex-wrap gap-3 items-center text-sm">
       <span>현장 담당자 보고서 확정 권한: <b>{siteManagerCanConfirm ? "허용" : "불가(본사만)"}</b></span>
       <ActionButton variant="small" action={() => setSiteManagerCanConfirmAction(!siteManagerCanConfirm)} showResult={false}>
         {siteManagerCanConfirm ? "불가로 변경" : "허용으로 변경"}
       </ActionButton>
-      <ActionButton variant="danger" confirmText="샘플 데이터를 초기 상태로 되돌립니다. 계속할까요?" action={() => resetSampleAction()}>
-        샘플 데이터 초기화
-      </ActionButton>
+      {allowSampleReset ? (
+        <ActionButton variant="danger" confirmText="샘플 데이터를 초기 상태로 되돌립니다(모든 세션 종료 → 재로그인 필요). 계속할까요?" action={() => resetSampleAction()}>
+          샘플 데이터 초기화
+        </ActionButton>
+      ) : (
+        <span className="text-xs text-gray-500">샘플 초기화는 이 환경에서 비활성(ALLOW_SAMPLE_RESET=false)</span>
+      )}
     </div>
   );
 }

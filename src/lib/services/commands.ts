@@ -1,9 +1,11 @@
+import { and, desc, eq, gt, inArray, notInArray } from "drizzle-orm";
 import type { Command, CommandType, User } from "@/lib/domain/types";
 import { ALLOWED_BY_STATUS } from "@/lib/domain/commands";
-import { accessibleSiteIds, assertActive, assertCommandAllowed, assertRobotAccess, isCustomer } from "@/lib/auth/authz";
-import { getStore } from "@/lib/store/store";
+import { accessibleSiteIds, assertActive, assertCommandAllowed, assertRobotAccess, assertSiteAccess, isCustomer } from "@/lib/auth/authz";
+import { getDb, schema } from "@/lib/db/client";
+import { getFloor, getMapVersion, getRobot, getStatus, listSitesByIds, listUsers, listZonesByFloor, loadSettings, type DbLike } from "@/lib/db/repo";
 import { getAdapter } from "@/lib/vendors";
-import { ConflictError, ValidationError } from "@/lib/util/errors";
+import { ConflictError, NotFoundError, ValidationError } from "@/lib/util/errors";
 import { newId } from "@/lib/util/random";
 import { addMinutes, nowIso } from "@/lib/util/time";
 import { audit } from "./audit";
@@ -20,93 +22,81 @@ export interface IssueCommandInput {
 
 const PENDING: Command["state"][] = ["REQUESTED", "ACCEPTED", "EXECUTING"];
 
-/** 점이 다각형 내부에 있는지(ray casting). */
-function pointInPolygon(p: [number, number], poly: [number, number][]): boolean {
-  let inside = false;
-  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
-    const [xi, yi] = poly[i];
-    const [xj, yj] = poly[j];
-    const intersect = yi > p[1] !== yj > p[1] && p[0] < ((xj - xi) * (p[1] - yi)) / (yj - yi) + xi;
-    if (intersect) inside = !inside;
-  }
-  return inside;
-}
-
 /**
  * 영역 청소 명령 검증: 지도 버전 일치, 모서리 좌표 존재, 다각형이 지도 범위 안, L 시리즈는 SWEEP 만.
  * 하나라도 어긋나면 전송하지 않는다.
  */
-export function validateAreaParams(robotId: string, params: Record<string, unknown>): { zoneIds: string[]; polygon: [number, number][] | null; mapVersionId: string } {
-  const data = getStore();
-  const robot = data.robots.find((r) => r.id === robotId)!;
-  const floor = data.floors.find((f) => f.id === robot.floorId)!;
-  const map = data.mapVersions.find((m) => m.id === floor.currentMapVersionId)!;
-  const status = data.statuses[robot.id];
+export async function validateAreaParams(robotId: string, params: Record<string, unknown>, db: DbLike = getDb()): Promise<{ zoneIds: string[]; polygon: [number, number][] | null; mapVersionId: string }> {
+  const robot = await getRobot(robotId, db);
+  if (!robot) throw new NotFoundError();
+  const floor = (await getFloor(robot.floorId, db))!;
+  const map = (await getMapVersion(floor.currentMapVersionId, db))!;
+  const status = await getStatus(robot.id, db);
   const mapVersionId = String(params.mapVersionId ?? "");
   if (mapVersionId !== map.id) throw new ValidationError("요청한 지도 버전이 현재 지도 버전과 다릅니다. 지도를 새로 고친 뒤 다시 지정하세요.");
-  if (status.mapVersionId && status.mapVersionId !== map.id) throw new ValidationError("로봇이 보고한 지도 버전이 현재 지도와 다릅니다(지도 버전 불일치). 로봇 지도 동기화 후 가능합니다.");
+  if (status?.mapVersionId && status.mapVersionId !== map.id) throw new ValidationError("로봇이 보고한 지도 버전이 현재 지도와 다릅니다(지도 버전 불일치). 로봇 지도 동기화 후 가능합니다.");
   if (!map.corners) throw new ValidationError("이 지도는 모서리 좌표가 없어(구형 지도) 좌표 변환을 검증할 수 없습니다. 영역 명령을 차단합니다.");
   const mode = String(params.mode ?? "SWEEP");
   if (robot.model === "L4" && mode !== "SWEEP") throw new ValidationError("L 시리즈 임시 작업은 SWEEP 모드만 가능합니다.");
   const zoneIds = Array.isArray(params.zoneIds) ? (params.zoneIds as string[]) : [];
   const polygon = Array.isArray(params.polygon) ? (params.polygon as [number, number][]) : null;
   if (zoneIds.length === 0 && (!polygon || polygon.length < 3)) throw new ValidationError("구역을 선택하거나 사용자 정의 영역(점 3개 이상)을 지정하세요.");
+  const floorZones = await listZonesByFloor(floor.id, db);
   for (const z of zoneIds) {
-    const zone = data.zones.find((x) => x.id === z);
-    if (!zone || zone.floorId !== floor.id) throw new ValidationError("다른 층/사업장의 구역은 지정할 수 없습니다.");
+    if (!floorZones.some((x) => x.id === z)) throw new ValidationError("다른 층/사업장의 구역은 지정할 수 없습니다.");
   }
   if (polygon) {
     for (const [x, y] of polygon) {
       if (!(x >= 0 && x <= map.widthPx && y >= 0 && y <= map.heightPx)) throw new ValidationError("사용자 정의 영역이 지도 범위를 벗어났습니다.");
-    }
-    if (status.pose && !status.poseIsLastKnown) {
-      // 참고 정보: 로봇이 영역 밖에 있어도 명령은 가능하나, 화면에 알린다.
-      void pointInPolygon([status.pose.x, status.pose.y], polygon);
     }
   }
   return { zoneIds, polygon, mapVersionId };
 }
 
 export async function issueCommand(user: User, input: IssueCommandInput): Promise<Command> {
-  const data = getStore();
-  const robot = assertRobotAccess(data, user, input.robotId);
+  const db = getDb();
+  const robot = await assertRobotAccess(user, input.robotId, db);
   const type = input.type;
   const now = nowIso();
+  const settings = await loadSettings(db);
 
-  // 1) 권한(역할·사업장·명령별)
+  // 1) 권한(역할·사업장·명령별) — 거부도 감사 기록에 남긴다.
   try {
-    assertCommandAllowed(data, user, robot.siteId, type);
+    await assertCommandAllowed(user, robot.siteId, type, db);
   } catch (e) {
-    audit(data, user, { siteId: robot.siteId, robotId: robot.id, action: `COMMAND:${type}`, params: input.params ?? {}, result: "DENIED", detail: (e as Error).message, vendorTraceId: null });
+    await audit(user, { siteId: robot.siteId, robotId: robot.id, action: `COMMAND:${type}`, params: input.params ?? {}, result: "DENIED", detail: (e as Error).message, vendorTraceId: null }, db);
     throw e;
   }
 
   // 2) 로봇 지원 여부 · 상태 전이 규칙
   if (!robot.supportedCommands.includes(type)) throw new ValidationError("이 로봇(모델)은 해당 명령을 지원하지 않습니다.");
-  const status = data.statuses[robot.id];
-  if (!ALLOWED_BY_STATUS[status.common]?.includes(type)) {
-    throw new ValidationError(`현재 상태(${status.common})에서는 '${type}' 명령을 보낼 수 없습니다.`);
+  const status = await getStatus(robot.id, db);
+  const common = status?.common ?? "UNKNOWN";
+  if (!ALLOWED_BY_STATUS[common]?.includes(type)) {
+    throw new ValidationError(`현재 상태(${common})에서는 '${type}' 명령을 보낼 수 없습니다.`);
   }
 
-  // 3) 중복 클릭 · 동시 명령 충돌 방지
-  if (input.idempotencyKey && data.commands.some((c) => c.params.idempotencyKey === input.idempotencyKey)) {
-    throw new ConflictError("같은 요청이 이미 처리되었습니다(중복 클릭).");
+  // 3) 중복 클릭 · 동시 명령 충돌 방지 (선 조작 우선: 처리 중 명령이 있으면 역할과 무관하게 거부)
+  if (input.idempotencyKey) {
+    const dup = await db.query.commands.findFirst({ where: eq(schema.commands.idempotencyKey, input.idempotencyKey) });
+    if (dup) throw new ConflictError("같은 요청이 이미 처리되었습니다(중복 클릭).");
   }
-  const pending = data.commands.find((c) => c.robotId === robot.id && PENDING.includes(c.state) && !(c.type === "START_TASK" || c.type === "AREA_CLEAN") && c.expiresAt > now);
+  const pending = await db.query.commands.findFirst({
+    where: and(eq(schema.commands.robotId, robot.id), inArray(schema.commands.state, PENDING), notInArray(schema.commands.type, ["START_TASK", "AREA_CLEAN"]), gt(schema.commands.expiresAt, now)),
+  });
   if (pending) {
-    const who = data.users.find((u) => u.id === pending.userId)?.name ?? pending.userId;
+    const who = (await listUsers(db)).find((u) => u.id === pending.userId)?.name ?? pending.userId;
     throw new ConflictError(`${who} 의 '${pending.type}' 명령이 처리 중입니다. 결과 확인 후 다시 시도하세요.`);
   }
 
   // 4) 명령별 파라미터 검증
   const params: Record<string, unknown> = { ...(input.params ?? {}) };
-  if (input.idempotencyKey) params.idempotencyKey = input.idempotencyKey;
   if (type === "START_TASK") {
-    const task = data.tasks.find((t) => t.id === params.taskId && t.robotId === robot.id);
+    const task = await db.query.registeredTasks.findFirst({ where: and(eq(schema.registeredTasks.id, String(params.taskId ?? "")), eq(schema.registeredTasks.robotId, robot.id)) });
     if (!task) throw new ValidationError("이 로봇에 등록된 작업만 실행할 수 있습니다.");
   }
   if (type === "AREA_CLEAN") {
-    const v = validateAreaParams(robot.id, params);
+    const v = await validateAreaParams(robot.id, params, db);
     params.zoneIds = v.zoneIds;
     params.polygon = v.polygon;
   }
@@ -121,21 +111,26 @@ export async function issueCommand(user: User, input: IssueCommandInput): Promis
     type,
     params,
     requestedAt: now,
-    expiresAt: addMinutes(now, data.settings.commandExpiryMinutes),
+    expiresAt: addMinutes(now, settings.commandExpiryMinutes),
     state: "REQUESTED",
     stateChangedAt: now,
     message: null,
     vendorTraceId: null,
     simulation: adapter.isSimulation ? (input.simulation ?? "NORMAL") : null,
   };
-  data.commands.unshift(cmd);
+  try {
+    await db.insert(schema.commands).values({ ...cmd, idempotencyKey: input.idempotencyKey ?? null });
+  } catch (e) {
+    // 동시 요청이 멱등 키 유일 제약에 걸린 경우
+    if (String((e as Error).message).includes("commands_idempotency_key")) throw new ConflictError("같은 요청이 이미 처리되었습니다(중복 클릭).");
+    throw e;
+  }
 
   let result: "OK" | "ERROR" = "OK";
   try {
     const res = await adapter.sendCommand(robot, cmd);
     cmd.vendorTraceId = res.vendorTraceId;
-    const at = nowIso();
-    cmd.stateChangedAt = at;
+    cmd.stateChangedAt = nowIso();
     if (res.outcome === "ACCEPTED") {
       cmd.state = "ACCEPTED";
       cmd.message = `${res.message ?? "접수"} — 실행 확인 전(HTTP 접수만 완료)`;
@@ -154,7 +149,8 @@ export async function issueCommand(user: User, input: IssueCommandInput): Promis
     cmd.message = `전송 중 오류: ${(e as Error).message} — 결과 불명`;
     result = "ERROR";
   }
-  audit(data, user, { siteId: robot.siteId, robotId: robot.id, action: `COMMAND:${type}`, params, result, detail: cmd.message, vendorTraceId: cmd.vendorTraceId });
+  await db.update(schema.commands).set({ state: cmd.state, stateChangedAt: cmd.stateChangedAt, message: cmd.message, vendorTraceId: cmd.vendorTraceId }).where(eq(schema.commands.id, cmd.id));
+  await audit(user, { siteId: robot.siteId, robotId: robot.id, action: `COMMAND:${type}`, params, result, detail: cmd.message, vendorTraceId: cmd.vendorTraceId }, db);
   return cmd;
 }
 
@@ -171,21 +167,23 @@ export interface CommandRow extends Command {
   siteName: string;
 }
 
-export function listCommands(user: User, opts: { siteId?: string; robotId?: string; limit?: number } = {}): CommandRow[] {
+export async function listCommands(user: User, opts: { siteId?: string; robotId?: string; limit?: number } = {}): Promise<CommandRow[]> {
   assertActive(user);
-  const data = getStore();
-  const siteIds = accessibleSiteIds(data, user);
+  const db = getDb();
+  const siteIds = await accessibleSiteIds(user, db);
+  if (opts.siteId) await assertSiteAccess(user, opts.siteId, db);
+  const ids = opts.siteId ? [opts.siteId] : siteIds;
+  if (ids.length === 0) return [];
   const customer = isCustomer(user);
-  return data.commands
-    .filter((c) => siteIds.includes(c.siteId) && (!opts.siteId || c.siteId === opts.siteId) && (!opts.robotId || c.robotId === opts.robotId))
-    // 고객은 본인이 내린 명령만 본다.
-    .filter((c) => !customer || c.userId === user.id)
-    .sort((a, b) => b.requestedAt.localeCompare(a.requestedAt))
-    .slice(0, opts.limit ?? 50)
-    .map((c) => ({
-      ...c,
-      userName: data.users.find((u) => u.id === c.userId)?.name ?? c.userId,
-      robotName: data.robots.find((r) => r.id === c.robotId)?.name ?? c.robotId,
-      siteName: data.sites.find((s) => s.id === c.siteId)?.name ?? c.siteId,
-    }));
+  const rows = await db
+    .select()
+    .from(schema.commands)
+    .where(and(inArray(schema.commands.siteId, ids), opts.robotId ? eq(schema.commands.robotId, opts.robotId) : undefined, customer ? eq(schema.commands.userId, user.id) : undefined))
+    .orderBy(desc(schema.commands.requestedAt))
+    .limit(opts.limit ?? 50);
+  const users = new Map((await listUsers(db)).map((u) => [u.id, u.name]));
+  const robotIds = Array.from(new Set(rows.map((r) => r.robotId)));
+  const robots = robotIds.length ? new Map((await db.select({ id: schema.robots.id, name: schema.robots.name }).from(schema.robots).where(inArray(schema.robots.id, robotIds))).map((r) => [r.id, r.name])) : new Map<string, string>();
+  const sites = new Map((await listSitesByIds(ids, db)).map((s) => [s.id, s.name]));
+  return rows.map(({ idempotencyKey: _k, ...c }) => ({ ...c, userName: users.get(c.userId) ?? c.userId, robotName: robots.get(c.robotId) ?? c.robotId, siteName: sites.get(c.siteId) ?? c.siteId }));
 }

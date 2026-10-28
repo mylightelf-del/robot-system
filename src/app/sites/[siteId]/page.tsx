@@ -17,11 +17,11 @@ export default async function SitePage({ params, searchParams }: { params: Promi
   const user = await getCurrentUser();
   let view;
   try {
-    view = getSiteView(user, siteId, floor);
+    view = await getSiteView(user, siteId, floor);
   } catch (e) {
     return <AccessDenied reason={e instanceof AppError ? e.message : "접근할 수 없습니다."} />;
   }
-  const incidents = listIncidents(user, { siteId }).slice(0, 5);
+  const incidents = (await listIncidents(user, { siteId })).slice(0, 5);
   const tz = view.site.timezone;
 
   return (

@@ -11,7 +11,7 @@ export default async function AdminPage() {
   const user = await getCurrentUser();
   let d;
   try {
-    d = getAdminData(user);
+    d = await getAdminData(user);
   } catch (e) {
     return <AccessDenied reason={e instanceof AppError ? e.message : "접근할 수 없습니다."} />;
   }
@@ -24,7 +24,7 @@ export default async function AdminPage() {
 
       <div className="space-y-4">
         <Card title="운영 설정">
-          <SettingsPanel siteManagerCanConfirm={d.settings.siteManagerCanConfirmReports} />
+          <SettingsPanel siteManagerCanConfirm={d.settings.siteManagerCanConfirmReports} allowSampleReset={d.allowSampleReset} />
           <p className="text-xs text-gray-500 mt-2">명령 만료 {d.settings.commandExpiryMinutes}분 · 접수 후 실행 확인 대기 {d.settings.commandAcceptedTimeoutSeconds}초 (운영 설정값, 하드코딩 아님)</p>
         </Card>
 
@@ -42,7 +42,7 @@ export default async function AdminPage() {
               </thead>
               <tbody>
                 {d.users.map((u) => (
-                  <UserRow key={u.id} u={u} sites={sites} selfId={user.id} />
+                  <UserRow key={u.id} u={u} sites={sites} selfId={user.id} auth={d.userAuth.find((a) => a.id === u.id) ?? { hasPassword: false, inviteLink: null, lastLoginAt: null }} />
                 ))}
               </tbody>
             </table>
@@ -51,7 +51,7 @@ export default async function AdminPage() {
             <summary className="cursor-pointer text-sm font-medium">사용자 추가</summary>
             <div className="mt-2"><NewUserForm sites={sites} /></div>
           </details>
-          <p className="text-xs text-gray-500 mt-2">비활성화된 사용자는 모든 조회·명령이 서버에서 차단됩니다. 실제 로그인·비밀번호·초대는 2단계에서 구현합니다.</p>
+          <p className="text-xs text-gray-500 mt-2">비활성화하면 세션이 즉시 종료되고 모든 조회·명령이 서버에서 차단됩니다. 사용자는 초대 링크로 본인이 비밀번호를 설정합니다(이메일 자동 발송은 5단계).</p>
         </Card>
 
         <Card title="사업장 · 층 · 구역 · 로봇 배치">

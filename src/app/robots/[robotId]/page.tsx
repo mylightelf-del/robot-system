@@ -1,7 +1,6 @@
 import Link from "next/link";
 import { getCurrentUser } from "@/lib/auth/session";
 import { getRobotDetail } from "@/lib/services/robots";
-import { getStore } from "@/lib/store/store";
 import { isCustomer } from "@/lib/auth/authz";
 import { AppError } from "@/lib/util/errors";
 import { Card, KV, Notice, PageTitle, SimTag } from "@/components/ui";
@@ -21,13 +20,12 @@ export default async function RobotPage({ params }: { params: Promise<{ robotId:
   const user = await getCurrentUser();
   let d;
   try {
-    d = getRobotDetail(user, robotId);
+    d = await getRobotDetail(user, robotId);
   } catch (e) {
     return <AccessDenied reason={e instanceof AppError ? e.message : "접근할 수 없습니다."} />;
   }
   const tz = d.site.timezone;
   const customer = isCustomer(user);
-  const tasks = getStore().tasks.filter((t) => t.robotId === d.robot.id);
   const st = d.status;
 
   return (
@@ -86,7 +84,7 @@ export default async function RobotPage({ params }: { params: Promise<{ robotId:
               model={d.robot.model}
               allowed={d.allowedCommands}
               supported={d.robot.supportedCommands}
-              tasks={tasks}
+              tasks={d.tasks}
               map={d.map}
               zones={d.zones}
               robot={{ id: d.robot.id, name: d.robot.name, common: st.common, pose: st.pose, poseIsLastKnown: st.poseIsLastKnown, batteryPct: st.batteryPct, progressPct: st.progressPct }}

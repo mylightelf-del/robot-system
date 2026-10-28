@@ -13,9 +13,9 @@ import { AutoRefresh } from "@/components/AutoRefresh";
 export default async function DashboardPage() {
   const user = await getCurrentUser();
   if (!user.active) return <AccessDenied reason="비활성화된 사용자입니다. 접근이 차단되었습니다." />;
-  const dash = getDashboard(user);
-  const incidents = listIncidents(user).slice(0, 8);
-  const stale = listRobots(user).filter((r) => r.status.common === "OFFLINE" || r.status.common === "UNKNOWN");
+  const dash = await getDashboard(user);
+  const incidents = (await listIncidents(user)).slice(0, 8);
+  const stale = (await listRobots(user)).filter((r) => r.status.common === "OFFLINE" || r.status.common === "UNKNOWN");
   const t = dash.totals;
 
   return (

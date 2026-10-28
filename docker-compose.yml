@@ -1,0 +1,83 @@
+# 청소로봇 통합관제 — 로컬·Lightsail 공용 구성
+# 사용: cp .env.example .env  →  값 수정  →  docker compose up -d --build
+# 웹은 127.0.0.1:3000 에만 바인딩한다. 외부 공개는 Caddy(HTTPS) 가 맡는다(docs/05 참고).
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-robot_control}
+      POSTGRES_USER: ${POSTGRES_USER:-robot}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD 를 .env 에 설정하세요}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-robot} -d ${POSTGRES_DB:-robot_control}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # 일회성: DB 마이그레이션 적용(워커 이미지 사용). 완료 후 web/worker 가 뜬다.
+  migrate:
+    build:
+      context: .
+      target: worker
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-robot}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-robot_control}
+    command: ["npx", "tsx", "scripts/migrate.ts"]
+    restart: "no"
+
+  web:
+    build:
+      context: .
+      target: web
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-robot}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-robot_control}
+    ports:
+      - "127.0.0.1:3000:3000"
+
+  worker:
+    build:
+      context: .
+      target: worker
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-robot}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-robot_control}
+
+  # HTTPS 리버스 프록시. 도메인을 Cloudflare 에 연결한 뒤 DOMAIN 을 .env 에 넣는다.
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - web
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN:-localhost}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:

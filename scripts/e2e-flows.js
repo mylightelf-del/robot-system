@@ -1,144 +1,172 @@
+/**
+ * 브라우저 자동 조작 검증(2단계). 로그인 → 명령(워커 시뮬레이션) → 장애 → 보고서 → 권한 → 초대 흐름.
+ * 사전 조건: DB 에 샘플 적재(npm run db:seed), 웹(npm run dev)과 워커(npm run worker) 실행 중, Playwright 설치.
+ * 사용: BASE_URL=http://localhost:3000 node scripts/e2e-flows.js
+ */
 const { chromium } = require("playwright");
-const base = "http://localhost:3000";
-const out = require("path").join(__dirname, "..", "docs", "screenshots");
+const path = require("path");
+const base = process.env.BASE_URL || "http://localhost:3000";
+const out = path.join(__dirname, "..", "docs", "screenshots");
+const PW = process.env.SAMPLE_USER_PASSWORD || "sample1234!";
+
+async function loginAs(browser, email, password = PW) {
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const page = await ctx.newPage();
+  page.on("dialog", (d) => d.accept());
+  await page.goto(`${base}/login`, { waitUntil: "networkidle" });
+  await page.fill("input[name=email]", email);
+  await page.fill("input[name=password]", password);
+  await page.click("button[type=submit]");
+  await page.waitForURL((u) => !u.pathname.startsWith("/login"), { timeout: 20000 });
+  await page.waitForLoadState("networkidle");
+  return { ctx, page };
+}
 
 (async () => {
   const browser = await chromium.launch();
-  const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
-  await ctx.addCookies([{ name: "sample_user_id", value: "u-hq", url: base }]);
-  const page = await ctx.newPage();
-  page.on("dialog", (d) => d.accept());
   const log = (...a) => console.log(...a);
 
-  // 0) 샘플 데이터 초기화
+  // 0) 미로그인 접근은 로그인으로 보내진다
+  {
+    const ctx = await browser.newContext();
+    const p = await ctx.newPage();
+    await p.goto(`${base}/robots/PW-R-001`, { waitUntil: "networkidle" });
+    log("0a unauthenticated redirected to login:", p.url().includes("/login"));
+    await ctx.close();
+  }
+
+  // 1) 본사 로그인 + 샘플 초기화
+  const { ctx, page } = await loginAs(browser, "hq-admin@example.invalid");
+  log("1a login hq:", page.url() === `${base}/` || page.url().startsWith(`${base}/?`));
   await page.goto(`${base}/admin`, { waitUntil: "networkidle" });
   await page.getByRole("button", { name: "샘플 데이터 초기화" }).click();
   await page.waitForSelector("text=/초기화했습니다/");
-  log("0 reset ok");
+  log("1b sample reset ok");
+  // 초기화로 세션이 사라졌으므로 다시 로그인
+  await ctx.close();
+  const s = await loginAs(browser, "hq-admin@example.invalid");
+  const hq = s.page;
 
-  // 1) 명령: 대기 로봇에 작업 실행 → 접수 → 실행 확인(청소 중)
-  await page.goto(`${base}/robots/PW-R-003`, { waitUntil: "networkidle" });
-  await page.getByRole("button", { name: "작업 실행" }).click();
-  await page.waitForSelector("text=/ACCEPTED/");
-  log("1a command accepted:", (await page.locator("text=/ACCEPTED/").first().textContent()).slice(0, 80));
-  await page.waitForTimeout(4000);
-  await page.reload({ waitUntil: "networkidle" });
-  const status = await page.locator("h1 ~ * , header").first();
-  const cleaning = await page.locator("text=청소 중").count();
-  log("1b after 4s robot shows 청소 중:", cleaning > 0);
-  await page.screenshot({ path: `${out}/flow-01-command.png`, fullPage: false });
+  // 2) 명령: 대기 로봇에 작업 실행 → 워커가 실행 확인(청소 중) 으로 전이
+  await hq.goto(`${base}/robots/PW-R-003`, { waitUntil: "networkidle" });
+  await hq.getByRole("button", { name: "작업 실행" }).click();
+  await hq.waitForSelector("text=/ACCEPTED/");
+  log("2a command accepted");
+  await hq.waitForTimeout(7000);
+  await hq.reload({ waitUntil: "networkidle" });
+  log("2b worker advanced to 청소 중:", (await hq.locator("text=청소 중").count()) > 0);
+  await hq.selectOption("select:near(:text('시뮬레이션 시나리오'))", "LOST_RESPONSE");
+  await hq.getByRole("button", { name: "일시정지" }).click();
+  await hq.waitForSelector("text=/UNKNOWN/");
+  log("2c lost response -> UNKNOWN");
+  await hq.screenshot({ path: `${out}/s2-01-robot-command.png`, fullPage: false });
 
-  // 1c) 응답 유실 시나리오
-  await page.goto(`${base}/robots/PW-R-001`, { waitUntil: "networkidle" });
-  await page.selectOption("select:near(:text('시뮬레이션 시나리오'))", "LOST_RESPONSE");
-  await page.getByRole("button", { name: "일시정지" }).click();
-  await page.waitForSelector("text=/UNKNOWN/");
-  log("1c lost response -> UNKNOWN:", (await page.locator("text=/UNKNOWN/").first().textContent()).slice(0, 90));
-
-  // 1d) 영역 명령 차단(지도 버전 불일치 로봇)
-  await page.goto(`${base}/robots/PW-R-012`, { waitUntil: "networkidle" });
-  await page.getByRole("button", { name: /영역 청소/ }).click();
-  log("1d area blocked msg:", await page.locator("text=/지도 버전이 현재 지도와 달라/").count() > 0);
-
-  // 1e) 영역 명령 정상 + 범위 밖 테스트 (PW-R-020 BG1 은 미지원 → L4 중 IDLE 인 로봇 없음 → PW-R-019 가 청소 중이므로 중단 후 지정)
-  await page.goto(`${base}/robots/PW-R-019`, { waitUntil: "networkidle" });
-  await page.getByRole("button", { name: "중단" }).click();
-  await page.waitForSelector("text=/ACCEPTED/");
-  await page.waitForTimeout(10000); // 중단 명령이 완료(6초)될 때까지 대기 — 처리 중에는 충돌 방지로 거부됨
-  await page.reload({ waitUntil: "networkidle" });
-  await page.getByRole("button", { name: /영역 청소/ }).click();
-  await page.locator("svg").nth(1).locator("polygon").first().click({ force: true });
-  await page.getByRole("button", { name: "범위 밖 다각형 테스트" }).click();
-  await page.waitForTimeout(2500);
-  await page.waitForSelector("text=/범위를 벗어났/");
-  log("1e out-of-range blocked:", true);
-  await page.getByRole("button", { name: "구버전 지도 테스트" }).click();
-  await page.waitForSelector("text=/지도 버전/");
-  log("1e old map version blocked:", true);
-  log("1e selection:", await page.locator("text=/선택 구역/").first().textContent());
-  await page.getByRole("button", { name: "영역 청소 전송" }).click();
-  await page.waitForTimeout(2500);
-  log("1e send result:", (await page.locator(".text-red-700, .text-emerald-700").allTextContents()).slice(0, 3));
-  await page.waitForSelector("text=/ACCEPTED/");
-  log("1e valid area accepted:", true);
-  await page.screenshot({ path: `${out}/flow-02-area.png`, fullPage: true });
-
-  // 2) 장애: 확인 → 조치 → 복구
-  await page.goto(`${base}/incidents`, { waitUntil: "networkidle" });
-  await page.getByRole("button", { name: "확인", exact: true }).first().click();
-  await page.waitForTimeout(1500);
-  await page.reload({ waitUntil: "networkidle" });
-  const first = page.locator("li").filter({ hasText: "BRUSH_MOTOR" }).first();
-  log("2a acked:", (await first.textContent()).includes("확인"));
+  // 3) 장애 확인 → 복구
+  await hq.goto(`${base}/incidents`, { waitUntil: "networkidle" });
+  await hq.getByRole("button", { name: "확인", exact: true }).first().click();
+  await hq.waitForTimeout(1500);
+  await hq.reload({ waitUntil: "networkidle" });
+  const first = hq.locator("li").filter({ hasText: "BRUSH_MOTOR" }).first();
+  log("3a acked:", (await first.textContent()).includes("확인"));
   await first.locator("input[placeholder='조치 내용']").fill("브러시 교체 완료");
   await first.getByRole("button", { name: "복구" }).click();
-  await page.waitForTimeout(1500);
-  await page.goto(`${base}/incidents?all=1`, { waitUntil: "networkidle" });
-  const resolved = page.locator("li").filter({ hasText: "BRUSH_MOTOR" }).first();
-  log("2b resolved + resolve notification:", (await resolved.textContent()).includes("복구") && (await resolved.textContent()).includes("장애 복구"));
+  await hq.waitForTimeout(1500);
+  await hq.goto(`${base}/incidents?all=1`, { waitUntil: "networkidle" });
+  const resolved = hq.locator("li").filter({ hasText: "BRUSH_MOTOR" }).first();
+  log("3b resolved + notification:", (await resolved.textContent()).includes("장애 복구"));
 
-  // 2c) 장애 시뮬레이션 중복 이벤트
-  await page.goto(`${base}/incidents`, { waitUntil: "networkidle" });
-  await page.fill("input[placeholder*='이벤트 ID']", "evt-dup-1");
-  await page.getByRole("button", { name: "장애 발생 시뮬레이션" }).click();
-  await page.waitForSelector("text=/시뮬레이션했습니다/");
-  await page.fill("input[placeholder*='이벤트 ID']", "evt-dup-1");
-  await page.getByRole("button", { name: "장애 발생 시뮬레이션" }).click();
-  await page.waitForSelector("text=/중복 이벤트/");
-  log("2c duplicate event ignored:", true);
+  // 4) 보고서: 초안 → 의견 → 검토 → 확정 → 공개
+  await hq.goto(`${base}/reports`, { waitUntil: "networkidle" });
+  await hq.locator("div.bg-slate-50 select").first().selectOption({ label: "가상 사업장 4 (병원)" });
+  await hq.getByRole("button", { name: "초안 생성(자동 집계)" }).click();
+  await hq.waitForSelector("text=/초안 v1 생성/");
+  await hq.reload({ waitUntil: "networkidle" });
+  await hq.locator("a", { hasText: "가상 사업장 4 (병원)" }).first().click();
+  await hq.waitForLoadState("networkidle");
+  await hq.locator("textarea").first().fill("병원 외래 야간 청소 정상 수행(자동 시험).");
+  await hq.getByRole("button", { name: "의견 저장" }).click();
+  await hq.waitForTimeout(1200);
+  await hq.getByRole("button", { name: "검토 요청" }).click();
+  await hq.waitForTimeout(1200);
+  await hq.getByRole("button", { name: "확정", exact: true }).click();
+  await hq.waitForTimeout(1200);
+  log("4a confirmed:", (await hq.locator("text=확정본입니다").count()) > 0);
+  await hq.getByRole("button", { name: "고객 공개" }).click();
+  await hq.waitForTimeout(1200);
+  const reportUrl = hq.url();
+  log("4b published:", (await hq.locator("text=고객 공개").count()) > 0);
+  await hq.screenshot({ path: `${out}/s2-02-report.png`, fullPage: false });
 
-  // 3) 보고서: 초안 생성 → 의견 → 검토 요청 → 확정 → 공개
-  await page.goto(`${base}/reports`, { waitUntil: "networkidle" });
-  await page.locator("div.bg-slate-50 select").first().selectOption({ label: "가상 사업장 4 (병원)" });
-  await page.getByRole("button", { name: "초안 생성(자동 집계)" }).click();
-  await page.waitForSelector("text=/초안 v1 생성/");
-  await page.reload({ waitUntil: "networkidle" });
-  await page.locator("a", { hasText: "가상 사업장 4 (병원)" }).first().click();
-  await page.waitForLoadState("networkidle");
-  await page.locator("textarea").first().fill("병원 외래 야간 청소 정상 수행(자동 시험).");
-  await page.getByRole("button", { name: "의견 저장" }).click();
-  await page.waitForTimeout(1200);
-  await page.getByRole("button", { name: "검토 요청" }).click();
-  await page.waitForTimeout(1200);
-  await page.getByRole("button", { name: "확정", exact: true }).click();
-  await page.waitForTimeout(1200);
-  log("3a confirmed:", await page.locator("text=확정본입니다").count() > 0);
-  await page.getByRole("button", { name: "고객 공개" }).click();
-  await page.waitForTimeout(1200);
-  log("3b published:", await page.locator("text=고객 공개").count() > 0);
-  const url = page.url();
-  await page.screenshot({ path: `${out}/flow-03-report.png`, fullPage: false });
-
-  // 3c) 고객(사업장 4 권한 없음)은 접근 불가 / 사업장 4 고객 계정은 없으므로 u-site-b 로 조회 가능 확인
+  // 5) 사용자 등록 → 초대 링크 → 비밀번호 설정 → 로그인
+  await hq.goto(`${base}/admin`, { waitUntil: "networkidle" });
+  await hq.locator("summary", { hasText: "사용자 추가" }).click();
+  await hq.fill("input[placeholder='이름']", "자동시험 사용자");
+  await hq.fill("input[placeholder='이메일']", "e2e-user@example.invalid");
+  await hq.locator("details select").first().selectOption("CUSTOMER_BASIC");
+  await hq.locator("details label", { hasText: "가상 사업장 4" }).locator("input").check();
+  await hq.getByRole("button", { name: /사용자 등록/ }).click();
+  await hq.waitForSelector("text=/초대 링크\\(72시간/");
+  const inviteText = await hq.locator("text=/\\/invite\\//").first().textContent();
+  const inviteLink = inviteText.match(/https?:\/\/\S+\/invite\/\S+/)[0].replace(/^https?:\/\/[^/]+/, base);
+  log("5a invite link issued");
+  await hq.screenshot({ path: `${out}/s2-03-admin-invite.png`, fullPage: false });
   const c2 = await browser.newContext();
-  await c2.addCookies([{ name: "sample_user_id", value: "u-cust-1", url: base }]);
   const p2 = await c2.newPage();
-  await p2.goto(url, { waitUntil: "networkidle" });
-  log("3c other-site customer blocked:", await p2.locator("text=접근 차단").count() > 0);
+  await p2.goto(inviteLink, { waitUntil: "networkidle" });
+  await p2.fill("input[name=password]", "E2ePassword123");
+  await p2.fill("input[name=password2]", "E2ePassword123");
+  await p2.click("button[type=submit]");
+  await p2.waitForURL(/\/login\?set=1/);
+  log("5b password set via invite");
+  await p2.goto(inviteLink, { waitUntil: "networkidle" });
+  log("5c invite link single-use:", (await p2.locator("text=/만료되었거나/").count()) > 0);
   await c2.close();
+  const nu = await loginAs(browser, "e2e-user@example.invalid", "E2ePassword123");
+  await nu.page.goto(reportUrl, { waitUntil: "networkidle" });
+  log("5d new customer(site 4) can open published report:", (await nu.page.locator("text=확정본").count()) > 0);
+  await nu.page.goto(`${base}/robots/PW-R-001`, { waitUntil: "networkidle" });
+  log("5e new customer blocked from other site robot:", (await nu.page.locator("text=접근 차단").count()) > 0);
+  await nu.ctx.close();
 
-  // 4) 고객 제어: 허용 명령만
-  const c3 = await browser.newContext();
-  await c3.addCookies([{ name: "sample_user_id", value: "u-cust-2", url: base }]);
-  const p3 = await c3.newPage();
-  await p3.goto(`${base}/robots/PW-R-007`, { waitUntil: "networkidle" });
-  log("4a customer-control sees 복귀 button:", await p3.getByRole("button", { name: "복귀" }).count());
-  await p3.getByRole("button", { name: "재개" }).click();
-  await p3.waitForSelector("text=/ACCEPTED/");
-  log("4b customer-control resume accepted:", true);
-  await c3.close();
+  // 6) 고객 제어: 허용 명령만 / 고객 기본: 제어 불가
+  const cc = await loginAs(browser, "customer2@example.invalid");
+  await cc.page.goto(`${base}/robots/PW-R-007`, { waitUntil: "networkidle" });
+  log("6a customer-control 복귀 button count (expect 0):", await cc.page.getByRole("button", { name: "복귀" }).count());
+  await cc.page.getByRole("button", { name: "재개" }).click();
+  await cc.page.waitForSelector("text=/ACCEPTED/");
+  log("6b customer-control resume accepted");
+  await cc.ctx.close();
+  const cb = await loginAs(browser, "customer1@example.invalid");
+  await cb.page.goto(`${base}/robots/PW-R-001`, { waitUntil: "networkidle" });
+  log("6c customer-basic no control:", (await cb.page.locator("text=제어 권한이 없습니다").count()) > 0);
+  await cb.page.goto(`${base}/admin`, { waitUntil: "networkidle" });
+  log("6d customer-basic admin blocked:", (await cb.page.locator("text=접근 차단").count()) > 0);
+  await cb.ctx.close();
 
-  // 5) 관리: 사용자 비활성화 후 차단
-  await page.goto(`${base}/admin`, { waitUntil: "networkidle" });
-  const row = page.locator("tr").filter({ hasText: "최고객" }).first();
+  // 7) 비활성 계정 로그인 거부 / 비활성화 시 세션 즉시 종료
+  const inactive = await browser.newContext();
+  const ip = await inactive.newPage();
+  await ip.goto(`${base}/login`, { waitUntil: "networkidle" });
+  await ip.fill("input[name=email]", "former@example.invalid");
+  await ip.fill("input[name=password]", PW);
+  await ip.click("button[type=submit]");
+  await ip.waitForSelector("text=/올바르지 않습니다/");
+  log("7a inactive login rejected");
+  await inactive.close();
+  const sa = await loginAs(browser, "site-a@example.invalid");
+  await hq.goto(`${base}/admin`, { waitUntil: "networkidle" });
+  const row = hq.locator("tr").filter({ hasText: "이현장" }).first();
   await row.getByRole("button", { name: "비활성화" }).click();
-  await page.waitForTimeout(1200);
-  const c4 = await browser.newContext();
-  await c4.addCookies([{ name: "sample_user_id", value: "u-cust-1", url: base }]);
-  const p4 = await c4.newPage();
-  await p4.goto(`${base}/`, { waitUntil: "networkidle" });
-  log("5 deactivated user blocked:", await p4.locator("text=접근 차단").count() > 0);
-  await c4.close();
+  await hq.waitForTimeout(1200);
+  await sa.page.goto(`${base}/`, { waitUntil: "networkidle" });
+  log("7b deactivated user's session ended -> login:", sa.page.url().includes("/login"));
+  await sa.ctx.close();
+
+  // 8) 로그아웃
+  await hq.goto(`${base}/`, { waitUntil: "networkidle" });
+  await hq.getByRole("button", { name: "로그아웃" }).click();
+  await hq.waitForURL(/\/login/);
+  log("8 logout ok");
 
   await browser.close();
 })().catch((e) => {

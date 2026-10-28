@@ -1,8 +1,7 @@
 import Link from "next/link";
 import { getCurrentUser } from "@/lib/auth/session";
-import { listIncidents, SIMULATABLE_CODES } from "@/lib/services/incidents";
+import { escalationMinutesBySite, listAssignableUsers, listIncidents, SIMULATABLE_CODES } from "@/lib/services/incidents";
 import { listRobots, listSites } from "@/lib/services/robots";
-import { getStore } from "@/lib/store/store";
 import { canHandleIncidents, isCustomer } from "@/lib/auth/authz";
 import { AppError } from "@/lib/util/errors";
 import { Card, Empty, PageTitle, SimTag } from "@/components/ui";
@@ -17,18 +16,18 @@ export default async function IncidentsPage({ searchParams }: { searchParams: Pr
   const user = await getCurrentUser();
   let rows, sites, robots;
   try {
-    sites = listSites(user);
-    rows = listIncidents(user, { siteId: site || undefined, includeResolved: all === "1" });
-    robots = listRobots(user, site || undefined);
+    sites = await listSites(user);
+    rows = await listIncidents(user, { siteId: site || undefined, includeResolved: all === "1" });
+    robots = await listRobots(user, site || undefined);
   } catch (e) {
     return <AccessDenied reason={e instanceof AppError ? e.message : "접근할 수 없습니다."} />;
   }
   const customer = isCustomer(user);
   const handler = canHandleIncidents(user);
-  const store = getStore();
-  const assignees = store.users.filter((u) => u.active && (u.role === "HQ_ADMIN" || u.role === "SITE_MANAGER")).map((u) => ({ id: u.id, name: u.name }));
+  const assignees = handler ? await listAssignableUsers() : [];
+  const escalation = await escalationMinutesBySite(sites.map((s) => s.id));
   const now = nowIso();
-  const escalate = (siteId: string) => store.notificationSettings.find((n) => n.siteId === siteId)?.escalateAfterMinutes ?? 60;
+  const escalate = (siteId: string) => escalation[siteId] ?? 60;
 
   return (
     <>

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import type { CommandType, MapVersion, RegisteredTask, Vendor, Zone } from "@/lib/domain/types";
+import type { CommandType, MapVersion, Vendor, Zone } from "@/lib/domain/types";
 import { COMMAND_LABEL } from "@/lib/domain/status";
 import { COMMAND_SEMANTICS } from "@/lib/domain/commands";
 import { issueCommandAction } from "@/app/actions";
@@ -34,7 +34,7 @@ export function CommandPanel({
   model: string;
   allowed: CommandType[];
   supported: CommandType[];
-  tasks: RegisteredTask[];
+  tasks: { id: string; name: string }[];
   map: MapVersion | null;
   zones: Zone[];
   robot: MapRobot;

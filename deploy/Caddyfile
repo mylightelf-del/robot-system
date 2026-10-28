@@ -1,0 +1,13 @@
+# HTTPS 리버스 프록시. {$DOMAIN} 은 docker-compose 의 환경변수.
+# Cloudflare 프록시(주황 구름)를 켠 경우 Cloudflare ↔ 서버 구간도 HTTPS 로 두기 위해 Caddy 가 인증서를 자동 발급한다.
+# (Cloudflare SSL 모드는 "Full (strict)" 로 설정)
+{$DOMAIN} {
+	encode gzip
+	reverse_proxy web:3000
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+	}
+}

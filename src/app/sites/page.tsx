@@ -8,7 +8,7 @@ import { AccessDenied } from "@/components/AccessDenied";
 export default async function SitesPage() {
   const user = await getCurrentUser();
   if (!user.active) return <AccessDenied reason="비활성화된 사용자입니다." />;
-  const dash = getDashboard(user);
+  const dash = await getDashboard(user);
   return (
     <>
       <PageTitle title="사업장 관제" subtitle="사업장을 선택하면 층별 지도와 로봇 위치를 볼 수 있습니다." />

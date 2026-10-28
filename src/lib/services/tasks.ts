@@ -1,6 +1,8 @@
+import { and, asc, eq, gte, inArray, lte } from "drizzle-orm";
 import type { CleanMode, PlannedRun, RegisteredTask, Schedule, User } from "@/lib/domain/types";
 import { accessibleSiteIds, assertActive, assertRobotAccess, assertSiteAccess, isCustomer } from "@/lib/auth/authz";
-import { getStore } from "@/lib/store/store";
+import { getDb, schema } from "@/lib/db/client";
+import { getRobot, listSitesByIds, listZonesByFloor } from "@/lib/db/repo";
 import { ForbiddenError, NotFoundError, ValidationError } from "@/lib/util/errors";
 import { newId } from "@/lib/util/random";
 import { nowIso } from "@/lib/util/time";
@@ -16,25 +18,31 @@ export interface TaskRow {
   model: string;
 }
 
-export function listTasks(user: User, siteId?: string): TaskRow[] {
+export async function listTasks(user: User, siteId?: string): Promise<TaskRow[]> {
   assertActive(user);
-  const data = getStore();
-  const siteIds = accessibleSiteIds(data, user);
-  if (siteId) assertSiteAccess(data, user, siteId);
-  return data.tasks
-    .filter((t) => siteIds.includes(t.siteId) && (!siteId || t.siteId === siteId))
-    .map((t) => {
-      const robot = data.robots.find((r) => r.id === t.robotId);
-      return {
-        task: t,
-        schedules: data.schedules.filter((s) => s.taskId === t.id),
-        robotName: robot?.name ?? t.robotId,
-        siteName: data.sites.find((s) => s.id === t.siteId)?.name ?? t.siteId,
-        zoneNames: t.zoneIds.map((z) => data.zones.find((x) => x.id === z)?.name ?? z),
-        vendor: robot?.vendor ?? "-",
-        model: robot?.model ?? "-",
-      };
-    });
+  const db = getDb();
+  const siteIds = await accessibleSiteIds(user, db);
+  if (siteId) await assertSiteAccess(user, siteId, db);
+  const ids = siteId ? [siteId] : siteIds;
+  if (ids.length === 0) return [];
+  const tasks = await db.select().from(schema.registeredTasks).where(inArray(schema.registeredTasks.siteId, ids)).orderBy(schema.registeredTasks.siteId, schema.registeredTasks.robotId, schema.registeredTasks.id);
+  if (tasks.length === 0) return [];
+  const scheduleRows = await db.select().from(schema.schedules).where(inArray(schema.schedules.taskId, tasks.map((t) => t.id)));
+  const robots = await db.select().from(schema.robots).where(inArray(schema.robots.id, Array.from(new Set(tasks.map((t) => t.robotId)))));
+  const zones = await db.select().from(schema.zones).where(inArray(schema.zones.id, Array.from(new Set(tasks.flatMap((t) => t.zoneIds)))));
+  const sites = new Map((await listSitesByIds(ids, db)).map((s) => [s.id, s.name]));
+  return tasks.map((t) => {
+    const robot = robots.find((r) => r.id === t.robotId);
+    return {
+      task: t,
+      schedules: scheduleRows.filter((s) => s.taskId === t.id),
+      robotName: robot?.name ?? t.robotId,
+      siteName: sites.get(t.siteId) ?? t.siteId,
+      zoneNames: t.zoneIds.map((z) => zones.find((x) => x.id === z)?.name ?? z),
+      vendor: robot?.vendor ?? "-",
+      model: robot?.model ?? "-",
+    };
+  });
 }
 
 export interface PlannedRow extends PlannedRun {
@@ -44,89 +52,90 @@ export interface PlannedRow extends PlannedRun {
   runResult: string | null;
 }
 
-export function listPlannedRuns(user: User, opts: { siteId?: string; fromIso: string; toIso: string }): PlannedRow[] {
+export async function listPlannedRuns(user: User, opts: { siteId?: string; fromIso: string; toIso: string }): Promise<PlannedRow[]> {
   assertActive(user);
-  const data = getStore();
-  const siteIds = accessibleSiteIds(data, user);
-  if (opts.siteId) assertSiteAccess(data, user, opts.siteId);
-  return data.plannedRuns
-    .filter((p) => siteIds.includes(p.siteId) && (!opts.siteId || p.siteId === opts.siteId) && p.plannedAt >= opts.fromIso && p.plannedAt <= opts.toIso)
-    .sort((a, b) => a.plannedAt.localeCompare(b.plannedAt))
-    .map((p) => ({
-      ...p,
-      taskName: data.tasks.find((t) => t.id === p.taskId)?.name ?? p.taskId,
-      robotName: data.robots.find((r) => r.id === p.robotId)?.name ?? p.robotId,
-      siteName: data.sites.find((s) => s.id === p.siteId)?.name ?? p.siteId,
-      runResult: p.actualRunId ? (data.actualRuns.find((r) => r.id === p.actualRunId)?.result ?? null) : null,
-    }));
+  const db = getDb();
+  const siteIds = await accessibleSiteIds(user, db);
+  if (opts.siteId) await assertSiteAccess(user, opts.siteId, db);
+  const ids = opts.siteId ? [opts.siteId] : siteIds;
+  if (ids.length === 0) return [];
+  const rows = await db
+    .select({ p: schema.plannedRuns, taskName: schema.registeredTasks.name, robotName: schema.robots.name, siteName: schema.sites.name, runResult: schema.actualRuns.result })
+    .from(schema.plannedRuns)
+    .leftJoin(schema.registeredTasks, eq(schema.registeredTasks.id, schema.plannedRuns.taskId))
+    .leftJoin(schema.robots, eq(schema.robots.id, schema.plannedRuns.robotId))
+    .leftJoin(schema.sites, eq(schema.sites.id, schema.plannedRuns.siteId))
+    .leftJoin(schema.actualRuns, eq(schema.actualRuns.id, schema.plannedRuns.actualRunId))
+    .where(and(inArray(schema.plannedRuns.siteId, ids), gte(schema.plannedRuns.plannedAt, opts.fromIso), lte(schema.plannedRuns.plannedAt, opts.toIso)))
+    .orderBy(asc(schema.plannedRuns.plannedAt));
+  return rows.map((r) => ({ ...r.p, taskName: r.taskName ?? r.p.taskId, robotName: r.robotName ?? r.p.robotId, siteName: r.siteName ?? r.p.siteId, runResult: r.runResult ?? null }));
 }
 
 function assertStaff(user: User, what: string) {
   if (isCustomer(user)) throw new ForbiddenError(`${what}은(는) 현장/본사 담당자만 할 수 있습니다.`);
 }
 
-export function cancelPlannedRun(user: User, plannedId: string, reason: string): PlannedRun {
-  const data = getStore();
+export async function cancelPlannedRun(user: User, plannedId: string, reason: string): Promise<void> {
+  const db = getDb();
   assertActive(user);
   assertStaff(user, "예정 작업 취소");
-  const p = data.plannedRuns.find((x) => x.id === plannedId);
+  const p = await db.query.plannedRuns.findFirst({ where: eq(schema.plannedRuns.id, plannedId) });
   if (!p) throw new NotFoundError();
-  assertSiteAccess(data, user, p.siteId);
+  await assertSiteAccess(user, p.siteId, db);
   if (p.status !== "PLANNED") throw new ValidationError("예정 상태의 회차만 취소할 수 있습니다.");
   if (!reason.trim()) throw new ValidationError("취소 사유를 입력하세요.");
-  p.changeHistory.push({ at: nowIso(), by: user.id, from: p.status, to: "CANCELLED", reason: reason.trim() });
-  p.status = "CANCELLED";
-  p.reason = reason.trim();
-  audit(data, user, { siteId: p.siteId, robotId: p.robotId, action: "PLANNED_RUN:CANCEL", params: { plannedId, reason }, result: "OK", detail: null, vendorTraceId: null });
-  return p;
+  const history = [...p.changeHistory, { at: nowIso(), by: user.id, from: p.status, to: "CANCELLED" as const, reason: reason.trim() }];
+  await db.update(schema.plannedRuns).set({ status: "CANCELLED", reason: reason.trim(), changeHistory: history }).where(eq(schema.plannedRuns.id, plannedId));
+  await audit(user, { siteId: p.siteId, robotId: p.robotId, action: "PLANNED_RUN:CANCEL", params: { plannedId, reason }, result: "OK", detail: null, vendorTraceId: null }, db);
 }
 
-export function toggleSchedule(user: User, scheduleId: string, enabled: boolean): Schedule {
-  const data = getStore();
+export async function toggleSchedule(user: User, scheduleId: string, enabled: boolean): Promise<void> {
+  const db = getDb();
   assertActive(user);
   assertStaff(user, "예약 변경");
-  const s = data.schedules.find((x) => x.id === scheduleId);
+  const s = await db.query.schedules.findFirst({ where: eq(schema.schedules.id, scheduleId) });
   if (!s) throw new NotFoundError();
-  const task = data.tasks.find((t) => t.id === s.taskId)!;
-  assertSiteAccess(data, user, task.siteId);
-  s.enabled = enabled;
-  audit(data, user, { siteId: task.siteId, robotId: task.robotId, action: "SCHEDULE:TOGGLE", params: { scheduleId, enabled, executor: s.executor }, result: "OK", detail: s.executor === "VENDOR" ? "제조사 예약 변경은 3단계에서 API 로 반영(현재 샘플)" : null, vendorTraceId: null });
-  return s;
+  const task = (await db.query.registeredTasks.findFirst({ where: eq(schema.registeredTasks.id, s.taskId) }))!;
+  await assertSiteAccess(user, task.siteId, db);
+  await db.update(schema.schedules).set({ enabled }).where(eq(schema.schedules.id, scheduleId));
+  await audit(user, { siteId: task.siteId, robotId: task.robotId, action: "SCHEDULE:TOGGLE", params: { scheduleId, enabled, executor: s.executor }, result: "OK", detail: s.executor === "VENDOR" ? "제조사 예약 변경은 3단계에서 API 로 반영(현재 샘플)" : null, vendorTraceId: null }, db);
 }
 
-export function createTask(user: User, input: { robotId: string; name: string; zoneIds: string[]; mode: CleanMode }): RegisteredTask {
-  const data = getStore();
-  const robot = assertRobotAccess(data, user, input.robotId);
+export async function createTask(user: User, input: { robotId: string; name: string; zoneIds: string[]; mode: CleanMode }): Promise<RegisteredTask> {
+  const db = getDb();
+  const robot = await assertRobotAccess(user, input.robotId, db);
   assertStaff(user, "작업 등록");
   if (!input.name.trim()) throw new ValidationError("작업 이름을 입력하세요.");
   if (input.zoneIds.length === 0) throw new ValidationError("구역을 하나 이상 선택하세요.");
+  const floorZones = await listZonesByFloor(robot.floorId, db);
   for (const z of input.zoneIds) {
-    const zone = data.zones.find((x) => x.id === z);
-    if (!zone || zone.floorId !== robot.floorId) throw new ValidationError("로봇이 배치된 층의 구역만 선택할 수 있습니다.");
+    if (!floorZones.some((x) => x.id === z)) throw new ValidationError("로봇이 배치된 층의 구역만 선택할 수 있습니다.");
   }
   if (robot.model === "L4" && input.mode !== "SWEEP") throw new ValidationError("L 시리즈는 SWEEP 모드만 가능합니다.");
   const task: RegisteredTask = { id: newId("task"), siteId: robot.siteId, robotId: robot.id, name: input.name.trim(), zoneIds: input.zoneIds, mode: input.mode, vendorTaskRef: null };
-  data.tasks.push(task);
-  audit(data, user, { siteId: robot.siteId, robotId: robot.id, action: "TASK:CREATE", params: { name: task.name, zoneIds: task.zoneIds, mode: task.mode }, result: "OK", detail: "샘플 — 제조사 등록(Favorite 등)은 3단계", vendorTraceId: null });
+  await db.insert(schema.registeredTasks).values(task);
+  await audit(user, { siteId: robot.siteId, robotId: robot.id, action: "TASK:CREATE", params: { name: task.name, zoneIds: task.zoneIds, mode: task.mode }, result: "OK", detail: "샘플 — 제조사 등록(Favorite 등)은 3단계", vendorTraceId: null }, db);
   return task;
 }
 
-export function createSchedule(user: User, input: { taskId: string; daysOfWeek: number[]; time: string }): Schedule {
-  const data = getStore();
+export async function createSchedule(user: User, input: { taskId: string; daysOfWeek: number[]; time: string }): Promise<Schedule> {
+  const db = getDb();
   assertActive(user);
   assertStaff(user, "예약 등록");
-  const task = data.tasks.find((t) => t.id === input.taskId);
+  const task = await db.query.registeredTasks.findFirst({ where: eq(schema.registeredTasks.id, input.taskId) });
   if (!task) throw new NotFoundError();
-  assertSiteAccess(data, user, task.siteId);
+  await assertSiteAccess(user, task.siteId, db);
   if (!/^\d{2}:\d{2}$/.test(input.time)) throw new ValidationError("시각은 HH:mm 형식입니다.");
   if (input.daysOfWeek.length === 0) throw new ValidationError("요일을 선택하세요.");
-  const robot = data.robots.find((r) => r.id === task.robotId)!;
+  const robot = (await getRobot(task.robotId, db))!;
   // 단일 실행 주체: 같은 로봇의 기존 예약과 같은 실행 주체를 쓴다.
-  const executor = data.schedules.find((s) => data.tasks.find((t) => t.id === s.taskId)?.robotId === robot.id)?.executor ?? (robot.vendor === "CENOBOTS" ? "VENDOR" : "SELF");
-  const dup = data.schedules.find((s) => s.taskId === task.id && s.time === input.time && s.daysOfWeek.some((d) => input.daysOfWeek.includes(d)));
+  const robotTasks = await db.select({ id: schema.registeredTasks.id }).from(schema.registeredTasks).where(eq(schema.registeredTasks.robotId, robot.id));
+  const existing = await db.select().from(schema.schedules).where(inArray(schema.schedules.taskId, robotTasks.map((t) => t.id)));
+  const executor = existing[0]?.executor ?? (robot.vendor === "CENOBOTS" ? "VENDOR" : "SELF");
+  const dup = existing.find((s) => s.taskId === task.id && s.time === input.time && s.daysOfWeek.some((d) => input.daysOfWeek.includes(d)));
   if (dup) throw new ValidationError("같은 시각·요일의 예약이 이미 있습니다(중복 실행 방지).");
   const s: Schedule = { id: newId("sch"), taskId: task.id, daysOfWeek: input.daysOfWeek, time: input.time, enabled: true, executor };
-  data.schedules.push(s);
-  audit(data, user, { siteId: task.siteId, robotId: task.robotId, action: "SCHEDULE:CREATE", params: { taskId: task.id, time: s.time, daysOfWeek: s.daysOfWeek, executor }, result: "OK", detail: null, vendorTraceId: null });
+  await db.insert(schema.schedules).values(s);
+  await audit(user, { siteId: task.siteId, robotId: task.robotId, action: "SCHEDULE:CREATE", params: { taskId: task.id, time: s.time, daysOfWeek: s.daysOfWeek, executor }, result: "OK", detail: null, vendorTraceId: null }, db);
   return s;
 }

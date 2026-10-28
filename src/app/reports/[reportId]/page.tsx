@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { getCurrentUser } from "@/lib/auth/session";
-import { getReport } from "@/lib/services/reports";
-import { getStore } from "@/lib/store/store";
+import { getReport, listVersions } from "@/lib/services/reports";
+import { listUsers } from "@/lib/db/repo";
 import { canConfirmReports, canEditReports, isCustomer } from "@/lib/auth/authz";
 import { AppError } from "@/lib/util/errors";
 import { Notice, PageTitle } from "@/components/ui";
@@ -16,17 +16,18 @@ export default async function ReportPage({ params }: { params: Promise<{ reportI
   const user = await getCurrentUser();
   let r;
   try {
-    r = getReport(user, reportId);
+    r = await getReport(user, reportId);
   } catch (e) {
     return <AccessDenied reason={e instanceof AppError ? e.message : "접근할 수 없습니다."} />;
   }
   const a = r.aggregates;
   const customer = isCustomer(user);
   const editable = canEditReports(user) && (r.status === "DRAFT" || r.status === "REVIEW");
-  const store = getStore();
-  const userName = (id: string | null) => (id ? (store.users.find((u) => u.id === id)?.name ?? id) : "-");
+  const users = await listUsers();
+  const userName = (id: string | null) => (id ? (users.find((u) => u.id === id)?.name ?? id) : "-");
   const frozen = r.status === "CONFIRMED" || r.status === "PUBLISHED";
-  const versions = store.reports.filter((x) => x.siteId === r.siteId && x.month === r.month && (!customer || x.status === "PUBLISHED")).sort((x, y) => x.version - y.version);
+  const versions = await listVersions(user, r.siteId, r.month);
+  const canConfirm = await canConfirmReports(user);
 
   return (
     <>
@@ -59,7 +60,7 @@ export default async function ReportPage({ params }: { params: Promise<{ reportI
         {frozen && <div className="mb-3"><Notice tone="info">확정본입니다. 집계값과 의견은 확정 시점 스냅샷으로 고정되어 있으며 재집계로 변경되지 않습니다.{!customer && r.lateRuns > 0 ? ` 집계 이후 수신된 실적 ${r.lateRuns}건은 새 버전에서 반영할 수 있습니다.` : ""}</Notice></div>}
         {!customer && (
           <div className="mb-4">
-            <ReportWorkflow reportId={r.id} status={r.status} canEdit={canEditReports(user)} canConfirm={canConfirmReports(store, user)} lateRuns={r.lateRuns} isLatest={r.isLatestVersion} />
+            <ReportWorkflow reportId={r.id} status={r.status} canEdit={canEditReports(user)} canConfirm={canConfirm} lateRuns={r.lateRuns} isLatest={r.isLatestVersion} />
           </div>
         )}
       </div>

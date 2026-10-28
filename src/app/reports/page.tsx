@@ -27,11 +27,11 @@ export default async function ReportsPage({ searchParams }: { searchParams: Prom
   const site = sp.site || undefined;
   let sites, reports, runs, planned;
   try {
-    sites = listSites(user);
-    reports = listReports(user, site);
+    sites = await listSites(user);
+    reports = await listReports(user, site);
     const range = monthRange(month);
-    runs = listRuns(user, { siteId: site, fromIso: range.fromIso, toIso: range.toIso });
-    planned = listPlannedRuns(user, { siteId: site, fromIso: range.fromIso, toIso: range.toIso });
+    runs = await listRuns(user, { siteId: site, fromIso: range.fromIso, toIso: range.toIso });
+    planned = await listPlannedRuns(user, { siteId: site, fromIso: range.fromIso, toIso: range.toIso });
   } catch (e) {
     return <AccessDenied reason={e instanceof AppError ? e.message : "접근할 수 없습니다."} />;
   }

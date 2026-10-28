@@ -15,8 +15,8 @@ export default async function RobotsPage({ searchParams }: { searchParams: Promi
   let rows;
   let sites;
   try {
-    sites = listSites(user);
-    rows = listRobots(user, site || undefined);
+    sites = await listSites(user);
+    rows = await listRobots(user, site || undefined);
   } catch (e) {
     return <AccessDenied reason={e instanceof AppError ? e.message : "접근할 수 없습니다."} />;
   }

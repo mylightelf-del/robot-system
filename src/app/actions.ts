@@ -1,49 +1,92 @@
 "use server";
 
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
+import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import type { CleanMode, CommandType, ReportComments, Role, Severity } from "@/lib/domain/types";
-import { getCurrentUser, SESSION_COOKIE } from "@/lib/auth/session";
-import { getStore, resetStore } from "@/lib/store/store";
-import { errorMessage } from "@/lib/util/errors";
+import { cookieOptions, createSession, getCurrentUser, getOptionalUser, SESSION_COOKIE } from "@/lib/auth/session";
+import { AppError, errorMessage, ForbiddenError } from "@/lib/util/errors";
 import { issueCommand, type IssueCommandInput } from "@/lib/services/commands";
 import * as incidents from "@/lib/services/incidents";
 import * as tasks from "@/lib/services/tasks";
 import * as reports from "@/lib/services/reports";
 import * as admin from "@/lib/services/admin";
+import * as auth from "@/lib/services/auth";
 import { addManualInspection, completeInspection } from "@/lib/services/robots";
+import { resetDatabase, seedDatabase } from "@/lib/db/seed";
+import { buildSampleStore } from "@/lib/sample/seed";
+import { nowIso } from "@/lib/util/time";
 
 /**
  * 서버 액션. 모든 액션은 서버에서 현재 사용자를 다시 읽고 서비스 계층의 인가 검증을 거친다.
  * (서버 액션은 직접 POST 로도 호출될 수 있으므로 UI 숨김에 의존하지 않는다.)
  */
-export type ActionResult = { ok: true; message?: string; id?: string } | { ok: false; error: string };
+export type ActionResult = { ok: true; message?: string; id?: string; link?: string } | { ok: false; error: string };
 
-async function run(fn: () => Promise<{ message?: string; id?: string } | void>): Promise<ActionResult> {
+async function run(fn: () => Promise<{ message?: string; id?: string; link?: string } | void>): Promise<ActionResult> {
   try {
     const r = await fn();
     revalidatePath("/", "layout");
-    return { ok: true, message: r?.message, id: r?.id };
+    return { ok: true, message: r?.message, id: r?.id, link: r?.link };
   } catch (e) {
+    if (!(e instanceof AppError)) console.error("[action] 처리 오류:", e);
     return { ok: false, error: errorMessage(e) };
   }
 }
 
-export async function switchUserAction(userId: string): Promise<ActionResult> {
-  const store = getStore();
-  if (!store.users.some((u) => u.id === userId)) return { ok: false, error: "알 수 없는 샘플 사용자" };
+// ---- 인증 ----
+export async function loginAction(_prev: ActionResult | null, formData: FormData): Promise<ActionResult> {
+  const email = String(formData.get("email") ?? "");
+  const password = String(formData.get("password") ?? "");
+  const next = String(formData.get("next") ?? "/");
+  const ua = (await headers()).get("user-agent") ?? "";
+  const res = await auth.login(email, password, ua);
+  if (!res.ok) return { ok: false, error: res.error };
   const jar = await cookies();
-  jar.set(SESSION_COOKIE, userId, { path: "/", httpOnly: true, sameSite: "lax" });
-  revalidatePath("/", "layout");
-  return { ok: true };
+  jar.set(SESSION_COOKIE, res.sessionId, cookieOptions());
+  redirect(next.startsWith("/") && !next.startsWith("//") ? next : "/");
 }
 
+export async function logoutAction(): Promise<void> {
+  const jar = await cookies();
+  const sid = jar.get(SESSION_COOKIE)?.value;
+  const user = await getOptionalUser();
+  await auth.logout(sid, user ? { id: user.id, name: user.name } : null);
+  jar.set(SESSION_COOKIE, "", { ...cookieOptions(), maxAge: 0 });
+  redirect("/login");
+}
+
+export async function acceptInviteAction(_prev: ActionResult | null, formData: FormData): Promise<ActionResult> {
+  const token = String(formData.get("token") ?? "");
+  try {
+    await auth.acceptInvite(token, String(formData.get("password") ?? ""), String(formData.get("password2") ?? ""));
+  } catch (e) {
+    return { ok: false, error: errorMessage(e) };
+  }
+  redirect("/login?set=1");
+}
+
+export async function changePasswordAction(_prev: ActionResult | null, formData: FormData): Promise<ActionResult> {
+  const user = await getCurrentUser();
+  return run(async () => {
+    await auth.changePassword({ id: user.id, name: user.name }, String(formData.get("current") ?? ""), String(formData.get("next") ?? ""), String(formData.get("next2") ?? ""));
+    return { message: "비밀번호를 변경했습니다." };
+  });
+}
+
+// ---- 샘플 데이터 ----
 export async function resetSampleAction(): Promise<ActionResult> {
   return run(async () => {
     const user = await getCurrentUser();
-    if (user.role !== "HQ_ADMIN") throw new Error("본사 관리자만 초기화할 수 있습니다.");
-    resetStore();
-    return { message: "샘플 데이터를 초기화했습니다." };
+    if (user.role !== "HQ_ADMIN") throw new ForbiddenError("본사 관리자만 초기화할 수 있습니다.");
+    if (process.env.ALLOW_SAMPLE_RESET !== "true") throw new ForbiddenError("이 환경에서는 샘플 데이터 초기화가 비활성화되어 있습니다(ALLOW_SAMPLE_RESET).");
+    await resetDatabase();
+    await seedDatabase(buildSampleStore(nowIso()), process.env.SAMPLE_USER_PASSWORD ?? "sample1234!");
+    // 세션 테이블도 비워졌으므로, 샘플에 같은 ID 가 있으면 현재 관리자의 세션을 다시 만든다.
+    const ua = (await headers()).get("user-agent") ?? "";
+    const sid = await createSession(user.id, ua);
+    (await cookies()).set(SESSION_COOKIE, sid, cookieOptions());
+    return { message: "샘플 데이터를 초기화했습니다. 다른 사용자는 다시 로그인해야 합니다." };
   });
 }
 
@@ -57,16 +100,16 @@ export async function issueCommandAction(input: IssueCommandInput): Promise<Acti
 
 // ---- 장애 ----
 export async function ackIncidentAction(id: string): Promise<ActionResult> {
-  return run(async () => void incidents.acknowledgeIncident(await getCurrentUser(), id));
+  return run(async () => incidents.acknowledgeIncident(await getCurrentUser(), id));
 }
 export async function assignIncidentAction(id: string, assigneeId: string): Promise<ActionResult> {
-  return run(async () => void incidents.assignIncident(await getCurrentUser(), id, assigneeId));
+  return run(async () => incidents.assignIncident(await getCurrentUser(), id, assigneeId));
 }
 export async function addIncidentActionAction(id: string, note: string, internal: boolean): Promise<ActionResult> {
-  return run(async () => void incidents.addIncidentAction(await getCurrentUser(), id, note, internal));
+  return run(async () => incidents.addIncidentAction(await getCurrentUser(), id, note, internal));
 }
 export async function resolveIncidentAction(id: string, note: string): Promise<ActionResult> {
-  return run(async () => void (await incidents.resolveIncident(await getCurrentUser(), id, note)));
+  return run(async () => incidents.resolveIncident(await getCurrentUser(), id, note));
 }
 export async function simulateIncidentAction(robotId: string, code: string, severity: Severity, vendorEventId: string | null): Promise<ActionResult> {
   return run(async () => {
@@ -77,74 +120,83 @@ export async function simulateIncidentAction(robotId: string, code: string, seve
 
 // ---- 작업·일정 ----
 export async function cancelPlannedAction(id: string, reason: string): Promise<ActionResult> {
-  return run(async () => void tasks.cancelPlannedRun(await getCurrentUser(), id, reason));
+  return run(async () => tasks.cancelPlannedRun(await getCurrentUser(), id, reason));
 }
 export async function toggleScheduleAction(id: string, enabled: boolean): Promise<ActionResult> {
-  return run(async () => void tasks.toggleSchedule(await getCurrentUser(), id, enabled));
+  return run(async () => tasks.toggleSchedule(await getCurrentUser(), id, enabled));
 }
 export async function createTaskAction(input: { robotId: string; name: string; zoneIds: string[]; mode: CleanMode }): Promise<ActionResult> {
-  return run(async () => void tasks.createTask(await getCurrentUser(), input));
+  return run(async () => void (await tasks.createTask(await getCurrentUser(), input)));
 }
 export async function createScheduleAction(input: { taskId: string; daysOfWeek: number[]; time: string }): Promise<ActionResult> {
-  return run(async () => void tasks.createSchedule(await getCurrentUser(), input));
+  return run(async () => void (await tasks.createSchedule(await getCurrentUser(), input)));
 }
 
 // ---- 보고서 ----
 export async function createDraftAction(siteId: string, month: string): Promise<ActionResult> {
   return run(async () => {
-    const r = reports.createDraft(await getCurrentUser(), siteId, month);
+    const r = await reports.createDraft(await getCurrentUser(), siteId, month);
     return { id: r.id, message: `초안 v${r.version} 생성` };
   });
 }
 export async function recomputeDraftAction(id: string): Promise<ActionResult> {
-  return run(async () => void reports.recomputeDraft(await getCurrentUser(), id));
+  return run(async () => reports.recomputeDraft(await getCurrentUser(), id));
 }
 export async function updateCommentsAction(id: string, comments: Partial<ReportComments>): Promise<ActionResult> {
-  return run(async () => void reports.updateComments(await getCurrentUser(), id, comments));
+  return run(async () => reports.updateComments(await getCurrentUser(), id, comments));
 }
 export async function submitReviewAction(id: string): Promise<ActionResult> {
-  return run(async () => void reports.submitForReview(await getCurrentUser(), id));
+  return run(async () => reports.submitForReview(await getCurrentUser(), id));
 }
 export async function returnToDraftAction(id: string, reason: string): Promise<ActionResult> {
-  return run(async () => void reports.returnToDraft(await getCurrentUser(), id, reason));
+  return run(async () => reports.returnToDraft(await getCurrentUser(), id, reason));
 }
 export async function confirmReportAction(id: string): Promise<ActionResult> {
-  return run(async () => void reports.confirmReport(await getCurrentUser(), id));
+  return run(async () => reports.confirmReport(await getCurrentUser(), id));
 }
 export async function publishReportAction(id: string): Promise<ActionResult> {
-  return run(async () => void reports.publishReport(await getCurrentUser(), id));
+  return run(async () => reports.publishReport(await getCurrentUser(), id));
 }
 
 // ---- 점검 ----
 export async function completeInspectionAction(id: string, note: string): Promise<ActionResult> {
-  return run(async () => void completeInspection(await getCurrentUser(), id, note));
+  return run(async () => void (await completeInspection(await getCurrentUser(), id, note)));
 }
 export async function addManualInspectionAction(robotId: string, item: string): Promise<ActionResult> {
-  return run(async () => void addManualInspection(await getCurrentUser(), robotId, item));
+  return run(async () => void (await addManualInspection(await getCurrentUser(), robotId, item)));
 }
 
 // ---- 관리 설정 ----
 export async function setUserActiveAction(targetId: string, active: boolean): Promise<ActionResult> {
-  return run(async () => void admin.setUserActive(await getCurrentUser(), targetId, active));
+  return run(async () => admin.setUserActive(await getCurrentUser(), targetId, active));
 }
 export async function setUserPermissionsAction(targetId: string, siteIds: string[], allowedCommands: CommandType[]): Promise<ActionResult> {
-  return run(async () => void admin.setUserSitePermissions(await getCurrentUser(), targetId, siteIds, allowedCommands));
+  return run(async () => admin.setUserSitePermissions(await getCurrentUser(), targetId, siteIds, allowedCommands));
 }
 export async function createUserAction(input: { name: string; email: string; role: Role; siteIds: string[]; allowedCommands: CommandType[] }): Promise<ActionResult> {
-  return run(async () => void admin.createUser(await getCurrentUser(), input));
+  return run(async () => {
+    const r = await admin.createUser(await getCurrentUser(), input);
+    return { message: "사용자를 등록했습니다. 아래 초대 링크를 본인에게 전달하세요(72시간 유효).", link: r.inviteLink, id: r.user.id };
+  });
+}
+export async function reissueInviteAction(targetId: string): Promise<ActionResult> {
+  return run(async () => {
+    const link = await admin.reissueInvite(await getCurrentUser(), targetId);
+    return { message: "초대 링크를 재발급했습니다(기존 세션 종료).", link };
+  });
 }
 export async function addRecipientAction(siteId: string, input: { channel: "EMAIL" | "KAKAO"; address: string; minSeverity: Severity; hoursFrom: string; hoursTo: string }): Promise<ActionResult> {
-  return run(async () => void admin.addRecipient(await getCurrentUser(), siteId, input));
+  return run(async () => admin.addRecipient(await getCurrentUser(), siteId, input));
 }
 export async function removeRecipientAction(siteId: string, recipientId: string): Promise<ActionResult> {
-  return run(async () => void admin.removeRecipient(await getCurrentUser(), siteId, recipientId));
+  return run(async () => admin.removeRecipient(await getCurrentUser(), siteId, recipientId));
 }
 export async function updateThresholdsAction(siteId: string, dedupeMinutes: number, escalateAfterMinutes: number): Promise<ActionResult> {
-  return run(async () => void admin.updateNotificationThresholds(await getCurrentUser(), siteId, dedupeMinutes, escalateAfterMinutes));
+  return run(async () => admin.updateNotificationThresholds(await getCurrentUser(), siteId, dedupeMinutes, escalateAfterMinutes));
 }
 export async function relocateRobotAction(robotId: string, toSiteId: string, toFloorId: string): Promise<ActionResult> {
-  return run(async () => void admin.relocateRobot(await getCurrentUser(), robotId, toSiteId, toFloorId));
+  return run(async () => admin.relocateRobot(await getCurrentUser(), robotId, toSiteId, toFloorId));
 }
 export async function setSiteManagerCanConfirmAction(value: boolean): Promise<ActionResult> {
-  return run(async () => void admin.setSiteManagerCanConfirm(await getCurrentUser(), value));
+  return run(async () => admin.setSiteManagerCanConfirm(await getCurrentUser(), value));
 }

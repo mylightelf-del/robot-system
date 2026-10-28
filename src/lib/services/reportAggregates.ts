@@ -1,6 +1,18 @@
-import type { ActualRun, ReportAggregates, Severity } from "@/lib/domain/types";
-import type { StoreData } from "@/lib/store/data";
+import type { ActualRun, Floor, Incident, Inspection, PlannedRun, ReportAggregates, Robot, RobotPlacement, Severity, Site, Zone } from "@/lib/domain/types";
 import { localDateKey, localMonthKey } from "@/lib/util/time";
+
+/** 집계에 필요한 입력. 메모리 샘플(StoreData)과 DB 로더(reportData.ts) 모두 이 형태를 만든다. */
+export interface AggregateInput {
+  sites: Site[];
+  floors: Floor[];
+  zones: Zone[];
+  robots: Robot[];
+  placements: RobotPlacement[];
+  actualRuns: ActualRun[];
+  plannedRuns: PlannedRun[];
+  incidents: Incident[];
+  inspections: Inspection[];
+}
 
 /**
  * 월간 보고서 자동 집계.
@@ -11,7 +23,7 @@ import { localDateKey, localMonthKey } from "@/lib/util/time";
  * - 즉시 지시(ADHOC/REMOTE)는 별도 집계. 누적 청소 면적은 중복 포함.
  * - 물·세제는 값이 제공된 실적만 합산하고, 전부 미제공이면 null.
  */
-export function computeAggregates(data: StoreData, siteId: string, month: string, asOf: string): ReportAggregates {
+export function computeAggregates(data: AggregateInput, siteId: string, month: string, asOf: string): ReportAggregates {
   const site = data.sites.find((s) => s.id === siteId);
   if (!site) throw new Error("사업장을 찾을 수 없습니다.");
   const tz = site.timezone;

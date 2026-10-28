@@ -2,8 +2,7 @@ import Link from "next/link";
 import { getCurrentUser } from "@/lib/auth/session";
 import { listPlannedRuns, listTasks } from "@/lib/services/tasks";
 import { listCommands } from "@/lib/services/commands";
-import { listRobots, listSites } from "@/lib/services/robots";
-import { getStore } from "@/lib/store/store";
+import { listRobots, listSites, listZonesInSites } from "@/lib/services/robots";
 import { isCustomer } from "@/lib/auth/authz";
 import { AppError } from "@/lib/util/errors";
 import { Card, Empty, PageTitle, SimTag } from "@/components/ui";
@@ -22,16 +21,16 @@ export default async function TasksPage({ searchParams }: { searchParams: Promis
   let tasks, sites, planned, commands, robots;
   const now = nowIso();
   try {
-    sites = listSites(user);
-    tasks = listTasks(user, site || undefined);
-    planned = listPlannedRuns(user, { siteId: site || undefined, fromIso: addMinutes(now, -60 * 24), toIso: addMinutes(now, 60 * 48) });
-    commands = listCommands(user, { siteId: site || undefined, limit: 20 });
-    robots = listRobots(user, site || undefined);
+    sites = await listSites(user);
+    tasks = await listTasks(user, site || undefined);
+    planned = await listPlannedRuns(user, { siteId: site || undefined, fromIso: addMinutes(now, -60 * 24), toIso: addMinutes(now, 60 * 48) });
+    commands = await listCommands(user, { siteId: site || undefined, limit: 20 });
+    robots = await listRobots(user, site || undefined);
   } catch (e) {
     return <AccessDenied reason={e instanceof AppError ? e.message : "접근할 수 없습니다."} />;
   }
   const customer = isCustomer(user);
-  const zones = getStore().zones;
+  const zones = await listZonesInSites(site ? [site] : sites.map((s) => s.id));
 
   return (
     <>
