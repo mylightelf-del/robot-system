@@ -3,10 +3,10 @@
 #  - widebot.kro.kr 같은 무료 서브도메인(kro.kr 은 Public Suffix List 에 없음)은 Let's Encrypt 의 '등록 도메인당 주 50건' 한도를
 #    kro.kr 전체 사용자와 나눠 쓰므로 발급이 거절될 수 있다 → ZeroSSL 대체 발급으로 대비한다.
 #  - Cloudflare 프록시를 쓰는 정식 도메인이면 Cloudflare SSL 모드를 "Full (strict)" 로 둔다.
+# cert_issuer 를 명시하지 않으면 Caddy 기본 동작(Let's Encrypt → 실패 시 ZeroSSL ACME 대체)이 적용된다.
+# (실서버 확인: 'cert_issuer zerossl' 는 API 키가 필요해 기동 실패를 일으켰음 → 제거)
 {
 	email {$ACME_EMAIL}
-	cert_issuer acme
-	cert_issuer zerossl
 }
 
 {$DOMAIN} {

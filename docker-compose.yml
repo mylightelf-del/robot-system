@@ -72,7 +72,7 @@ services:
       - "443:443"
     environment:
       DOMAIN: ${DOMAIN:-localhost}
-      ACME_EMAIL: ${ACME_EMAIL:-}
+      ACME_EMAIL: ${ACME_EMAIL:-admin@localhost.invalid}   # 비어 있으면 Caddy 가 기동하지 않으므로 자리표시자. 운영에서는 실제 담당 이메일
     volumes:
       - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
