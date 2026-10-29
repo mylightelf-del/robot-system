@@ -13,8 +13,9 @@ import { configFromEnv as puduConfigFromEnv } from "./pudu/client";
 export type VendorMode = "sample" | "live" | "unconfigured";
 
 export function vendorMode(vendor: Vendor): VendorMode {
-  const global = process.env.VENDOR_MODE ?? "sample";
-  const own = process.env[`${vendor}_MODE`];
+  // 빈 문자열(.env 에 'PUDU_MODE=' 만 있는 경우)은 미설정으로 본다 — 실서버 첫 배포에서 샘플 모드로 떨어졌던 원인
+  const global = process.env.VENDOR_MODE || "sample";
+  const own = process.env[`${vendor}_MODE`] || undefined;
   const mode = own ?? global;
   if (mode !== "live") return "sample";
   switch (vendor) {

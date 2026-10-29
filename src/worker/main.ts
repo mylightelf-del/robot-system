@@ -14,7 +14,7 @@ import { vendorModes } from "@/lib/vendors";
 import { purgeOldVendorEvents, writeHeartbeat } from "@/lib/ops/heartbeat";
 
 const tickSeconds = Number(process.env.SIMULATION_TICK_SECONDS ?? 2);
-const vendorMode = process.env.VENDOR_MODE ?? "sample";
+const vendorMode = process.env.VENDOR_MODE || "sample";
 // 샘플 모드인 제조사가 하나라도 있으면(또는 샘플 적재 로봇이 남아 있을 수 있으므로) 시뮬레이션 틱을 돈다. 실제 연동 로봇은 틱에서 제외된다.
 const anySample = Object.values(vendorModes()).some((m) => m === "sample");
 let stopping = false;

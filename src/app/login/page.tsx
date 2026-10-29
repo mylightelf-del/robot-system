@@ -6,7 +6,7 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
   const { next, set } = await searchParams;
   const user = await getOptionalUser();
   if (user) redirect(next && next.startsWith("/") ? next : "/");
-  const sample = (process.env.VENDOR_MODE ?? "sample") === "sample" && process.env.APP_ENV !== "production";
+  const sample = (process.env.VENDOR_MODE || "sample") === "sample" && process.env.APP_ENV !== "production";
   return (
     <div className="max-w-sm mx-auto mt-8 sm:mt-16">
       <h1 className="text-xl font-bold text-navy mb-1">로그인</h1>
