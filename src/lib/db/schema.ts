@@ -273,7 +273,7 @@ export const commands = pgTable(
     simulation: text().$type<"NORMAL" | "LOST_RESPONSE" | "REJECTED" | null>(),
     idempotencyKey: text(),
   },
-  (t) => [uniqueIndex("commands_idempotency_key").on(t.idempotencyKey), index("commands_robot_idx").on(t.robotId, t.requestedAt)],
+  (t) => [uniqueIndex("commands_idempotency_key").on(t.idempotencyKey), index("commands_robot_idx").on(t.robotId, t.requestedAt), index("commands_robot_state_idx").on(t.robotId, t.state)],
 );
 
 export const incidents = pgTable(
@@ -303,7 +303,7 @@ export const incidents = pgTable(
     /** 묶인 반복 발생의 제조사 이벤트 키(재동기화 시 중복 집계 방지). */
     groupedEventIds: jsonb().$type<string[]>().notNull().default([]),
   },
-  (t) => [uniqueIndex("incidents_vendor_event_key").on(t.vendorEventId), index("incidents_site_idx").on(t.siteId, t.occurredAt)],
+  (t) => [uniqueIndex("incidents_vendor_event_key").on(t.vendorEventId), index("incidents_site_idx").on(t.siteId, t.occurredAt), index("incidents_robot_code_status_idx").on(t.robotId, t.code, t.status)],
 );
 
 export const incidentActions = pgTable("incident_actions", {

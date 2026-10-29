@@ -1,0 +1,2 @@
+CREATE INDEX "commands_robot_state_idx" ON "commands" USING btree ("robot_id","state");--> statement-breakpoint
+CREATE INDEX "incidents_robot_code_status_idx" ON "incidents" USING btree ("robot_id","code","status");

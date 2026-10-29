@@ -15,7 +15,8 @@
     "db:bootstrap-admin": "tsx --env-file-if-exists=.env.local scripts/bootstrap-admin.ts",
     "worker": "tsx --env-file-if-exists=.env.local src/worker/main.ts",
     "pudu:check": "tsx --env-file-if-exists=.env.local scripts/pudu-check.ts",
-    "pudu:command-test": "tsx --env-file-if-exists=.env.local scripts/pudu-command-test.ts"
+    "pudu:command-test": "tsx --env-file-if-exists=.env.local scripts/pudu-command-test.ts",
+    "preflight": "tsx --env-file-if-exists=.env.local scripts/preflight.ts"
   },
   "dependencies": {
     "drizzle-orm": "^0.45.4",

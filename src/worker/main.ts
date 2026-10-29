@@ -11,6 +11,7 @@ import { simulationTick } from "./simulation";
 import { processPuduEvents, puduLiveEnabled, PUDU_WINDOW_HOURS, syncPuduCatalog, syncPuduErrors, syncPuduReports, syncPuduStatus } from "./pudu";
 import { createPuduApi } from "@/lib/vendors/pudu/puduAdapter";
 import { vendorModes } from "@/lib/vendors";
+import { purgeOldVendorEvents, writeHeartbeat } from "@/lib/ops/heartbeat";
 
 const tickSeconds = Number(process.env.SIMULATION_TICK_SECONDS ?? 2);
 const vendorMode = process.env.VENDOR_MODE ?? "sample";
@@ -74,6 +75,15 @@ async function main() {
     loop("sessions", 60_000, async () => {
       const n = await purgeExpiredSessions();
       if (n) log(`만료 세션 ${n}건 정리`);
+    }),
+  );
+  // 생존 신호(30초): /api/health 가 이 값의 나이로 워커 생사를 알린다
+  jobs.push(loop("heartbeat", 30_000, async () => writeHeartbeat({ modes: vendorModes(), pid: process.pid })));
+  // 보관 정책(하루 1회): 처리 끝난 콜백 원문 정리
+  jobs.push(
+    loop("retention", 24 * 3600_000, async () => {
+      const n = await purgeOldVendorEvents();
+      if (n) log(`보관 기간 지난 콜백 원문 ${n}건 삭제`);
     }),
   );
   const shutdown = async () => {

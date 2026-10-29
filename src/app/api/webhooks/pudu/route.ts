@@ -11,9 +11,15 @@ export async function POST(req: Request) {
   if (!expected) return Response.json({ ok: false, error: "callback not configured" }, { status: 503 });
   const code = req.headers.get("callbackcode") ?? req.headers.get("CallbackCode");
   if (!code || code !== expected) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  // 본문 크기 제한(콜백은 수 KB): 비정상적으로 큰 요청은 저장하지 않는다
+  const MAX = 256 * 1024;
+  const declared = Number(req.headers.get("content-length") ?? 0);
+  if (declared > MAX) return Response.json({ ok: false, error: "payload too large" }, { status: 413 });
   let body: unknown;
   try {
-    body = await req.json();
+    const text = await req.text();
+    if (text.length > MAX) return Response.json({ ok: false, error: "payload too large" }, { status: 413 });
+    body = JSON.parse(text);
   } catch {
     return Response.json({ ok: false, error: "invalid json" }, { status: 400 });
   }

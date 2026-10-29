@@ -6,6 +6,20 @@ const nextConfig: NextConfig = {
   cacheComponents: false,
   // Docker 이미지용 최소 런타임 출력
   output: "standalone",
+  // 보안 헤더(Caddy 가 HTTPS 단에서 다시 붙이지만, 로컬·내부 접근에서도 같은 정책을 갖도록 앱에서도 설정)
+  async headers() {
+    return [
+      {
+        source: "/(.*)",
+        headers: [
+          { key: "X-Content-Type-Options", value: "nosniff" },
+          { key: "X-Frame-Options", value: "DENY" },
+          { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+          { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=()" },
+        ],
+      },
+    ];
+  },
   turbopack: {
     rules: {
       "*.css": {

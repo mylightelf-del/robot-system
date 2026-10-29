@@ -17,6 +17,7 @@
 | `docs/06-PUDU-API-검토.md` | PUDU Cloud API 공식 문서 검토: 인증·클러스터·endpoint·상태 코드·콜백, 설계 결정, 실기 검증 체크리스트 |
 | `docs/07-PUDU-연동-보고.md` | PUDU 연동 구현·시험 보고(모의 서버·실서버·명령 실기), 미확인 항목 |
 | `docs/08-운영준비-보고.md` | 사업장·층 관리, PUDU 지도 가져오기·로봇 위치 변환, 장애 묶음, 지도 이미지 보관, 콜백 등록 준비 |
+| `docs/09-배포전-점검.md` | 배포 전 점검(preflight)·워커 하트비트·보관 정책·배포 당일 체크리스트 |
 | `src/lib/vendors/cenobots/README.md` | CenoBots 어댑터 구현 전 메모 |
 
 ## 로컬 실행
@@ -45,7 +46,8 @@ PostgreSQL 이 없다면 `.env` 에 `POSTGRES_PASSWORD` 를 넣고 `docker compo
 ```bash
 npm run typecheck
 npm run lint
-npm test            # vitest, 실제 PostgreSQL(DATABASE_URL_TEST) 사용 — 59건(PUDU 모의 서버 포함)
+npm test            # vitest, 실제 PostgreSQL(DATABASE_URL_TEST) 사용 — 64건(PUDU 모의 서버 포함)
+npm run preflight   # 배포 전 점검: 환경변수 규칙·DB·마이그레이션·관리자·워커 (오류면 종료 코드 1)
 npm run build       # standalone 빌드
 ```
 브라우저 자동 조작(선택, Playwright 필요): 웹·워커 실행 중에
@@ -66,7 +68,7 @@ VENDOR_MODE=live npm run pudu:command-test -- <관리번호> <등록작업ID> --
 `docs/05-배포-운영-가이드.md` 참고. Lightsail 서버에서:
 ```bash
 cp .env.example .env   # APP_ENV=production, DOMAIN, POSTGRES_PASSWORD, ALLOW_SAMPLE_RESET=false
-docker compose up -d --build
+docker compose up -d --build   # migrate → preflight 통과 후 web/worker 기동
 docker compose run --rm worker npx tsx scripts/bootstrap-admin.ts "이름" admin@company.example   # 첫 관리자 초대 링크
 ```
 
@@ -76,4 +78,4 @@ PUDU: `PUDU_API_CLUSTER`(한국 계정은 `sea`) · `PUDU_API_APP_KEY` · `PUDU_
 
 ## 단계 계획 (인수인계 문서 9장)
 원래 순서는 3·4단계 CenoBots → 6단계 PUDU 였으나, 사용자 결정으로 **PUDU 를 먼저** 연동했다.
-1. 시제품 ✅  2. 기반 ✅  3. PUDU 읽기·제어·콜백 ✅  4. PUDU 실기 검증(읽기 ✅ · 명령 ✅ CC1Pro 1대 · 지도 ✅ · 콜백 등록 대기)  4-1. 운영 준비(사업장·층·지도 관리, 지도 이미지 보관, 장애 묶음, 콜백 등록 준비) ✅ — 콜백 등록 자체는 서버 배포 뒤  5. CenoBots 읽기·제어  6. 이벤트·알림·보고서 고도화 · 시범 운영 (BIB 는 후속)
+1. 시제품 ✅  2. 기반 ✅  3. PUDU 읽기·제어·콜백 ✅  4. PUDU 실기 검증(읽기 ✅ · 명령 ✅ CC1Pro 1대 · 지도 ✅ · 콜백 등록 대기)  4-1. 운영 준비(사업장·층·지도 관리, 지도 이미지 보관, 장애 묶음, 콜백 등록 준비, 배포 전 점검) ✅ — 콜백 등록 자체는 서버 배포 뒤  5. CenoBots 읽기·제어  6. 이벤트·알림·보고서 고도화 · 시범 운영 (BIB 는 후속)
