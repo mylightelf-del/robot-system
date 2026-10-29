@@ -18,9 +18,13 @@ describe("배포 전 점검·운영 보조", () => {
     expect(codes).toEqual(expect.arrayContaining(["DATABASE_URL", "APP_BASE_URL", "ALLOW_SAMPLE_RESET", "PUDU_CLUSTER", "PUDU_SHOP_IDS"]));
     expect(summarize(bad).errors).toBeGreaterThanOrEqual(5);
 
-    const good = checkEnv({ DATABASE_URL: "postgres://x", APP_ENV: "production", APP_BASE_URL: "https://robot.example.com", ALLOW_SAMPLE_RESET: "false", VENDOR_MODE: "live", PUDU_API_APP_KEY: "k", PUDU_API_APP_SECRET: "s", PUDU_API_CLUSTER: "sea", PUDU_SHOP_IDS: "602550006,641450007", PUDU_CALLBACK_CODE: "abcdefghijklmnopqrstuvwxyz012345" } as unknown as NodeJS.ProcessEnv);
+    const good = checkEnv({ DATABASE_URL: "postgres://x", APP_ENV: "production", APP_BASE_URL: "https://robot.example.com", ALLOW_SAMPLE_RESET: "false", VENDOR_MODE: "live", PUDU_API_APP_KEY: "k", PUDU_API_APP_SECRET: "s", PUDU_API_CLUSTER: "sea", PUDU_SHOP_IDS: "602550006,641450007", PUDU_CALLBACK_CODE: "abcdefghijklmnopqrstuvwxyz012345", DOMAIN: "robot.example.com", ACME_EMAIL: "ops@example.com" } as unknown as NodeJS.ProcessEnv);
     expect(summarize(good).errors).toBe(0);
     expect(good.find((f) => f.code === "ENV")?.level).toBe("ok");
+    // 도메인 불일치·ACME 이메일 없음은 주의
+    const dom = checkEnv({ DATABASE_URL: "postgres://x", APP_ENV: "production", APP_BASE_URL: "https://widebot.kro.kr", DOMAIN: "other.kro.kr", ALLOW_SAMPLE_RESET: "false", VENDOR_MODE: "sample" } as unknown as NodeJS.ProcessEnv);
+    expect(dom.find((f) => f.code === "DOMAIN")?.level).toBe("warn");
+    expect(dom.find((f) => f.code === "ACME_EMAIL")?.level).toBe("warn");
 
     // 콜백 코드 없음은 '주의'(폴링만으로 동작), 개발 환경의 localhost 는 허용
     const dev = checkEnv({ DATABASE_URL: "postgres://x", APP_ENV: "development", APP_BASE_URL: "http://localhost:3000", VENDOR_MODE: "live", PUDU_API_APP_KEY: "k", PUDU_API_APP_SECRET: "s", PUDU_API_CLUSTER: "sea", PUDU_SHOP_IDS: "1" } as unknown as NodeJS.ProcessEnv);

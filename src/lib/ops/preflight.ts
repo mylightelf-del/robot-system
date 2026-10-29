@@ -26,6 +26,15 @@ export function checkEnv(env: NodeJS.ProcessEnv): Finding[] {
   else if (prod && !/^https:\/\//.test(base)) push("error", "APP_BASE_URL", "운영에서는 APP_BASE_URL 이 https:// 로 시작해야 합니다(쿠키 secure·콜백 HTTPS).");
   else if (prod && /localhost|127\.0\.0\.1/.test(base)) push("error", "APP_BASE_URL", "운영 APP_BASE_URL 이 localhost 입니다.");
 
+  if (base && env.DOMAIN) {
+    try {
+      const host = new URL(base).host;
+      if (host !== env.DOMAIN) push("warn", "DOMAIN", `APP_BASE_URL 의 호스트(${host})와 DOMAIN(${env.DOMAIN})이 다릅니다. 콜백·초대 링크와 인증서 도메인이 어긋납니다.`);
+    } catch {
+      push("error", "APP_BASE_URL", `APP_BASE_URL 형식이 올바르지 않습니다: ${base}`);
+    }
+  }
+  if (prod && !env.ACME_EMAIL) push("warn", "ACME_EMAIL", "ACME_EMAIL 이 없습니다(인증서 발급기관 계정·만료 알림용). Caddy 가 ZeroSSL 대체 발급을 못 할 수 있습니다.");
   if (prod && env.ALLOW_SAMPLE_RESET === "true") push("error", "ALLOW_SAMPLE_RESET", "운영에서 샘플 초기화가 켜져 있습니다(ALLOW_SAMPLE_RESET=false).");
   if (prod && env.SAMPLE_USER_PASSWORD) push("warn", "SAMPLE_USER_PASSWORD", "운영 .env 에 샘플 사용자 비밀번호가 있습니다. 샘플 적재를 하지 않는다면 지우세요.");
   if (prod && (env.VENDOR_MODE ?? "sample") === "sample") push("warn", "VENDOR_MODE", "운영인데 VENDOR_MODE=sample 입니다(모든 로봇이 시뮬레이션). 실제 연동이면 live 로.");
