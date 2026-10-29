@@ -11,7 +11,8 @@ RUN npm ci
 FROM deps AS build
 COPY . .
 ENV NEXT_TELEMETRY_DISABLED=1
-RUN npm run build
+# public/ 이 비어 있으면 git archive 번들에 빠지므로 항상 만들어 둔다(아래 COPY 가 실패하지 않도록)
+RUN mkdir -p /app/public && npm run build
 
 # ---- 웹 서버 (Next.js standalone 최소 런타임) ----
 FROM node:22-alpine AS web
