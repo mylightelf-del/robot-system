@@ -284,3 +284,15 @@ export async function importPuduMapAction(floorId: string, mapName: string): Pro
     return { message: `지도 v${r.version} 으로 가져왔습니다(구역 ${r.zones}개). 로봇 위치는 다음 폴링부터 이 지도 위에 표시됩니다.`, id: r.mapVersionId };
   });
 }
+export async function refetchMapImageAction(mapVersionId: string): Promise<ActionResult> {
+  return run(async () => {
+    const r = await sitesSvc.refetchMapImage(await getCurrentUser(), mapVersionId);
+    return { message: `지도 이미지를 다시 받아 보관했습니다(${Math.round(r.size / 1024)}KB).` };
+  });
+}
+export async function puduCallbackSelfTestAction(): Promise<ActionResult> {
+  return run(async () => {
+    const r = await admin.puduCallbackSelfTest(await getCurrentUser());
+    return { message: r.message };
+  });
+}

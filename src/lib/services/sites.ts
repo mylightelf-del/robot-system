@@ -1,8 +1,9 @@
 import { and, eq, sql } from "drizzle-orm";
 import type { User, Vendor } from "@/lib/domain/types";
 import { getDb, schema } from "@/lib/db/client";
-import { assertActive, assertAdmin } from "@/lib/auth/authz";
-import { ConflictError, NotFoundError, ValidationError } from "@/lib/util/errors";
+import { assertActive, assertAdmin, canAccessSite } from "@/lib/auth/authz";
+import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from "@/lib/util/errors";
+import { nowIso } from "@/lib/util/time";
 import { newId } from "@/lib/util/random";
 
 import { audit } from "./audit";
@@ -191,7 +192,7 @@ export function polygonAreaM2(flat: number[]): number {
  * PUDU 지도를 이 층의 새 지도 버전으로 가져온다: 이미지 URL·해상도·원점·크기 저장, area 요소를 구역으로 변환(m → px).
  * 가져온 뒤 이 층의 현재 지도가 되고, 로봇 위치는 이 지도 위에 실제 좌표로 그려진다.
  */
-export async function importPuduMap(user: User, floorId: string, mapName: string): Promise<{ mapVersionId: string; version: number; zones: number }> {
+export async function importPuduMap(user: User, floorId: string, mapName: string): Promise<{ mapVersionId: string; version: number; zones: number; imageStored: boolean; imageError?: string }> {
   assertActive(user);
   assertAdmin(user);
   const db = getDb();
@@ -236,5 +237,82 @@ export async function importPuduMap(user: User, floorId: string, mapName: string
     await tx.update(schema.floors).set({ currentMapVersionId: mapVersionId }).where(eq(schema.floors.id, floorId));
     await audit(user, { siteId: floor.siteId, robotId: null, action: "FLOOR:IMPORT_VENDOR_MAP", params: { floorId, vendor, mapName, version, zones: zoneRows.length, width: detail.width, height: detail.height, resolution: res, origin }, result: "OK", detail: null, vendorTraceId: null }, tx);
   });
-  return { mapVersionId, version, zones: zoneRows.length };
+  // 이미지 자체 보관(실패해도 가져오기는 성공으로 두고 원본 URL 을 그대로 참조한다 — 관리 화면에서 다시 받기 가능)
+  const stored = await storeMapImage(mapVersionId, detail.url);
+  return { mapVersionId, version, zones: zoneRows.length, imageStored: stored.ok, imageError: stored.ok ? undefined : stored.error };
+}
+
+// ---- 지도 이미지 보관 ----
+export const MAP_IMAGE_MAX_BYTES = 15 * 1024 * 1024;
+export const mapImagePath = (mapVersionId: string) => `/api/maps/${encodeURIComponent(mapVersionId)}`;
+
+/** 원본 URL 에서 이미지를 내려받아 DB(map_images)에 두고 지도 버전의 imageUrl 을 우리 경로로 바꾼다. */
+export async function storeMapImage(mapVersionId: string, sourceUrl: string): Promise<{ ok: true; size: number } | { ok: false; error: string }> {
+  const db = getDb();
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), Number(process.env.MAP_IMAGE_FETCH_TIMEOUT_MS ?? 30000));
+    let res: Response;
+    try {
+      res = await fetch(sourceUrl, { signal: controller.signal, redirect: "follow" });
+    } finally {
+      clearTimeout(timer);
+    }
+    if (!res.ok) return { ok: false, error: `이미지 응답 HTTP ${res.status}` };
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (buf.length === 0) return { ok: false, error: "빈 응답" };
+    // 실기: PUDU S3 는 Content-Type 을 binary/octet-stream 으로 준다 → 파일 머리(매직 바이트)로 형식을 정한다
+    const headerType = (res.headers.get("content-type") ?? "").split(";")[0].trim();
+    const contentType = sniffImageType(buf) ?? (headerType.startsWith("image/") ? headerType : null);
+    if (!contentType) return { ok: false, error: `이미지가 아닌 응답(${headerType || "형식 불명"})` };
+    if (buf.length > MAP_IMAGE_MAX_BYTES) return { ok: false, error: `이미지가 너무 큼(${Math.round(buf.length / 1024 / 1024)}MB > 15MB)` };
+    await db.transaction(async (tx) => {
+      await tx
+        .insert(schema.mapImages)
+        .values({ mapVersionId, contentType, bytes: buf, size: buf.length, sourceUrl, fetchedAt: nowIso() })
+        .onConflictDoUpdate({ target: schema.mapImages.mapVersionId, set: { contentType, bytes: buf, size: buf.length, sourceUrl, fetchedAt: nowIso() } });
+      await tx.update(schema.mapVersions).set({ imageUrl: mapImagePath(mapVersionId) }).where(eq(schema.mapVersions.id, mapVersionId));
+    });
+    return { ok: true, size: buf.length };
+  } catch (e) {
+    return { ok: false, error: (e as Error).name === "AbortError" ? "이미지 내려받기 시간 초과" : `이미지 내려받기 실패: ${(e as Error).message}` };
+  }
+}
+
+/** PNG/JPEG/WebP/GIF 매직 바이트로 형식 판별. */
+export function sniffImageType(buf: Buffer): string | null {
+  if (buf.length >= 8 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) return "image/png";
+  if (buf.length >= 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return "image/jpeg";
+  if (buf.length >= 12 && buf.subarray(0, 4).toString("ascii") === "RIFF" && buf.subarray(8, 12).toString("ascii") === "WEBP") return "image/webp";
+  if (buf.length >= 6 && buf.subarray(0, 6).toString("ascii").startsWith("GIF8")) return "image/gif";
+  return null;
+}
+
+/** 관리 화면 '이미지 다시 받기': 원본 URL(보관 행의 sourceUrl 또는 지도 버전의 원격 imageUrl)에서 재시도. */
+export async function refetchMapImage(user: User, mapVersionId: string): Promise<{ size: number }> {
+  assertActive(user);
+  assertAdmin(user);
+  const db = getDb();
+  const map = await db.query.mapVersions.findFirst({ where: eq(schema.mapVersions.id, mapVersionId) });
+  if (!map) throw new NotFoundError("지도 버전을 찾을 수 없습니다.");
+  const stored = await db.query.mapImages.findFirst({ where: eq(schema.mapImages.mapVersionId, mapVersionId) });
+  const source = stored?.sourceUrl ?? (map.imageUrl && !map.imageUrl.startsWith("/api/") ? map.imageUrl : null);
+  if (!source) throw new ValidationError("원본 이미지 URL 이 없습니다(제조사 지도를 다시 가져오세요).");
+  const r = await storeMapImage(mapVersionId, source);
+  if (!r.ok) throw new ValidationError(r.error);
+  await audit(user, { siteId: null, robotId: null, action: "FLOOR:REFETCH_MAP_IMAGE", params: { mapVersionId, size: r.size }, result: "OK", detail: null, vendorTraceId: null });
+  return { size: r.size };
+}
+
+/** 지도 이미지 서비스(/api/maps/<id>): 로그인 사용자이고 그 층의 사업장에 접근 권한이 있을 때만. */
+export async function getMapImage(user: User, mapVersionId: string): Promise<{ contentType: string; bytes: Buffer; size: number; fetchedAt: string }> {
+  assertActive(user);
+  const db = getDb();
+  const map = await db.query.mapVersions.findFirst({ where: eq(schema.mapVersions.id, mapVersionId) });
+  if (!map) throw new NotFoundError("지도를 찾을 수 없습니다.");
+  const floor = await db.query.floors.findFirst({ where: eq(schema.floors.id, map.floorId) });
+  if (!floor || !(await canAccessSite(user, floor.siteId, db))) throw new ForbiddenError("해당 사업장에 대한 접근 권한이 없습니다.");
+  const img = await db.query.mapImages.findFirst({ where: eq(schema.mapImages.mapVersionId, mapVersionId) });
+  if (!img) throw new NotFoundError("보관된 지도 이미지가 없습니다.");
+  return { contentType: img.contentType, bytes: img.bytes, size: img.size, fetchedAt: img.fetchedAt };
 }

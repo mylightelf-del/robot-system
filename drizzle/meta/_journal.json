@@ -29,6 +29,13 @@
       "when": 1793226843342,
       "tag": "0003_incident_grouped_keys",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1793271708835,
+      "tag": "0004_map_images",
+      "breakpoints": true
     }
   ]
 }

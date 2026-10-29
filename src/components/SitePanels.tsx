@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { createFloorAction, createSiteAction, deleteFloorAction, deleteSiteAction, importPuduMapAction, listPuduMapsAction, renameFloorAction, updateSiteAction } from "@/app/actions";
+import { createFloorAction, createSiteAction, deleteFloorAction, deleteSiteAction, importPuduMapAction, listPuduMapsAction, refetchMapImageAction, renameFloorAction, updateSiteAction } from "@/app/actions";
 import { btn, ResultLine, useAction } from "./ActionButton";
 
 type FloorInfo = { id: string; name: string; map: { id: string; version: number; vendor: string | null; vendorMapName: string | null; imageUrl: string | null; widthPx: number; heightPx: number; hasCorners: boolean } | null; zones: number; robots: string[] };
@@ -95,13 +95,16 @@ function FloorRow({ siteId, floor, hasPuduRobot }: { siteId: string; floor: Floo
             <span className="font-medium">{floor.name}</span>
             <span className="text-xs text-gray-500">
               지도 v{m?.version ?? "-"}
-              {m?.imageUrl ? ` · ${m.vendor} ${m.vendorMapName} (${m.widthPx}×${m.heightPx}px)` : " · 샘플/빈 지도"}
+              {m?.imageUrl ? ` · ${m.vendor} ${m.vendorMapName} (${m.widthPx}×${m.heightPx}px)${m.imageUrl.startsWith("/api/") ? " · 이미지 보관됨" : " · 이미지 원격 참조(보관 실패)"}` : " · 샘플/빈 지도"}
               {m && !m.hasCorners ? " · 모서리 좌표 없음" : ""}
               {` · 구역 ${floor.zones}개`}
             </span>
             <button type="button" className={btn.small} onClick={() => setRenaming(true)}>이름</button>
             {floor.robots.length === 0 && (
               <button type="button" className={btn.small} disabled={pending} onClick={() => { if (confirm(`층 '${floor.name}' 을(를) 삭제할까요?`)) run(() => deleteFloorAction(floor.id)); }}>삭제</button>
+            )}
+            {m?.imageUrl && !m.imageUrl.startsWith("/api/") && (
+              <button type="button" className={btn.small} disabled={pending} onClick={() => run(() => refetchMapImageAction(m.id))}>이미지 다시 받기</button>
             )}
             {hasPuduRobot && (
               <button

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { puduImportRobotsAction, puduSyncNowAction, puduTestConnectionAction } from "@/app/actions";
+import { puduCallbackSelfTestAction, puduImportRobotsAction, puduSyncNowAction, puduTestConnectionAction } from "@/app/actions";
 import { btn, ResultLine, useAction } from "./ActionButton";
 
 type PuduRobotRow = { sn: string; productCode: string; model: string | null; shopId: string; shopName: string; nickname: string; registered: boolean };
@@ -13,6 +13,9 @@ export function PuduPanel({
   clusterLabel,
   callbackUrl,
   callbackConfigured,
+  callbackPublic,
+  lastCallbackAt,
+  callbacksLast24h,
   shopIds,
   floors,
 }: {
@@ -22,6 +25,9 @@ export function PuduPanel({
   clusterLabel: string | null;
   callbackUrl: string;
   callbackConfigured: boolean;
+  callbackPublic: boolean;
+  lastCallbackAt: string | null;
+  callbacksLast24h: number;
   shopIds: string[];
   floors: { id: string; siteId: string; name: string; siteName: string }[];
 }) {
@@ -64,6 +70,22 @@ export function PuduPanel({
         ))}
       </div>
       <ResultLine result={result} />
+      <div className="border rounded p-2 bg-slate-50 text-xs space-y-1">
+        <div className="font-medium">콜백(알림 수신) 등록</div>
+        <div>
+          등록할 URL: <code className="bg-white border px-1">{callbackUrl}</code>
+          {!callbackPublic && <span className="ml-1 text-amber-800">— 아직 공개 HTTPS 주소가 아닙니다(서버 배포 후 APP_BASE_URL 을 도메인으로). PUDU 는 공개 HTTPS URL 에만 보낼 수 있습니다.</span>}
+        </div>
+        <div>
+          CallbackCode: <b>{callbackConfigured ? "설정됨" : "없음"}</b> · 최근 수신: <b>{lastCallbackAt ? new Date(lastCallbackAt).toLocaleString("ko-KR", { timeZone: "Asia/Seoul" }) : "없음"}</b> · 24시간 {callbacksLast24h}건
+        </div>
+        <div className="text-gray-600">
+          절차: 대리점 플랫폼(VD ROBOTICS 계정) → Application Center → Open Platform 에서 위 URL 을 콜백 주소로 입력 → PUDU 가 callback_code 를 돌려줌 → 서버 .env 의 PUDU_CALLBACK_CODE 에 넣고 재시작 → 아래 자가 점검. 기본적으로 알림은 꺼져 있어 콜백 종류(청소 상태·예약 상태·로봇 상태·온/오프라인·장애)를 함께 신청해야 합니다.
+        </div>
+        <button type="button" className={btn.secondary} disabled={pending || !callbackConfigured} onClick={() => run(() => puduCallbackSelfTestAction())}>
+          콜백 URL 자가 점검
+        </button>
+      </div>
       {robots && (
         <div className="border rounded p-3 bg-slate-50">
           <div className="font-medium mb-1">PUDU 계정의 로봇 {robots.length}대</div>

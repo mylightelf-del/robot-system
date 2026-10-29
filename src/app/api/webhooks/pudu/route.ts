@@ -17,6 +17,8 @@ export async function POST(req: Request) {
   } catch {
     return Response.json({ ok: false, error: "invalid json" }, { status: 400 });
   }
+  // 관리 화면 자가 점검(우리 서버가 자기 URL 로 보낸 것): 저장하지 않고 응답만 한다
+  if ((body as { callback_type?: string })?.callback_type === "selfTest") return Response.json({ ok: true, selfTest: true });
   const traceId = req.headers.get("traceid") ?? req.headers.get("TraceId");
   const result = await ingestPuduCallback(body, traceId);
   return Response.json({ ok: true, stored: result.stored, duplicate: result.duplicate });

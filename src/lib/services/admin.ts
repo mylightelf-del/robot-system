@@ -1,4 +1,4 @@
-import { and, desc, eq, gt, inArray, isNull } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, isNull, sql } from "drizzle-orm";
 import type { CommandType, NotificationRecipient, Role, Severity, User } from "@/lib/domain/types";
 import { assertActive, assertAdmin } from "@/lib/auth/authz";
 import { destroyUserSessions } from "@/lib/auth/session";
@@ -196,6 +196,10 @@ export async function getVendorStatus(user: User) {
   const sync = await db.select().from(schema.vendorSyncState).orderBy(schema.vendorSyncState.id);
   const pendingEvents = await db.select({ id: schema.vendorEvents.id }).from(schema.vendorEvents).where(isNull(schema.vendorEvents.processedAt));
   const recentEvents = await db.select().from(schema.vendorEvents).orderBy(desc(schema.vendorEvents.receivedAt)).limit(10);
+  const [cb] = await db
+    .select({ last: sql<string | null>`max(${schema.vendorEvents.receivedAt})`, day: sql<number>`count(*) filter (where ${schema.vendorEvents.receivedAt} > now() - interval '24 hours')::int` })
+    .from(schema.vendorEvents)
+    .where(eq(schema.vendorEvents.vendor, "PUDU"));
   return {
     modes: vendorModes(),
     pudu: {
@@ -205,6 +209,9 @@ export async function getVendorStatus(user: User) {
       shopIds: parseShopIds(process.env.PUDU_SHOP_IDS),
       callbackConfigured: !!process.env.PUDU_CALLBACK_CODE,
       callbackUrl: `${(process.env.APP_BASE_URL ?? "http://localhost:3000").replace(/\/$/, "")}/api/webhooks/pudu`,
+      callbackPublic: /^https:\/\//.test(process.env.APP_BASE_URL ?? "") && !/localhost|127\.0\.0\.1/.test(process.env.APP_BASE_URL ?? ""),
+      lastCallbackAt: cb?.last ? new Date(cb.last).toISOString() : null,
+      callbacksLast24h: cb?.day ?? 0,
     },
     sync,
     pendingEvents: pendingEvents.length,
@@ -286,4 +293,29 @@ export async function puduImportRobots(user: User, siteId: string, floorId: stri
     n += 1;
   }
   return n;
+}
+
+/**
+ * 콜백 자가 점검: 서버가 자기 공개 URL(APP_BASE_URL)/api/webhooks/pudu 로 CallbackCode 를 붙여 POST 해 본다.
+ * 도메인·Cloudflare·프록시 예외·CallbackCode 가 맞게 설정됐는지 배포 후 확인하는 용도. PUDU 서버를 흉내 낼 뿐 PUDU 에 아무것도 보내지 않는다.
+ */
+export async function puduCallbackSelfTest(user: User): Promise<{ ok: boolean; message: string }> {
+  assertAdmin(user);
+  const code = process.env.PUDU_CALLBACK_CODE;
+  if (!code) throw new ValidationError("PUDU_CALLBACK_CODE 가 서버 .env 에 없습니다. 대리점 플랫폼에서 콜백 URL 을 등록하고 받은 callback_code 를 넣은 뒤 재시작하세요.");
+  const url = `${(process.env.APP_BASE_URL ?? "http://localhost:3000").replace(/\/$/, "")}/api/webhooks/pudu`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 5000);
+  try {
+    const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json", CallbackCode: code, TraceId: `selftest-${Date.now()}` }, body: JSON.stringify({ callback_type: "selfTest", data: { at: nowIso() } }), signal: controller.signal });
+    const body = (await res.json().catch(() => ({}))) as { selfTest?: boolean };
+    const ok = res.status === 200 && body.selfTest === true;
+    await audit(user, { siteId: null, robotId: null, action: "VENDOR:PUDU_CALLBACK_SELFTEST", params: { url }, result: ok ? "OK" : "ERROR", detail: `HTTP ${res.status}`, vendorTraceId: null });
+    return ok ? { ok: true, message: `콜백 URL 자가 점검 통과: ${url} 가 5초 안에 200 을 돌려줍니다(CallbackCode 일치).` } : { ok: false, message: `자가 점검 실패: ${url} → HTTP ${res.status}. 도메인·Cloudflare·프록시 예외·CallbackCode 를 확인하세요.` };
+  } catch (e) {
+    await audit(user, { siteId: null, robotId: null, action: "VENDOR:PUDU_CALLBACK_SELFTEST", params: { url }, result: "ERROR", detail: (e as Error).message, vendorTraceId: null });
+    throw new ValidationError(`자가 점검 실패: ${url} 에 연결할 수 없습니다(${(e as Error).name === "AbortError" ? "5초 초과" : (e as Error).message}).`);
+  } finally {
+    clearTimeout(timer);
+  }
 }

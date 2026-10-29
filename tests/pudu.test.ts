@@ -345,6 +345,10 @@ describe("PUDU 클라이언트·어댑터·워커 (모의 서버)", () => {
     expect(ok.status).toBe(200);
     expect(await ok.json()).toMatchObject({ ok: true, stored: true, duplicate: false });
     expect(await (await post({ CallbackCode: process.env.PUDU_CALLBACK_CODE! })).json()).toMatchObject({ stored: false, duplicate: true });
+    // 관리 화면 자가 점검용 selfTest 는 저장하지 않고 응답만 한다(CallbackCode 는 필요)
+    const self = await POST(new Request("http://localhost/api/webhooks/pudu", { method: "POST", headers: { "Content-Type": "application/json", CallbackCode: process.env.PUDU_CALLBACK_CODE! }, body: JSON.stringify({ callback_type: "selfTest", data: {} }) }));
+    expect(await self.json()).toMatchObject({ ok: true, selfTest: true });
+    expect((await db().select().from(schema.vendorEvents)).some((e) => e.eventType === "selfTest")).toBe(false);
     await processPuduEvents();
     const incs = await db().select().from(schema.incidents).where(eq(schema.incidents.robotId, id));
     expect(incs.filter((i) => i.code === "CleanWaterEmpty").length).toBe(1);

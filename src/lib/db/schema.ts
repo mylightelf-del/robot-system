@@ -43,6 +43,18 @@ const isoTimestamp = customType<{ data: string; driverData: string | Date }>({
   },
 });
 
+const bytea = customType<{ data: Buffer; driverData: Buffer }>({
+  dataType() {
+    return "bytea";
+  },
+  fromDriver(value) {
+    return Buffer.isBuffer(value) ? value : Buffer.from(value as Uint8Array);
+  },
+  toDriver(value) {
+    return value;
+  },
+});
+
 export const sites = pgTable("sites", {
   id: text().primaryKey(),
   name: text().notNull(),
@@ -75,6 +87,21 @@ export const mapVersions = pgTable("map_versions", {
   imageUrl: text(),
   resolution: doublePrecision(),
   origin: jsonb().$type<[number, number] | null>(),
+});
+
+/**
+ * 제조사 지도 이미지 보관. 가져올 때 원본(PUDU S3)을 내려받아 DB 에 두고 /api/maps/<id> 로 서비스한다(원본 URL 이 바뀌거나 막혀도 지도가 비지 않도록).
+ * pg_dump 백업에 함께 포함된다.
+ */
+export const mapImages = pgTable("map_images", {
+  mapVersionId: text()
+    .primaryKey()
+    .references(() => mapVersions.id),
+  contentType: text().notNull(),
+  bytes: bytea().notNull(),
+  size: integer().notNull(),
+  sourceUrl: text().notNull(),
+  fetchedAt: isoTimestamp().notNull(),
 });
 
 export const zones = pgTable("zones", {

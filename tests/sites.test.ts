@@ -6,7 +6,7 @@ import { PuduAdapter } from "@/lib/vendors/pudu/puduAdapter";
 import { syncPuduStatus } from "@/worker/pudu";
 import { puduImportRobots } from "@/lib/services/admin";
 import { relocateRobot } from "@/lib/services/admin";
-import { createFloor, createSite, deleteFloor, deleteSite, importPuduMap, listPuduMapsForSite, polygonAreaM2, renameFloor, updateSite } from "@/lib/services/sites";
+import { createFloor, createSite, deleteFloor, deleteSite, getMapImage, importPuduMap, listPuduMapsForSite, polygonAreaM2, refetchMapImage, renameFloor, updateSite } from "@/lib/services/sites";
 import { getRobotDetail } from "@/lib/services/robots";
 import { worldToPixel } from "@/lib/domain/types";
 import { getDb, resetAndSeed, schema, user } from "./helpers";
@@ -87,11 +87,20 @@ describe("사업장·층·지도 관리(운영 준비)", () => {
     expect(maps.maps.map((m) => m.name)).toEqual(["-1#0#basement", "1#1#lobby"]);
     await expect(importPuduMap(hq, floorId, "nope")).rejects.toThrow();
     const r = await importPuduMap(hq, floorId, "1#1#lobby");
-    expect(r).toMatchObject({ version: 2, zones: 2 });
+    expect(r).toMatchObject({ version: 2, zones: 2, imageStored: true });
     const floor = (await db().query.floors.findFirst({ where: eq(schema.floors.id, floorId) }))!;
     expect(floor.currentMapVersionId).toBe(r.mapVersionId);
     const map = (await db().query.mapVersions.findFirst({ where: eq(schema.mapVersions.id, r.mapVersionId) }))!;
-    expect(map).toMatchObject({ vendor: "PUDU", vendorMapName: "1#1#lobby", imageUrl: "https://example.invalid/maps/lobby.png", widthPx: 1000, heightPx: 800, resolution: 0.05, origin: [-10, -20] });
+    // 이미지는 내려받아 DB 에 보관하고 우리 경로로 서비스한다
+    expect(map).toMatchObject({ vendor: "PUDU", vendorMapName: "1#1#lobby", imageUrl: `/api/maps/${encodeURIComponent(r.mapVersionId)}`, widthPx: 1000, heightPx: 800, resolution: 0.05, origin: [-10, -20] });
+    const img = await getMapImage(hq, r.mapVersionId);
+    expect(img.contentType).toBe("image/png");
+    expect(img.size).toBeGreaterThan(50);
+    expect(img.bytes.subarray(1, 4).toString()).toBe("PNG");
+    // 접근 권한: 이 사업장 권한이 없는 고객사 사용자는 이미지를 받을 수 없다
+    await expect(getMapImage(await user("u-cust-1"), r.mapVersionId)).rejects.toThrow(/권한/);
+    // 다시 받기
+    expect((await refetchMapImage(hq, r.mapVersionId)).size).toBe(img.size);
     expect(map.corners).toEqual({ bl: [-10, -20], tl: [-10, 20], tr: [40, 20], br: [40, -20] });
     const zones = await db().select().from(schema.zones).where(eq(schema.zones.floorId, floorId));
     const lobby = zones.find((z) => z.name === "로비 중앙")!;
@@ -109,13 +118,23 @@ describe("사업장·층·지도 관리(운영 준비)", () => {
     expect(st.raw).toContain("pos=(12.3, -4.5)m");
     const detail = await getRobotDetail(hq, robot.id);
     expect(detail.mapMismatch).toBe(false);
-    expect(detail.map?.imageUrl).toBe("https://example.invalid/maps/lobby.png");
+    expect(detail.map?.imageUrl).toBe(`/api/maps/${encodeURIComponent(r.mapVersionId)}`);
     // 로봇이 다른 지도를 보고하면 불일치
     state.mapName = "2#0#other";
     await syncPuduStatus(new PuduAdapter(api));
     st = (await db().query.robotStatus.findFirst({ where: eq(schema.robotStatus.robotId, robot.id) }))!;
     expect(st.mapVersionId).toBe("pudu:2#0#other");
     expect((await getRobotDetail(hq, robot.id)).mapMismatch).toBe(true);
+    // 이미지 URL 이 죽은 지도: 가져오기는 되지만 보관 실패를 알리고 원격 URL 을 그대로 둔다 → 나중에 다시 받기 시도 가능
+    const { id: f2 } = await createFloor(hq, siteId, "B1");
+    await relocateRobot(hq, robot.id, siteId, f2);
+    const r2 = await importPuduMap(hq, f2, "-1#0#basement");
+    expect(r2.imageStored).toBe(false);
+    expect(r2.imageError).toBeTruthy();
+    expect((await db().query.mapVersions.findFirst({ where: eq(schema.mapVersions.id, r2.mapVersionId) }))!.imageUrl).toBe("http://127.0.0.1:9/maps/none.png");
+    await expect(getMapImage(hq, r2.mapVersionId)).rejects.toThrow(/보관된 지도 이미지가 없습니다/);
+    await expect(refetchMapImage(hq, r2.mapVersionId)).rejects.toThrow(/이미지/);
+    await relocateRobot(hq, robot.id, siteId, floorId);
     // 샘플 지도 층에 있는 로봇은 미터 좌표를 px 로 오인해 그리지 않는다
     await relocateRobot(hq, robot.id, "site-01", "site-01-f1");
     await syncPuduStatus(new PuduAdapter(api));

@@ -79,6 +79,7 @@
   - `robotErrorWarning`(10분 지연 집계, ALL): error_type, error_level(Fatal/Error/Warning/Event), error_id
   - `notifyRobotPose` 는 배송 계열 전용(청소로봇 미지원) → 위치는 상세 조회(polling)로 받는다.
 - 콜백에는 서명이 없고 CallbackCode 만 있다. HTTPS + CallbackCode 비교 + 중복 제거(callback_type+sn+notify_timestamp/timestamp)로 처리한다.
+- 등록 방법(Quick Start Step 4, 2026-10-29 확인): 등록 API 는 없다. 대리점 플랫폼에서 콜백 URL 을 입력하면 PUDU 가 `callback_code` 를 돌려준다. 기본적으로 알림은 꺼져 있어 신청·설정이 필요하다. 5초 초과 시 버리고 최대 3회 재시도.
 
 ## 7. 우리 시스템 설계 결정
 1. **읽기(폴링)**: 워커가 로봇별 상세(`robot/detail`)를 주기 조회(기본 60초, 설정값)해 상태·위치·배터리·청수/오수·진행률을 갱신. 보고서·장애 로그는 10분 주기로 최근 2일 창을 조회해 중복 키(제조사+SN+report_id / error id)로 적재. 등록 작업·예약·소모품은 1시간 주기로 동기화.

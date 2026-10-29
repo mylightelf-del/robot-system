@@ -26,6 +26,7 @@ export interface MockState {
   failNext?: { status: number; message: string; path?: string } | null; // path 를 주면 그 경로의 다음 호출만 실패
   cancelledAt?: number; // 취소(303) 시각 — 실기처럼 잠시 뒤 0(대기)으로 풀린다
   mapName?: string; // 상세 응답의 map.name (기본 1#1#lobby)
+  imageBase?: string; // 모의 서버의 자기 주소(지도 이미지 URL 생성용)
 }
 
 export function defaultState(): MockState {
@@ -65,6 +66,12 @@ export function startMockPudu(state: MockState = defaultState()): Promise<{ url:
         res.writeHead(status, { "Content-Type": "application/json" });
         res.end(JSON.stringify(obj));
       };
+      // 지도 이미지(서명 없이 공개 URL, 실기의 S3 와 같은 역할). 1×1 PNG.
+      if (url.pathname === "/maps/lobby.png") {
+        const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==", "base64");
+        res.writeHead(200, { "Content-Type": "image/png", "Content-Length": png.length });
+        return res.end(png);
+      }
       const auth = String(req.headers["authorization"] ?? "");
       const date = String(req.headers["x-date"] ?? "");
       const md5 = String(req.headers["content-md5"] ?? "");
@@ -102,9 +109,12 @@ export function startMockPudu(state: MockState = defaultState()): Promise<{ url:
         case "/map-service/v1/open/list":
           return ok({ shop_id: Number(MOCK_SHOP), list: [{ name: "1#1#lobby", floor: "1", is_used: 1 }, { name: "-1#0#basement", floor: "-1", is_used: 2 }] });
         case "/map-service/v1/open/map": {
-          if (url.searchParams.get("map_name") !== "1#1#lobby") return send(200, { message: "MAP_NOT_FOUND", trace_id: trace });
+          const mn = url.searchParams.get("map_name");
+          // 이미지 URL 이 죽어 있는 지도(이미지 보관 실패 → 원격 URL 유지 시험)
+          if (mn === "-1#0#basement") return ok({ map_name: mn, map_code: "b", url: "http://127.0.0.1:9/maps/none.png", width: 400, height: 300, resolution: 0.05, origin: [0, 0, 0], element_list: [], zone_list: [] });
+          if (mn !== "1#1#lobby") return send(200, { message: "MAP_NOT_FOUND", trace_id: trace });
           // 실기 구조: 이미지 URL·px 크기·해상도(m/px)·원점(좌하단 월드 좌표 m)·요소(area 는 [x1,y1,x2,y2,…] m)
-          return ok({ map_name: "1#1#lobby", map_code: "abc", url: "https://example.invalid/maps/lobby.png", width: 1000, height: 800, resolution: 0.05, origin: [-10, -20, 0], element_list: [
+          return ok({ map_name: "1#1#lobby", map_code: "abc", url: `${state.imageBase ?? "http://127.0.0.1:9"}/maps/lobby.png`, width: 1000, height: 800, resolution: 0.05, origin: [-10, -20, 0], element_list: [
             { id: "a1", name: "로비 중앙", type: "area", mode: "", vector_list: [0, 0, 10, 0, 10, 5, 0, 5] },
             { id: "a2", name: "", type: "area", mode: "", vector_list: [20, 0, 30, 0, 30, 10] },
             { id: "s1", name: "워크스테이션1", type: "chargeWorkStation", mode: "", vector_list: [-0.4, 0, 0] },
@@ -160,6 +170,7 @@ export function startMockPudu(state: MockState = defaultState()): Promise<{ url:
   return new Promise((resolve) => {
     server.listen(0, "127.0.0.1", () => {
       const addr = server.address() as { port: number };
+      state.imageBase = `http://127.0.0.1:${addr.port}`;
       resolve({ url: `http://127.0.0.1:${addr.port}/pudu-entry`, close: () => new Promise((r) => server.close(() => r())), state });
     });
   });
