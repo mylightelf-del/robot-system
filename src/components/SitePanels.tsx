@@ -5,7 +5,7 @@ import { createFloorAction, createSiteAction, deleteFloorAction, deleteSiteActio
 import { btn, ResultLine, useAction } from "./ActionButton";
 
 type FloorInfo = { id: string; name: string; map: { id: string; version: number; vendor: string | null; vendorMapName: string | null; imageUrl: string | null; widthPx: number; heightPx: number; hasCorners: boolean } | null; zones: number; robots: string[] };
-type SiteInfo = { id: string; name: string; address: string; timezone: string; isSample: boolean; floors: FloorInfo[]; hasPuduRobot: boolean };
+type SiteInfo = { id: string; name: string; address: string; timezone: string; isSample: boolean; installedOn: string | null; floors: FloorInfo[]; hasPuduRobot: boolean };
 
 /** 사업장 추가 폼(본사 관리자). 시간대 기본 Asia/Seoul. */
 export function NewSiteForm() {
@@ -34,6 +34,7 @@ export function SiteCard({ site }: { site: SiteInfo }) {
   const [name, setName] = useState(site.name);
   const [address, setAddress] = useState(site.address);
   const [timezone, setTimezone] = useState(site.timezone);
+  const [installedOn, setInstalledOn] = useState(site.installedOn ?? "");
   const [newFloor, setNewFloor] = useState("");
   const deletable = site.floors.length === 0;
   return (
@@ -43,7 +44,25 @@ export function SiteCard({ site }: { site: SiteInfo }) {
           <input className="border rounded px-2 py-1" value={name} onChange={(e) => setName(e.target.value)} />
           <input className="border rounded px-2 py-1 min-w-[220px]" value={address} onChange={(e) => setAddress(e.target.value)} />
           <input className="border rounded px-2 py-1 w-32" value={timezone} onChange={(e) => setTimezone(e.target.value)} />
-          <button type="button" className={btn.small} disabled={pending} onClick={() => run(async () => { const r = await updateSiteAction(site.id, { name, address, timezone }); if (r.ok) setEditing(false); return r; })}>저장</button>
+          <label className="text-xs text-gray-600 inline-flex items-center gap-1">
+            설치일
+            <input type="date" className="border rounded px-2 py-1" value={installedOn} onChange={(e) => setInstalledOn(e.target.value)} />
+          </label>
+          <button
+            type="button"
+            className={btn.small}
+            disabled={pending}
+            onClick={() =>
+              run(async () => {
+                if (site.installedOn && installedOn !== site.installedOn && !confirm("설치일을 바꾸면 보고서 일정이 새 날짜 기준으로 다시 잡힙니다. 이미 만든 보고서는 그대로 남습니다. 바꿀까요?")) return { ok: false, error: "취소했습니다." };
+                const r = await updateSiteAction(site.id, { name, address, timezone, installedOn: installedOn || null });
+                if (r.ok) setEditing(false);
+                return r;
+              })
+            }
+          >
+            저장
+          </button>
           <button type="button" className={btn.small} onClick={() => setEditing(false)}>취소</button>
         </div>
       ) : (
@@ -51,6 +70,9 @@ export function SiteCard({ site }: { site: SiteInfo }) {
           <div>
             <div className="font-semibold text-navy">{site.name}</div>
             <div className="text-xs text-gray-500">{site.address || "(주소 없음)"} · {site.timezone}{site.isSample ? " · 샘플" : ""} · <span className="font-mono">{site.id}</span></div>
+            <div className="text-xs mt-0.5">
+              설치일 {site.installedOn ? <b>{site.installedOn}</b> : <span className="text-amber-700">미등록 — 보고서 일정이 없습니다(수정에서 입력)</span>}
+            </div>
           </div>
           <div className="ml-auto flex gap-1">
             <button type="button" className={btn.small} onClick={() => setEditing(true)}>수정</button>

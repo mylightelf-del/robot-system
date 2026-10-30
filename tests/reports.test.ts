@@ -2,7 +2,8 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
 import { computeAggregates } from "@/lib/services/reportAggregates";
 import { loadAggregateInput } from "@/lib/services/reportData";
-import { confirmReport, createDraft, getReport, publishReport, recomputeDraft, submitForReview, updateComments } from "@/lib/services/reports";
+import { confirmReport, createNextVersion, getReport, publishReport, recomputeDraft, submitForReview, updateComments } from "@/lib/services/reports";
+import { calendarMonthPeriod } from "@/lib/reports/schedule";
 import { relocateRobot } from "@/lib/services/admin";
 import { ForbiddenError, ValidationError } from "@/lib/util/errors";
 import { addMinutes, localMonthKey, localToUtcIso, nowIso, shiftMonth } from "@/lib/util/time";
@@ -10,9 +11,9 @@ import { getDb, resetAndSeed, schema, user } from "./helpers";
 
 const db = () => getDb();
 const prevMonth = () => shiftMonth(localMonthKey(nowIso()), -1);
-const agg = async (siteId: string, month: string) => computeAggregates(await loadAggregateInput(siteId), siteId, month, nowIso());
+const agg = async (siteId: string, month: string) => computeAggregates(await loadAggregateInput(siteId), siteId, calendarMonthPeriod(month), nowIso());
 
-describe("월간 보고서 집계 · 확정 스냅샷 (DB)", () => {
+describe("보고서 집계 · 확정 스냅샷 (DB)", () => {
   beforeEach(async () => {
     await resetAndSeed();
   });
@@ -78,7 +79,7 @@ describe("월간 보고서 집계 · 확정 스냅샷 (DB)", () => {
     await expect(updateComments(hq, v1.id, { overallOpinion: "변경 시도" })).rejects.toThrow(ValidationError);
     const row = await getReport(hq, v1.id);
     expect(row.lateRuns).toBeGreaterThanOrEqual(1);
-    const v2 = await createDraft(await user("u-site-a"), "site-01", v1.month);
+    const v2 = await createNextVersion(await user("u-site-a"), v1.id);
     expect(v2.version).toBe(2);
     expect(v2.aggregates.totalRuns).toBeGreaterThan(snapshotRuns);
     const v1After = (await db().query.reportVersions.findFirst({ where: eq(schema.reportVersions.id, v1.id) }))!;

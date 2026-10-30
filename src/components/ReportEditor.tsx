@@ -1,19 +1,17 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import type { ReportComments, ReportStatus } from "@/lib/domain/types";
-import { confirmReportAction, createDraftAction, publishReportAction, recomputeDraftAction, returnToDraftAction, submitReviewAction, updateCommentsAction } from "@/app/actions";
+import { commentLabels, type ReportKind } from "@/lib/reports/schedule";
+import { confirmReportAction, createDraftAction, createNextVersionAction, publishReportAction, recomputeDraftAction, returnToDraftAction, submitReviewAction, updateCommentsAction } from "@/app/actions";
 import { ActionButton, btn, ResultLine, useAction } from "./ActionButton";
 
-const FIELDS: { key: keyof ReportComments; label: string; page: number }[] = [
-  { key: "overallOpinion", label: "종합 의견 (1쪽)", page: 1 },
-  { key: "incompleteReasons", label: "미완료 사유 (2쪽)", page: 2 },
-  { key: "improvements", label: "개선 사항 (4쪽)", page: 4 },
-  { key: "focusZones", label: "집중 관리 구역 (4쪽)", page: 4 },
-  { key: "nextMonthPlan", label: "차월 계획 (4쪽)", page: 4 },
-];
+const KEYS: (keyof ReportComments)[] = ["overallOpinion", "incompleteReasons", "improvements", "focusZones", "nextMonthPlan"];
 
-export function CommentsEditor({ reportId, comments, editable }: { reportId: string; comments: ReportComments; editable: boolean }) {
+export function CommentsEditor({ reportId, kind, comments, editable }: { reportId: string; kind: ReportKind; comments: ReportComments; editable: boolean }) {
+  const labels = commentLabels(kind);
+  const FIELDS = KEYS.map((key) => ({ key, label: labels[key] }));
   const [c, setC] = useState(comments);
   const { pending, result, run } = useAction();
   if (!editable) {
@@ -74,13 +72,21 @@ export function ReportWorkflow({ reportId, status, canEdit, canConfirm, lateRuns
 
 function NewVersionButton({ reportId, lateRuns }: { reportId: string; lateRuns: number }) {
   const { pending, result, run } = useAction();
-  const [siteId, month] = (() => {
-    const m = reportId.match(/^rpt-(site-\d+)-(\d{4}-\d{2})-v\d+$/);
-    return m ? [m[1], m[2]] : ["", ""];
-  })();
+  const router = useRouter();
   return (
     <span className="inline-flex flex-col">
-      <button type="button" className={btn.secondary} disabled={pending || !siteId} onClick={() => run(() => createDraftAction(siteId, month))}>
+      <button
+        type="button"
+        className={btn.secondary}
+        disabled={pending}
+        onClick={() =>
+          run(async () => {
+            const r = await createNextVersionAction(reportId);
+            if (r.ok && r.id) router.push(`/reports/${r.id}`);
+            return r;
+          })
+        }
+      >
         늦은 실적 {lateRuns}건 반영 — 새 버전 작성
       </button>
       <ResultLine result={result} />
@@ -89,24 +95,27 @@ function NewVersionButton({ reportId, lateRuns }: { reportId: string; lateRuns: 
   );
 }
 
-export function NewDraftForm({ sites, defaultMonth }: { sites: { id: string; name: string }[]; defaultMonth: string }) {
+/** 보고서 일정표의 "초안 만들기" — 자동 작성일 전이라도 기간이 시작됐으면 미리 만들 수 있다. */
+export function CreateScheduledDraftButton({ siteId, periodKey, label }: { siteId: string; periodKey: string; label: string }) {
   const { pending, result, run } = useAction();
-  const [siteId, setSiteId] = useState(sites[0]?.id ?? "");
-  const [month, setMonth] = useState(defaultMonth);
+  const router = useRouter();
   return (
-    <div className="flex flex-wrap gap-2 items-center text-sm">
-      <select className="border rounded px-2 py-1" value={siteId} onChange={(e) => setSiteId(e.target.value)}>
-        {sites.map((s) => (
-          <option key={s.id} value={s.id}>
-            {s.name}
-          </option>
-        ))}
-      </select>
-      <input type="month" className="border rounded px-2 py-1" value={month} onChange={(e) => setMonth(e.target.value)} />
-      <button type="button" className={btn.primary} disabled={pending || !siteId} onClick={() => run(() => createDraftAction(siteId, month))}>
-        초안 생성(자동 집계)
+    <span className="inline-flex flex-col items-start">
+      <button
+        type="button"
+        className={btn.small}
+        disabled={pending}
+        onClick={() =>
+          run(async () => {
+            const r = await createDraftAction(siteId, periodKey);
+            if (r.ok && r.id) router.push(`/reports/${r.id}`);
+            return r;
+          })
+        }
+      >
+        {label}
       </button>
       <ResultLine result={result} />
-    </div>
+    </span>
   );
 }

@@ -133,10 +133,16 @@ export async function createScheduleAction(input: { taskId: string; daysOfWeek: 
 }
 
 // ---- 보고서 ----
-export async function createDraftAction(siteId: string, month: string): Promise<ActionResult> {
+export async function createDraftAction(siteId: string, periodKey: string): Promise<ActionResult> {
   return run(async () => {
-    const r = await reports.createDraft(await getCurrentUser(), siteId, month);
+    const r = await reports.createDraft(await getCurrentUser(), siteId, periodKey);
     return { id: r.id, message: `초안 v${r.version} 생성` };
+  });
+}
+export async function createNextVersionAction(reportId: string): Promise<ActionResult> {
+  return run(async () => {
+    const r = await reports.createNextVersion(await getCurrentUser(), reportId);
+    return { id: r.id, message: `새 버전 v${r.version} 생성` };
   });
 }
 export async function recomputeDraftAction(id: string): Promise<ActionResult> {
@@ -239,7 +245,7 @@ export async function createSiteAction(input: { name: string; address: string; t
     return { message: `사업장 '${input.name}' 을(를) 만들었습니다. 층을 추가하세요.`, id: r.id };
   });
 }
-export async function updateSiteAction(siteId: string, input: { name?: string; address?: string; timezone?: string }): Promise<ActionResult> {
+export async function updateSiteAction(siteId: string, input: { name?: string; address?: string; timezone?: string; installedOn?: string | null }): Promise<ActionResult> {
   return run(async () => {
     await sitesSvc.updateSite(await getCurrentUser(), siteId, input);
     return { message: "사업장 정보를 저장했습니다." };

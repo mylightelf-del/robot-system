@@ -69,6 +69,7 @@ export default async function AdminPage() {
                   address: s.address,
                   timezone: s.timezone,
                   isSample: s.isSample,
+                  installedOn: s.installedOn ?? null,
                   hasPuduRobot: d.robots.some((r) => r.siteId === s.id && r.vendor === "PUDU" && r.vendorMeta?.source === "api"),
                   floors: d.floors
                     .filter((f) => f.siteId === s.id)

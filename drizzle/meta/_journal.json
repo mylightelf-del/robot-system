@@ -43,6 +43,13 @@
       "when": 1793272462097,
       "tag": "0005_ops_indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1793367245625,
+      "tag": "0006_report_schedule",
+      "breakpoints": true
     }
   ]
 }

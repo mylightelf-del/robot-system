@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { getCurrentUser } from "@/lib/auth/session";
-import { listReports, listRuns } from "@/lib/services/reports";
+import { getReportSchedule, listReports, listRuns, type ScheduleRow } from "@/lib/services/reports";
 import { listSites } from "@/lib/services/robots";
 import { listPlannedRuns } from "@/lib/services/tasks";
 import { canEditReports, isCustomer } from "@/lib/auth/authz";
@@ -9,8 +9,9 @@ import { Card, Empty, PageTitle, Stat } from "@/components/ui";
 import { AccessDenied } from "@/components/AccessDenied";
 import { SiteFilter } from "@/components/SiteFilter";
 import { ReportStatusBadge } from "@/components/StatusBadge";
-import { NewDraftForm } from "@/components/ReportEditor";
+import { ReportScheduleTable } from "@/components/ReportSchedule";
 import { formatDateTime, localMonthKey, localToUtcIso, monthLabel, nowIso, shiftMonth } from "@/lib/util/time";
+import { periodText, reportTitle } from "@/lib/reports/schedule";
 import { RUN_RESULT_LABEL } from "@/lib/domain/status";
 
 function monthRange(month: string): { fromIso: string; toIso: string } {
@@ -38,6 +39,21 @@ export default async function ReportsPage({ searchParams }: { searchParams: Prom
   const customer = isCustomer(user);
   const editor = canEditReports(user);
 
+  // 보고서 일정(담당자): 사업장을 고르면 그 사업장 전체 일정, 전체 보기에서는 사업장별 처리할 보고서만
+  let siteSchedule: Awaited<ReturnType<typeof getReportSchedule>> | null = null;
+  const todo: (ScheduleRow & { siteId: string; siteName: string })[] = [];
+  const noInstall: string[] = [];
+  if (editor) {
+    if (site) siteSchedule = await getReportSchedule(user, site);
+    else
+      for (const s of sites) {
+        const sc = await getReportSchedule(user, s.id);
+        if (!sc.installedOn) noInstall.push(s.name);
+        for (const r of sc.rows) if (r.state === "NEEDS_DRAFT" || r.state === "DRAFT" || r.state === "REVIEW" || r.state === "CONFIRMED") todo.push({ ...r, siteId: s.id, siteName: s.name });
+      }
+  }
+  const siteName = site ? sites.find((s) => s.id === site)?.name : undefined;
+
   // 화면 요약(계획 대비 실적) — 보고서 스냅샷과 별개로 현재 데이터 기준
   const validPlanned = planned.filter((p) => p.status !== "CANCELLED" && p.status !== "EXCLUDED" && !(p.status === "PLANNED" && p.plannedAt > now));
   const completedPlanned = validPlanned.filter((p) => p.status === "DONE" && p.runResult === "COMPLETED");
@@ -50,7 +66,7 @@ export default async function ReportsPage({ searchParams }: { searchParams: Prom
     <>
       <PageTitle
         title="실적·보고서"
-        subtitle={customer ? "확정·공개된 월간 보고서와 자기 사업장 실적만 표시됩니다." : "계획 대비 실적 조회와 월간 보고서 초안 → 검토 → 확정 → 고객 공개"}
+        subtitle={customer ? "확정·공개된 보고서와 자기 사업장 실적만 표시됩니다." : "설치일 기준 보고서 일정(설치·일간·주간·월간) · 초안 → 검토 → 확정 → 고객 공개"}
         right={
           <div className="flex flex-wrap gap-2 items-center">
             <SiteFilter sites={sites} current={site ?? ""} basePath="/reports" extra={`month=${month}`} />
@@ -65,6 +81,43 @@ export default async function ReportsPage({ searchParams }: { searchParams: Prom
         }
       />
 
+      {editor && (
+        <Card
+          className="mb-4"
+          title={site ? `보고서 일정 — ${siteName ?? site}` : "처리할 보고서"}
+          right={<span className="text-xs text-gray-500">설치 완료 → 일간 D+1~D+6 → 주간 D+7·14·21 → 월간(매월 설치일)</span>}
+        >
+          {site && siteSchedule ? (
+            siteSchedule.installedOn ? (
+              <>
+                <p className="text-xs text-gray-600 mb-2">
+                  설치일 <b>{siteSchedule.installedOn}</b> 기준. 초안은 대상 기간 다음 날 06시에 자동 작성됩니다(설치 완료보고서는 설치 당일). 기간이 진행 중이면 미리 작성해 두고 재집계로 갱신할 수 있습니다.
+                </p>
+                <ReportScheduleTable siteId={site} rows={siteSchedule.rows} canEdit={editor} />
+                {siteSchedule.others.length > 0 && (
+                  <p className="text-xs text-gray-500 mt-2">
+                    일정 밖 보고서(설치일 변경 전·달력 월 등):{" "}
+                    {siteSchedule.others.map((o) => (
+                      <Link key={o.id} href={`/reports/${o.id}`} className="underline mr-2">
+                        {reportTitle(o)} ({periodText(o)})
+                      </Link>
+                    ))}
+                  </p>
+                )}
+              </>
+            ) : (
+              <Empty>이 사업장은 설치일이 등록되지 않아 보고서 일정이 없습니다. 관리 설정 → 사업장·층에서 설치일을 입력하세요.</Empty>
+            )
+          ) : (
+            <>
+              {todo.length === 0 ? <Empty>작성·검토·공개를 기다리는 보고서가 없습니다.</Empty> : <ReportScheduleTable siteId="" rows={todo} canEdit={editor} showSite />}
+              {noInstall.length > 0 && <p className="text-xs text-gray-500 mt-2">설치일 미등록(일정 없음): {noInstall.join(", ")} — 관리 설정에서 입력</p>}
+              <p className="text-xs text-gray-500 mt-1">사업장을 고르면 전체 일정을 볼 수 있습니다.</p>
+            </>
+          )}
+        </Card>
+      )}
+
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
         <Stat label={`${monthLabel(month)} 계획 완료율`} value={rate === null ? "해당 없음" : `${rate}%`} hint={`정상 완료 ${completedPlanned.length} / 유효 계획 ${validPlanned.length}`} />
         <Stat label="실제 작업 건수" value={runs.length} hint={`즉시·원격 지시 ${adhoc}건 별도`} />
@@ -73,20 +126,16 @@ export default async function ReportsPage({ searchParams }: { searchParams: Prom
       </div>
 
       <div className="grid lg:grid-cols-2 gap-4">
-        <Card title="월간 보고서" right={<span className="text-xs text-gray-500">{reports.length}건</span>}>
-          {editor && (
-            <div className="mb-3 border rounded p-3 bg-slate-50">
-              <NewDraftForm sites={sites.map((s) => ({ id: s.id, name: s.name }))} defaultMonth={shiftMonth(thisMonth, -1)} />
-            </div>
-          )}
+        <Card className="min-w-0" title="보고서" right={<span className="text-xs text-gray-500">{reports.length}건</span>}>
           {reports.length === 0 ? (
-            <Empty>{customer ? "공개된 보고서가 없습니다." : "보고서가 없습니다. 초안을 생성하세요."}</Empty>
+            <Empty>{customer ? "공개된 보고서가 없습니다." : "보고서가 없습니다. 위 일정에서 초안을 만드세요."}</Empty>
           ) : (
             <div className="overflow-x-auto">
               <table className="data">
                 <thead>
                   <tr>
-                    <th>월</th>
+                    <th>보고서</th>
+                    <th>기간</th>
                     <th>사업장</th>
                     <th>버전</th>
                     <th>상태</th>
@@ -97,12 +146,13 @@ export default async function ReportsPage({ searchParams }: { searchParams: Prom
                 <tbody>
                   {reports.map((r) => (
                     <tr key={r.id}>
-                      <td className="whitespace-nowrap">{monthLabel(r.month)}</td>
-                      <td>
+                      <td className="whitespace-nowrap">
                         <Link href={`/reports/${r.id}`} className="text-navy font-medium hover:underline">
-                          {r.siteName}
+                          {r.title}
                         </Link>
                       </td>
+                      <td className="whitespace-nowrap text-xs">{periodText(r)}</td>
+                      <td>{r.siteName}</td>
                       <td>v{r.version}{r.isLatestVersion ? "" : <span className="text-xs text-gray-400"> (이전)</span>}</td>
                       <td><ReportStatusBadge status={r.status} /></td>
                       <td>{r.aggregates.completionRatePct === null ? "해당 없음" : `${r.aggregates.completionRatePct}%`}</td>
@@ -118,7 +168,7 @@ export default async function ReportsPage({ searchParams }: { searchParams: Prom
           )}
         </Card>
 
-        <Card title={`${monthLabel(month)} 실적 (최근 40건)`} right={<span className="text-xs text-gray-500">총 {runs.length}건</span>}>
+        <Card className="min-w-0" title={`${monthLabel(month)} 실적 (최근 40건)`} right={<span className="text-xs text-gray-500">총 {runs.length}건</span>}>
           {runs.length === 0 ? (
             <Empty>이 기간의 실적이 없습니다.</Empty>
           ) : (

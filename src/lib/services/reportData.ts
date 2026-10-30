@@ -16,6 +16,9 @@ export async function loadAggregateInput(siteId: string, db: DbLike = getDb()): 
   const plannedRuns = await db.select().from(schema.plannedRuns).where(eq(schema.plannedRuns.siteId, siteId));
   const incidents = await assembleIncidents(await db.select().from(schema.incidents).where(eq(schema.incidents.siteId, siteId)), db);
   const inspections = await db.select().from(schema.inspections).where(eq(schema.inspections.siteId, siteId));
+  const mapVersions = floorIds.length ? await db.select().from(schema.mapVersions).where(inArray(schema.mapVersions.floorId, floorIds)) : [];
+  const tasks = await db.select().from(schema.registeredTasks).where(eq(schema.registeredTasks.siteId, siteId));
+  const schedules = tasks.length ? await db.select().from(schema.schedules).where(inArray(schema.schedules.taskId, tasks.map((t) => t.id))) : [];
   return {
     sites,
     floors,
@@ -26,5 +29,8 @@ export async function loadAggregateInput(siteId: string, db: DbLike = getDb()): 
     plannedRuns,
     incidents,
     inspections,
+    mapVersions,
+    tasks,
+    schedules,
   };
 }

@@ -33,7 +33,7 @@ export default async function DashboardPage() {
       </div>
 
       <div className="grid lg:grid-cols-3 gap-4">
-        <Card title="사업장별 현황" className="lg:col-span-2">
+        <Card title="사업장별 현황" className="lg:col-span-2 min-w-0">
           {dash.sites.length === 0 ? (
             <Empty>접근 가능한 사업장이 없습니다.</Empty>
           ) : (
@@ -87,7 +87,7 @@ export default async function DashboardPage() {
           )}
         </Card>
 
-        <div className="space-y-4">
+        <div className="space-y-4 min-w-0">
           <Card title="미조치 장애" right={<Link href="/incidents" className="text-xs text-navy hover:underline">전체 보기</Link>}>
             {incidents.length === 0 ? (
               <Empty>미조치 장애가 없습니다.</Empty>

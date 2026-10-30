@@ -1,38 +1,52 @@
-import { and, desc, eq, gt, gte, inArray, lte, sql } from "drizzle-orm";
-import type { ActualRun, ReportComments, ReportVersion, User } from "@/lib/domain/types";
+import { and, desc, eq, gt, gte, inArray, lt, lte, sql } from "drizzle-orm";
+import type { ActualRun, ReportComments, ReportStatus, ReportVersion, User } from "@/lib/domain/types";
 import { accessibleSiteIds, assertActive, assertSiteAccess, canConfirmReports, canEditReports, isCustomer } from "@/lib/auth/authz";
 import { getDb, schema } from "@/lib/db/client";
 import { getSite, listSitesByIds, type DbLike } from "@/lib/db/repo";
 import { ForbiddenError, NotFoundError, ValidationError } from "@/lib/util/errors";
-import { localToUtcIso, nowIso, shiftMonth } from "@/lib/util/time";
+import { localDateKey, localHourMinute, localToUtcIso, nowIso } from "@/lib/util/time";
+import { addDays, DRAFT_HOUR, parsePeriodKey, periodKey, reportSchedule, reportTitle, type ReportPeriod, type ScheduledReport } from "@/lib/reports/schedule";
 import { audit } from "./audit";
 import { computeAggregates } from "./reportAggregates";
 import { loadAggregateInput } from "./reportData";
 
 export interface ReportRow extends ReportVersion {
+  title: string;
   siteName: string;
-  lateRuns: number; // 집계 이후 수신된 해당 월 실적 건수
+  siteIsSample: boolean;
+  lateRuns: number; // 집계 이후 수신된 해당 기간 실적 건수
   isLatestVersion: boolean;
 }
 
-function monthRangeFor(month: string, tz: string): { fromIso: string; toIso: string } {
-  return { fromIso: localToUtcIso(`${month}-01`, "00:00", tz), toIso: localToUtcIso(`${shiftMonth(month, 1)}-01`, "00:00", tz) };
+/** 자동 작성 주체(워커). 감사 기록·작성자 표시에 쓴다. */
+export const SYSTEM_ACTOR = { id: "system", name: "시스템(자동 작성)" } as const;
+/** 워커가 지난 일정을 자동으로 채우는 범위(일). 그보다 오래된 일정은 화면에서 직접 만든다. */
+export const AUTO_DRAFT_LOOKBACK_DAYS = 7;
+
+function periodRangeIso(p: Pick<ReportPeriod, "periodStart" | "periodEnd">, tz: string): { fromIso: string; toIso: string } {
+  return { fromIso: localToUtcIso(p.periodStart, "00:00", tz), toIso: localToUtcIso(addDays(p.periodEnd, 1), "00:00", tz) };
 }
+
+const samePeriod = (p: Pick<ReportPeriod, "kind" | "periodStart" | "periodEnd">) =>
+  and(eq(schema.reportVersions.kind, p.kind), eq(schema.reportVersions.periodStart, p.periodStart), eq(schema.reportVersions.periodEnd, p.periodEnd));
 
 async function lateRunsFor(r: ReportVersion, db: DbLike): Promise<number> {
   const site = (await getSite(r.siteId, db))!;
-  const { fromIso, toIso } = monthRangeFor(r.month, site.timezone);
+  const { fromIso, toIso } = periodRangeIso(r, site.timezone);
   const [row] = await db
     .select({ n: sql<number>`count(*)::int` })
     .from(schema.actualRuns)
-    .where(and(eq(schema.actualRuns.siteId, r.siteId), gte(schema.actualRuns.startedAt, fromIso), lte(schema.actualRuns.startedAt, toIso), gt(schema.actualRuns.receivedAt, r.aggregates.generatedAt)));
+    .where(and(eq(schema.actualRuns.siteId, r.siteId), gte(schema.actualRuns.startedAt, fromIso), lt(schema.actualRuns.startedAt, toIso), gt(schema.actualRuns.receivedAt, r.aggregates.generatedAt)));
   return row?.n ?? 0;
 }
 
 async function toRow(r: ReportVersion, db: DbLike): Promise<ReportRow> {
-  const [latest] = await db.select({ v: sql<number>`max(${schema.reportVersions.version})::int` }).from(schema.reportVersions).where(and(eq(schema.reportVersions.siteId, r.siteId), eq(schema.reportVersions.month, r.month)));
+  const [latest] = await db
+    .select({ v: sql<number>`max(${schema.reportVersions.version})::int` })
+    .from(schema.reportVersions)
+    .where(and(eq(schema.reportVersions.siteId, r.siteId), samePeriod(r)));
   const site = await getSite(r.siteId, db);
-  return { ...r, siteName: site?.name ?? r.siteId, lateRuns: await lateRunsFor(r, db), isLatestVersion: r.version === (latest?.v ?? r.version) };
+  return { ...r, title: reportTitle(r), siteName: site?.name ?? r.siteId, siteIsSample: site?.isSample ?? false, lateRuns: await lateRunsFor(r, db), isLatestVersion: r.version === (latest?.v ?? r.version) };
 }
 
 /** 고객은 확정·공개본만 본다. 초안·검토본은 목록에도 나오지 않는다. */
@@ -48,7 +62,7 @@ export async function listReports(user: User, siteId?: string): Promise<ReportRo
     .select()
     .from(schema.reportVersions)
     .where(and(inArray(schema.reportVersions.siteId, ids), customer ? eq(schema.reportVersions.status, "PUBLISHED") : undefined))
-    .orderBy(desc(schema.reportVersions.month), schema.reportVersions.siteId, desc(schema.reportVersions.version));
+    .orderBy(desc(schema.reportVersions.periodEnd), schema.reportVersions.siteId, desc(schema.reportVersions.kind), desc(schema.reportVersions.version));
   const out: ReportRow[] = [];
   for (const r of rows) out.push(await toRow(r, db));
   return out;
@@ -69,14 +83,14 @@ export async function getReport(user: User, reportId: string): Promise<ReportRow
   return toRow(r, db);
 }
 
-/** 같은 사업장·월의 버전 목록(고객은 공개본만). */
-export async function listVersions(user: User, siteId: string, month: string): Promise<ReportVersion[]> {
+/** 같은 사업장·기간의 버전 목록(고객은 공개본만). */
+export async function listVersions(user: User, siteId: string, period: Pick<ReportPeriod, "kind" | "periodStart" | "periodEnd">): Promise<ReportVersion[]> {
   const db = getDb();
   await assertSiteAccess(user, siteId, db);
   return db
     .select()
     .from(schema.reportVersions)
-    .where(and(eq(schema.reportVersions.siteId, siteId), eq(schema.reportVersions.month, month), isCustomer(user) ? eq(schema.reportVersions.status, "PUBLISHED") : undefined))
+    .where(and(eq(schema.reportVersions.siteId, siteId), samePeriod(period), isCustomer(user) ? eq(schema.reportVersions.status, "PUBLISHED") : undefined))
     .orderBy(schema.reportVersions.version);
 }
 
@@ -84,13 +98,11 @@ function emptyComments(): ReportComments {
   return { overallOpinion: "", incompleteReasons: "", improvements: "", focusZones: "", nextMonthPlan: "" };
 }
 
-/** 초안 생성(자동 집계). 같은 월에 확정본이 있으면 새 버전으로 만든다. */
-export async function createDraft(user: User, siteId: string, month: string): Promise<ReportVersion> {
-  const db = getDb();
-  await assertSiteAccess(user, siteId, db);
-  if (!canEditReports(user)) throw new ForbiddenError("보고서 작성은 현장/본사 담당자만 할 수 있습니다.");
-  if (!/^\d{4}-\d{2}$/.test(month)) throw new ValidationError("월은 YYYY-MM 형식입니다.");
-  const existing = await db.select().from(schema.reportVersions).where(and(eq(schema.reportVersions.siteId, siteId), eq(schema.reportVersions.month, month))).orderBy(desc(schema.reportVersions.version));
+/**
+ * 버전 작성(공통). 같은 기간에 작성 중(초안·검토)인 버전이 있으면 거절한다. 확정본이 있으면 새 버전으로 만들고 기존 확정본은 그대로 둔다.
+ */
+async function createVersion(actor: Pick<User, "id" | "name">, siteId: string, period: ReportPeriod, db: DbLike, note?: string): Promise<ReportVersion> {
+  const existing = await db.select().from(schema.reportVersions).where(and(eq(schema.reportVersions.siteId, siteId), samePeriod(period))).orderBy(desc(schema.reportVersions.version));
   const openDraft = existing.find((r) => r.status === "DRAFT" || r.status === "REVIEW");
   if (openDraft) throw new ValidationError("이미 작성 중인 초안/검토본이 있습니다. 그 버전을 이어서 작업하세요.");
   const version = existing.length ? existing[0].version + 1 : 1;
@@ -98,15 +110,18 @@ export async function createDraft(user: User, siteId: string, month: string): Pr
   const now = nowIso();
   const input = await loadAggregateInput(siteId, db);
   const r: ReportVersion = {
-    id: `rpt-${siteId}-${month}-v${version}`,
+    id: `rpt-${siteId}-${period.kind.toLowerCase()}-${period.periodStart}-${period.periodEnd}-v${version}`,
     siteId,
-    month,
+    kind: period.kind,
+    seq: period.seq,
+    periodStart: period.periodStart,
+    periodEnd: period.periodEnd,
     version,
     status: "DRAFT",
-    aggregates: computeAggregates(input, siteId, month, now),
+    aggregates: computeAggregates(input, siteId, period, now),
     comments: prev ? { ...prev.comments } : emptyComments(),
     createdAt: now,
-    createdBy: user.id,
+    createdBy: actor.id,
     reviewedAt: null,
     reviewedBy: null,
     confirmedAt: null,
@@ -114,8 +129,117 @@ export async function createDraft(user: User, siteId: string, month: string): Pr
     publishedAt: null,
   };
   await db.insert(schema.reportVersions).values(r);
-  await audit(user, { siteId, robotId: null, action: "REPORT:CREATE_DRAFT", params: { month, version }, result: "OK", detail: prev ? `기존 v${prev.version} 은 유지, 새 버전 작성` : null, vendorTraceId: null }, db);
+  await audit(
+    actor,
+    { siteId, robotId: null, action: "REPORT:CREATE_DRAFT", params: { kind: period.kind, seq: period.seq, periodStart: period.periodStart, periodEnd: period.periodEnd, version }, result: "OK", detail: note ?? (prev ? `기존 v${prev.version} 은 유지, 새 버전 작성` : null), vendorTraceId: null },
+    db,
+  );
   return r;
+}
+
+function todayAt(site: { timezone: string }, now: string): string {
+  return localDateKey(now, site.timezone);
+}
+
+/**
+ * 일정에 있는 보고서의 초안을 만든다(자동 집계). periodKey 는 보고서 일정 화면이 넘겨준 "종류:시작~끝".
+ * 기간이 시작된 일정만 만들 수 있다(진행 중인 기간은 오늘까지의 실적으로 미리 작성 → 재집계로 갱신).
+ */
+export async function createDraft(user: User, siteId: string, key: string): Promise<ReportVersion> {
+  const db = getDb();
+  await assertSiteAccess(user, siteId, db);
+  if (!canEditReports(user)) throw new ForbiddenError("보고서 작성은 현장/본사 담당자만 할 수 있습니다.");
+  const site = await getSite(siteId, db);
+  if (!site) throw new NotFoundError("사업장을 찾을 수 없습니다.");
+  if (!site.installedOn) throw new ValidationError("사업장 설치일이 등록되지 않았습니다. 관리 설정에서 설치일을 먼저 입력하세요.");
+  const parsed = parsePeriodKey(key);
+  if (!parsed) throw new ValidationError("보고서 기간 형식이 올바르지 않습니다.");
+  const today = todayAt(site, nowIso());
+  const entry = reportSchedule(site.installedOn, addDays(today, 40)).find((e) => periodKey(e) === key);
+  if (!entry) throw new ValidationError("설치일 기준 보고서 일정에 없는 기간입니다.");
+  if (entry.periodStart > today) throw new ValidationError("아직 시작되지 않은 기간입니다.");
+  return createVersion(user, siteId, entry, db);
+}
+
+/** 확정·공개본 이후 늦게 들어온 실적을 반영하는 새 버전(같은 기간). */
+export async function createNextVersion(user: User, reportId: string): Promise<ReportVersion> {
+  const db = getDb();
+  const r = await db.query.reportVersions.findFirst({ where: eq(schema.reportVersions.id, reportId) });
+  if (!r) throw new NotFoundError();
+  await assertSiteAccess(user, r.siteId, db);
+  if (!canEditReports(user)) throw new ForbiddenError("보고서 작성은 현장/본사 담당자만 할 수 있습니다.");
+  return createVersion(user, r.siteId, r, db);
+}
+
+/**
+ * 워커: 설치일이 있는 사업장마다 초안 자동 작성일이 된 일정을 만든다(멱등).
+ * - 설치 완료보고서는 설치 당일, 나머지는 기간 다음 날 DRAFT_HOUR 시(현지) 이후.
+ * - 최근 AUTO_DRAFT_LOOKBACK_DAYS 일 안의 일정만 채운다(설치일을 과거로 입력해도 지난 보고서가 쏟아지지 않도록).
+ * - 이미 어떤 버전이든 있으면 건너뛴다.
+ */
+export async function autoCreateScheduledDrafts(now: string = nowIso(), db: DbLike = getDb()): Promise<{ created: string[] }> {
+  const sites = await db.select().from(schema.sites);
+  const created: string[] = [];
+  for (const site of sites) {
+    if (!site.installedOn) continue;
+    const today = todayAt(site, now);
+    const hour = Number(localHourMinute(now, site.timezone).slice(0, 2));
+    const due = reportSchedule(site.installedOn, today).filter(
+      (e) => e.draftOn >= addDays(today, -AUTO_DRAFT_LOOKBACK_DAYS) && (e.kind === "INSTALLATION" || e.draftOn < today || hour >= DRAFT_HOUR),
+    );
+    for (const e of due) {
+      const [row] = await db
+        .select({ n: sql<number>`count(*)::int` })
+        .from(schema.reportVersions)
+        .where(and(eq(schema.reportVersions.siteId, site.id), samePeriod(e)));
+      if ((row?.n ?? 0) > 0) continue;
+      const r = await createVersion(SYSTEM_ACTOR, site.id, e, db, "일정에 따라 자동 작성");
+      created.push(r.id);
+    }
+  }
+  return { created };
+}
+
+export type ScheduleState = "UPCOMING" | "IN_PROGRESS" | "NEEDS_DRAFT" | ReportStatus;
+
+export interface ScheduleRow extends ScheduledReport {
+  key: string;
+  title: string;
+  state: ScheduleState;
+  reportId: string | null;
+  version: number | null;
+}
+
+/** 사업장 보고서 일정표(담당자용): 지난 일정 + 다음 예정 일부, 각 일정의 최신 버전 상태. */
+export async function getReportSchedule(user: User, siteId: string, now: string = nowIso()): Promise<{ installedOn: string | null; today: string; rows: ScheduleRow[]; others: ReportVersion[] }> {
+  const db = getDb();
+  await assertSiteAccess(user, siteId, db);
+  if (!canEditReports(user)) throw new ForbiddenError("보고서 일정은 현장/본사 담당자만 볼 수 있습니다.");
+  const site = await getSite(siteId, db);
+  if (!site) throw new NotFoundError();
+  const today = todayAt(site, now);
+  const reports = await db.select().from(schema.reportVersions).where(eq(schema.reportVersions.siteId, siteId)).orderBy(desc(schema.reportVersions.version));
+  if (!site.installedOn) return { installedOn: null, today, rows: [], others: reports };
+  const all = reportSchedule(site.installedOn, addDays(today, 62));
+  const past = all.filter((e) => e.periodStart <= today);
+  const future = all.filter((e) => e.periodStart > today).slice(0, 2);
+  const keys = new Set<string>();
+  const rows: ScheduleRow[] = [...past, ...future].map((e) => {
+    const key = periodKey(e);
+    keys.add(key);
+    const latest = reports.find((r) => periodKey(r) === key);
+    const state: ScheduleState = latest ? latest.status : e.periodStart > today ? "UPCOMING" : e.draftOn > today ? "IN_PROGRESS" : "NEEDS_DRAFT";
+    return { ...e, key, title: reportTitle(e), state, reportId: latest?.id ?? null, version: latest?.version ?? null };
+  });
+  // 설치일 변경 전 일정·달력 월 보고서 등 현재 일정에 없는 보고서(최신 버전만)
+  const seen = new Set<string>();
+  const others = reports.filter((r) => {
+    const k = periodKey(r);
+    if (keys.has(k) || seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+  return { installedOn: site.installedOn, today, rows, others };
 }
 
 async function loadEditable(user: User, reportId: string, db: DbLike): Promise<ReportVersion> {
@@ -131,7 +255,7 @@ export async function recomputeDraft(user: User, reportId: string): Promise<void
   const db = getDb();
   const r = await loadEditable(user, reportId, db);
   if (r.status !== "DRAFT" && r.status !== "REVIEW") throw new ValidationError("확정된 보고서는 재집계할 수 없습니다. 새 버전을 작성하세요.");
-  const aggregates = computeAggregates(await loadAggregateInput(r.siteId, db), r.siteId, r.month, nowIso());
+  const aggregates = computeAggregates(await loadAggregateInput(r.siteId, db), r.siteId, r, nowIso());
   await db.update(schema.reportVersions).set({ aggregates }).where(eq(schema.reportVersions.id, reportId));
   await audit(user, { siteId: r.siteId, robotId: null, action: "REPORT:RECOMPUTE", params: { reportId }, result: "OK", detail: null, vendorTraceId: null }, db);
 }

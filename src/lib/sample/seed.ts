@@ -29,6 +29,7 @@ import { emptyStore, upsertActualRun, type StoreData } from "@/lib/store/data";
 import { addMinutes, localDateKey, localMonthKey, localToUtcIso, shiftMonth } from "@/lib/util/time";
 import { between, mulberry32, pick } from "@/lib/util/random";
 import { computeAggregates } from "@/lib/services/reportAggregates";
+import { addDays, calendarMonthPeriod, type ReportPeriod } from "@/lib/reports/schedule";
 
 const TZ = "Asia/Seoul";
 
@@ -166,7 +167,8 @@ export function buildSampleStore(nowIso: string): StoreData {
 
   // ---- 사업장 · 층 · 지도 · 구역 · 로봇 ------------------------------------
   for (const spec of SITE_SPECS) {
-    const site: Site = { id: spec.id, name: spec.name, timezone: TZ, address: spec.address, isSample: true };
+    // 샘플 설치일: 전월 1일의 전날(전전월 말일) → 1개월차 월간 보고서 기간이 전월 1일~말일이 된다.
+    const site: Site = { id: spec.id, name: spec.name, timezone: TZ, address: spec.address, isSample: true, installedOn: addDays(`${prevMonth}-01`, -1) };
     data.sites.push(site);
 
     spec.floors.forEach((f) => {
@@ -724,11 +726,14 @@ export function buildSampleStore(nowIso: string): StoreData {
   // ---- 보고서 버전 ------------------------------------------------------------------
   // 가상 사업장 1 전월: 확정본(스냅샷). 확정 후 늦게 수신한 실적 1건을 추가해 "새 버전 작성" 흐름을 보여준다.
   const confirmedAt = localToUtcIso(`${thisMonth}-03`, "15:00", TZ);
-  const agg1 = computeAggregates(data, "site-01", prevMonth, confirmedAt);
+  // 샘플 설치일 기준 1개월차 = 전월 1일~말일
+  const m1: ReportPeriod = { ...calendarMonthPeriod(prevMonth), seq: 1 };
+  const rptId = (siteId: string) => `rpt-${siteId}-monthly-${m1.periodStart}-${m1.periodEnd}-v1`;
+  const agg1 = computeAggregates(data, "site-01", m1, confirmedAt);
   data.reports.push({
-    id: `rpt-site-01-${prevMonth}-v1`,
+    id: rptId("site-01"),
     siteId: "site-01",
-    month: prevMonth,
+    ...m1,
     version: 1,
     status: "PUBLISHED",
     aggregates: agg1,
@@ -772,12 +777,12 @@ export function buildSampleStore(nowIso: string): StoreData {
   }
   // 가상 사업장 2 전월: 검토 중 / 가상 사업장 3 전월: 초안
   data.reports.push({
-    id: `rpt-site-02-${prevMonth}-v1`,
+    id: rptId("site-02"),
     siteId: "site-02",
-    month: prevMonth,
+    ...m1,
     version: 1,
     status: "REVIEW",
-    aggregates: computeAggregates(data, "site-02", prevMonth, nowIso),
+    aggregates: computeAggregates(data, "site-02", m1, nowIso),
     comments: { overallOpinion: "물류동 야간 청소 정상. 사무동은 회의실 사용으로 2회 취소.", incompleteReasons: "회의실 야간 사용 2회.", improvements: "", focusZones: "", nextMonthPlan: "" },
     createdAt: localToUtcIso(`${thisMonth}-02`, "09:00", TZ),
     createdBy: "u-site-a",
@@ -788,12 +793,12 @@ export function buildSampleStore(nowIso: string): StoreData {
     publishedAt: null,
   });
   data.reports.push({
-    id: `rpt-site-03-${prevMonth}-v1`,
+    id: rptId("site-03"),
     siteId: "site-03",
-    month: prevMonth,
+    ...m1,
     version: 1,
     status: "DRAFT",
-    aggregates: computeAggregates(data, "site-03", prevMonth, nowIso),
+    aggregates: computeAggregates(data, "site-03", m1, nowIso),
     comments: { overallOpinion: "", incompleteReasons: "", improvements: "", focusZones: "", nextMonthPlan: "" },
     createdAt: localToUtcIso(`${thisMonth}-02`, "09:30", TZ),
     createdBy: "u-site-b",

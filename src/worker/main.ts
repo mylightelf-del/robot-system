@@ -12,6 +12,7 @@ import { processPuduEvents, puduLiveEnabled, PUDU_WINDOW_HOURS, syncPuduCatalog,
 import { createPuduApi } from "@/lib/vendors/pudu/puduAdapter";
 import { vendorModes } from "@/lib/vendors";
 import { purgeOldVendorEvents, writeHeartbeat } from "@/lib/ops/heartbeat";
+import { autoCreateScheduledDrafts } from "@/lib/services/reports";
 
 const tickSeconds = Number(process.env.SIMULATION_TICK_SECONDS ?? 2);
 const vendorMode = process.env.VENDOR_MODE || "sample";
@@ -75,6 +76,13 @@ async function main() {
     loop("sessions", 60_000, async () => {
       const n = await purgeExpiredSessions();
       if (n) log(`만료 세션 ${n}건 정리`);
+    }),
+  );
+  // 보고서 일정(10분): 설치일 기준 설치·일간·주간·월간 보고서 초안을 자동 작성(멱등)
+  jobs.push(
+    loop("report-schedule", 10 * 60_000, async () => {
+      const r = await autoCreateScheduledDrafts();
+      if (r.created.length) log(`보고서 초안 자동 작성 ${r.created.length}건: ${r.created.join(", ")}`);
     }),
   );
   // 생존 신호(30초): /api/health 가 이 값의 나이로 워커 생사를 알린다

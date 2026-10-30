@@ -8,6 +8,7 @@
  * - 마이그레이션 SQL 은 drizzle/ 폴더에 생성되어 git 으로 이력을 관리한다.
  */
 import { boolean, customType, doublePrecision, index, integer, jsonb, pgTable, primaryKey, text, uniqueIndex } from "drizzle-orm/pg-core";
+import type { ReportKind } from "@/lib/reports/schedule";
 import type {
   CleanMode,
   CommandState,
@@ -61,6 +62,7 @@ export const sites = pgTable("sites", {
   timezone: text().notNull(),
   address: text().notNull().default(""),
   isSample: boolean().notNull().default(false),
+  installedOn: text(),
 });
 
 export const floors = pgTable("floors", {
@@ -361,7 +363,10 @@ export const reportVersions = pgTable(
     siteId: text()
       .notNull()
       .references(() => sites.id),
-    month: text().notNull(),
+    kind: text().$type<ReportKind>().notNull().default("MONTHLY"),
+    seq: integer().notNull().default(0),
+    periodStart: text().notNull(),
+    periodEnd: text().notNull(),
     version: integer().notNull(),
     status: text().$type<ReportStatus>().notNull(),
     aggregates: jsonb().$type<ReportAggregates>().notNull(),
@@ -374,7 +379,7 @@ export const reportVersions = pgTable(
     confirmedBy: text(),
     publishedAt: isoTimestamp(),
   },
-  (t) => [uniqueIndex("report_versions_site_month_version").on(t.siteId, t.month, t.version)],
+  (t) => [uniqueIndex("report_versions_site_period_version").on(t.siteId, t.kind, t.periodStart, t.periodEnd, t.version)],
 );
 
 export const auditLogs = pgTable(

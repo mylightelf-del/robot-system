@@ -1,6 +1,7 @@
 import { and, eq, sql } from "drizzle-orm";
 import type { User, Vendor } from "@/lib/domain/types";
 import { getDb, schema } from "@/lib/db/client";
+import { isDateKey } from "@/lib/reports/schedule";
 import { assertActive, assertAdmin, canAccessSite } from "@/lib/auth/authz";
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from "@/lib/util/errors";
 import { nowIso } from "@/lib/util/time";
@@ -53,7 +54,7 @@ export async function createSite(user: User, input: { name: string; address: str
   return { id };
 }
 
-export async function updateSite(user: User, siteId: string, input: { name?: string; address?: string; timezone?: string }): Promise<void> {
+export async function updateSite(user: User, siteId: string, input: { name?: string; address?: string; timezone?: string; installedOn?: string | null }): Promise<void> {
   assertActive(user);
   assertAdmin(user);
   const db = getDb();
@@ -73,6 +74,12 @@ export async function updateSite(user: User, siteId: string, input: { name?: str
       throw new ValidationError(`시간대 형식이 올바르지 않습니다: ${input.timezone}`);
     }
     patch.timezone = input.timezone;
+  }
+  if (input.installedOn !== undefined) {
+    // 설치일 = 보고서 일정의 기준(D0). 빈 값이면 해제(자동 작성 중지). 이미 만든 보고서는 그대로 둔다.
+    const v = (input.installedOn ?? "").trim();
+    if (v && !isDateKey(v)) throw new ValidationError("설치일은 YYYY-MM-DD 형식의 날짜여야 합니다.");
+    patch.installedOn = v || null;
   }
   await db.transaction(async (tx) => {
     await tx.update(schema.sites).set(patch).where(eq(schema.sites.id, siteId));

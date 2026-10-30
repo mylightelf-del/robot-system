@@ -1,3 +1,4 @@
+import type { ReportKind } from "@/lib/reports/schedule";
 /**
  * 청소로봇 통합관제 — 도메인 타입 (1단계 시제품)
  *
@@ -47,6 +48,8 @@ export interface Site {
   name: string;
   timezone: string; // IANA, 예: Asia/Seoul
   address: string;
+  /** 설치일(YYYY-MM-DD, 사업장 시간대). 보고서 일정의 기준(D0). 미등록이면 null. */
+  installedOn: string | null;
   /** 샘플 데이터 표식. 실제 운영 데이터에는 false. */
   isSample: boolean;
 }
@@ -311,7 +314,11 @@ export interface ReportComments {
 export interface ReportAggregates {
   generatedAt: string;
   siteName: string;
-  month: string;
+  /** 집계 기간(사업장 시간대 날짜, 끝 포함). 2026-10-30 이전 데이터에는 없고 month 만 있다. */
+  periodStart?: string;
+  periodEnd?: string;
+  /** (구) 달력 월 보고서의 월. */
+  month?: string;
   robotCount: number;
   validPlanned: number;
   plannedCompleted: number;
@@ -330,6 +337,18 @@ export interface ReportAggregates {
   byRobot: { robotId: string; name: string; model: string; runs: number; completed: number; areaM2: number }[];
   incidents: { id: string; code: string; severity: Severity; occurredAt: string; resolvedAt: string | null; customerMessage: string; actionSummary: string }[];
   inspections: { item: string; done: number; total: number }[];
+  /** 일자별 실적(주간·월간). */
+  byDay?: { date: string; runs: number; completed: number; areaM2: number; durationMin: number }[];
+  /** 작업 목록(일간·설치 보고서, 최대 200건). 고객 공개 필드만. */
+  runList?: { startedAt: string; robotName: string; floorName: string; origin: "PLANNED" | "ADHOC" | "REMOTE"; result: string; areaM2: number; durationMin: number }[];
+  /** 설치 현황(설치 완료보고서). 집계 시점의 구성 스냅샷. */
+  installation?: {
+    installedOn: string;
+    robots: { name: string; model: string; floorName: string }[];
+    floors: { name: string; mapVersion: number | null; mapSource: string; zones: number }[];
+    tasks: { name: string; robotName: string; zones: number }[];
+    schedules: { taskName: string; days: string; time: string; enabled: boolean }[];
+  };
   dataGapDays: string[]; // 데이터 미수신 일자
   unsupportedMetrics: string[];
   /** 이 집계에 포함된 실적 중 가장 늦은 수신 시각. 이후 수신분은 "늦은 실적"으로 별도 계산한다. */
@@ -339,7 +358,10 @@ export interface ReportAggregates {
 export interface ReportVersion {
   id: string;
   siteId: string;
-  month: string; // YYYY-MM
+  kind: ReportKind;
+  seq: number;
+  periodStart: string; // YYYY-MM-DD (사업장 시간대)
+  periodEnd: string; // 포함
   version: number;
   status: ReportStatus;
   aggregates: ReportAggregates; // 초안은 재집계 가능, 확정 후 스냅샷
