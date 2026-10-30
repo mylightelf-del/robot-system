@@ -1,4 +1,4 @@
-import { eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db/client";
 import { assembleIncidents, type DbLike } from "@/lib/db/repo";
 import type { AggregateInput } from "./reportAggregates";
@@ -14,7 +14,7 @@ export async function loadAggregateInput(siteId: string, db: DbLike = getDb()): 
   const robotIds = Array.from(new Set([...actualRuns.map((r) => r.robotId), ...placements.map((p) => p.robotId)]));
   const robots = robotIds.length ? await db.select().from(schema.robots).where(inArray(schema.robots.id, robotIds)) : [];
   const plannedRuns = await db.select().from(schema.plannedRuns).where(eq(schema.plannedRuns.siteId, siteId));
-  const incidents = await assembleIncidents(await db.select().from(schema.incidents).where(eq(schema.incidents.siteId, siteId)), db);
+  const incidents = await assembleIncidents(await db.select().from(schema.incidents).where(and(eq(schema.incidents.siteId, siteId), isNull(schema.incidents.dismissedAt))), db);
   const inspections = await db.select().from(schema.inspections).where(eq(schema.inspections.siteId, siteId));
   const mapVersions = floorIds.length ? await db.select().from(schema.mapVersions).where(inArray(schema.mapVersions.floorId, floorIds)) : [];
   const tasks = await db.select().from(schema.registeredTasks).where(eq(schema.registeredTasks.siteId, siteId));

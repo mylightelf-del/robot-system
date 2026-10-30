@@ -8,7 +8,7 @@
 import { closeDb } from "@/lib/db/client";
 import { purgeExpiredSessions } from "@/lib/auth/session";
 import { simulationTick } from "./simulation";
-import { processPuduEvents, puduLiveEnabled, PUDU_WINDOW_HOURS, syncPuduCatalog, syncPuduErrors, syncPuduReports, syncPuduStatus } from "./pudu";
+import { processPuduEvents, puduLiveEnabled, PUDU_WINDOW_HOURS, syncPuduCatalog, syncPuduErrors, syncPuduPlannedRuns, syncPuduReports, syncPuduStatus } from "./pudu";
 import { createPuduApi } from "@/lib/vendors/pudu/puduAdapter";
 import { vendorModes } from "@/lib/vendors";
 import { purgeOldVendorEvents, writeHeartbeat } from "@/lib/ops/heartbeat";
@@ -60,6 +60,8 @@ async function main() {
       loop("pudu-reports", reportsMin * 60_000, async () => {
         report(await syncPuduReports(api, PUDU_WINDOW_HOURS));
         report(await syncPuduErrors(api, PUDU_WINDOW_HOURS));
+        // 예약 → 계획 회차(오늘·내일) 생성과 지난 회차의 수행/미실행 판정. 보고서 동기화 뒤에 돈다.
+        report(await syncPuduPlannedRuns());
       }),
     );
     jobs.push(loop("pudu-catalog", catalogMin * 60_000, async () => report(await syncPuduCatalog(api))));
@@ -78,13 +80,15 @@ async function main() {
       if (n) log(`만료 세션 ${n}건 정리`);
     }),
   );
-  // 보고서 일정(10분): 설치일 기준 설치·일간·주간·월간 보고서 초안을 자동 작성(멱등)
-  jobs.push(
-    loop("report-schedule", 10 * 60_000, async () => {
-      const r = await autoCreateScheduledDrafts();
-      if (r.created.length) log(`보고서 초안 자동 작성 ${r.created.length}건: ${r.created.join(", ")}`);
-    }),
-  );
+  // 보고서 초안은 담당자가 일정표의 버튼으로 만든다(사용자 결정 2026-10-30). REPORT_AUTO_DRAFT=true 일 때만 자동 작성.
+  if (process.env.REPORT_AUTO_DRAFT === "true") {
+    jobs.push(
+      loop("report-schedule", 10 * 60_000, async () => {
+        const r = await autoCreateScheduledDrafts();
+        if (r.created.length) log(`보고서 초안 자동 작성 ${r.created.length}건: ${r.created.join(", ")}`);
+      }),
+    );
+  }
   // 생존 신호(30초): /api/health 가 이 값의 나이로 워커 생사를 알린다
   jobs.push(loop("heartbeat", 30_000, async () => writeHeartbeat({ modes: vendorModes(), pid: process.pid })));
   // 보관 정책(하루 1회): 처리 끝난 콜백 원문 정리

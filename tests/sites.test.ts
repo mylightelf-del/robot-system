@@ -6,7 +6,7 @@ import { PuduAdapter } from "@/lib/vendors/pudu/puduAdapter";
 import { syncPuduStatus } from "@/worker/pudu";
 import { puduImportRobots } from "@/lib/services/admin";
 import { relocateRobot } from "@/lib/services/admin";
-import { createFloor, createSite, deleteFloor, deleteSite, getMapImage, importPuduMap, listPuduMapsForSite, polygonAreaM2, refetchMapImage, renameFloor, updateSite } from "@/lib/services/sites";
+import { alignFloorMapsToRobots, createFloor, createSite, deleteFloor, deleteSite, getMapImage, importPuduMap, listPuduMapsForSite, polygonAreaM2, refetchMapImage, renameFloor, updateSite } from "@/lib/services/sites";
 import { getRobotDetail } from "@/lib/services/robots";
 import { worldToPixel } from "@/lib/domain/types";
 import { getDb, resetAndSeed, schema, user } from "./helpers";
@@ -140,6 +140,23 @@ describe("사업장·층·지도 관리(운영 준비)", () => {
     await syncPuduStatus(new PuduAdapter(api));
     st = (await db().query.robotStatus.findFirst({ where: eq(schema.robotStatus.robotId, robot.id) }))!;
     expect(st.pose).toBeNull();
-    expect(st.mapVersionId).toBeNull();
+    // 위치는 그리지 않되, 로봇이 쓰는 지도 이름은 남겨 화면이 '층 지도 맞추기'를 안내한다
+    expect(st.mapVersionId).toBe("pudu:2#0#other");
+  });
+
+  it("층 지도 맞추기: 로봇이 쓰는 PUDU 지도를 층에 가져오고(이미 맞으면 건너뜀), 없는 지도는 실패로 알린다", async () => {
+    const hq = await user("u-hq");
+    expect(await puduImportRobots(hq, "site-01", "site-01-f1", [MOCK_SN])).toBe(1);
+    state.mapName = "1#1#lobby";
+    const r1 = await alignFloorMapsToRobots(hq);
+    const row = r1.find((x) => x.map === "1#1#lobby")!;
+    expect(row.result).toMatch(/^가져옴 v\d+ · 구역 \d+개/);
+    const floor = (await db().query.floors.findFirst({ where: eq(schema.floors.id, "site-01-f1") }))!;
+    const mv = (await db().query.mapVersions.findFirst({ where: eq(schema.mapVersions.id, floor.currentMapVersionId) }))!;
+    expect(mv).toMatchObject({ vendor: "PUDU", vendorMapName: "1#1#lobby" });
+    expect((await alignFloorMapsToRobots(hq)).find((x) => x.map === "1#1#lobby")!.result).toMatch(/^이미 맞음/);
+    state.mapName = "9#9#unknown";
+    expect((await alignFloorMapsToRobots(hq)).find((x) => x.map === "9#9#unknown")!.result).toMatch(/^실패/);
+    await expect(alignFloorMapsToRobots(await user("u-site-a"))).rejects.toThrow();
   });
 });

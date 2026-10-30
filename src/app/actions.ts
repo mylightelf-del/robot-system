@@ -3,7 +3,7 @@
 import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import type { CleanMode, CommandType, ReportComments, Role, Severity } from "@/lib/domain/types";
+import type { CleanMode, CommandType, ReportComments, ReportContent, Role, Severity } from "@/lib/domain/types";
 import { cookieOptions, createSession, getCurrentUser, getOptionalUser, SESSION_COOKIE } from "@/lib/auth/session";
 import { AppError, errorMessage, ForbiddenError } from "@/lib/util/errors";
 import { issueCommand, type IssueCommandInput } from "@/lib/services/commands";
@@ -108,6 +108,24 @@ export async function assignIncidentAction(id: string, assigneeId: string): Prom
 export async function addIncidentActionAction(id: string, note: string, internal: boolean): Promise<ActionResult> {
   return run(async () => incidents.addIncidentAction(await getCurrentUser(), id, note, internal));
 }
+export async function revertIncidentAction(id: string, reason: string): Promise<ActionResult> {
+  return run(async () => {
+    const r = await incidents.revertIncidentStep(await getCurrentUser(), id, reason);
+    return { message: `되돌렸습니다 (${r.from} → ${r.to})` };
+  });
+}
+export async function cancelIncidentActionAction(actionId: string, reason: string): Promise<ActionResult> {
+  return run(async () => incidents.deleteIncidentAction(await getCurrentUser(), actionId, reason));
+}
+export async function dismissIncidentsAction(ids: string[], reason: string): Promise<ActionResult> {
+  return run(async () => {
+    const n = await incidents.dismissIncidents(await getCurrentUser(), ids, reason);
+    return { message: `알림 ${n}건을 삭제했습니다(삭제한 알림 보기에서 확인).` };
+  });
+}
+export async function restoreIncidentAction(id: string): Promise<ActionResult> {
+  return run(async () => incidents.restoreIncident(await getCurrentUser(), id));
+}
 export async function resolveIncidentAction(id: string, note: string): Promise<ActionResult> {
   return run(async () => incidents.resolveIncident(await getCurrentUser(), id, note));
 }
@@ -162,6 +180,24 @@ export async function confirmReportAction(id: string): Promise<ActionResult> {
 }
 export async function publishReportAction(id: string): Promise<ActionResult> {
   return run(async () => reports.publishReport(await getCurrentUser(), id));
+}
+export async function adjustNumberAction(id: string, key: string, value: number | null): Promise<ActionResult> {
+  return run(async () => {
+    await reports.adjustNumber(await getCurrentUser(), id, key, value);
+    return { message: value === null ? "원래 값으로 되돌렸습니다." : "수정했습니다." };
+  });
+}
+export async function updateContentAction(id: string, content: ReportContent): Promise<ActionResult> {
+  return run(async () => {
+    await reports.updateContent(await getCurrentUser(), id, content);
+    return { message: "저장했습니다." };
+  });
+}
+export async function updatePhotoCaptionAction(photoId: string, caption: string): Promise<ActionResult> {
+  return run(async () => reports.updatePhotoCaption(await getCurrentUser(), photoId, caption));
+}
+export async function deletePhotoAction(photoId: string): Promise<ActionResult> {
+  return run(async () => reports.deletePhoto(await getCurrentUser(), photoId));
 }
 
 // ---- 점검 ----
@@ -239,6 +275,16 @@ export async function puduSyncNowAction(job: "status" | "reports" | "catalog" | 
 
 // ---- 사업장·층·지도 (본사 관리자) ----
 import * as sitesSvc from "@/lib/services/sites";
+export async function alignFloorMapsAction(): Promise<ActionResult & { rows?: { site: string; floor: string; map: string | null; result: string }[] }> {
+  try {
+    const rows = await sitesSvc.alignFloorMapsToRobots(await getCurrentUser());
+    revalidatePath("/", "layout");
+    return { ok: true, message: `층 ${rows.length}곳 확인`, rows };
+  } catch (e) {
+    if (!(e instanceof AppError)) console.error("[action] 처리 오류:", e);
+    return { ok: false, error: errorMessage(e) };
+  }
+}
 export async function createSiteAction(input: { name: string; address: string; timezone?: string }): Promise<ActionResult> {
   return run(async () => {
     const r = await sitesSvc.createSite(await getCurrentUser(), input);

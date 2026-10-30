@@ -1,4 +1,4 @@
-import { and, eq, gte, inArray, ne } from "drizzle-orm";
+import { and, eq, gte, inArray, isNull, ne } from "drizzle-orm";
 import type { CommonStatus, User } from "@/lib/domain/types";
 import { accessibleSiteIds, assertActive } from "@/lib/auth/authz";
 import { getDb, schema } from "@/lib/db/client";
@@ -50,7 +50,7 @@ export async function getDashboard(user: User): Promise<DashboardData> {
     // 당일 범위: 각 사업장 시간대의 오늘 00:00 중 가장 이른 시각부터 조회한 뒤 JS 에서 시간대별로 거른다.
     const earliest = sites.map((s) => localToUtcIso(localDateKey(now, s.timezone), "00:00", s.timezone)).sort()[0];
     const runs = await db.select().from(schema.actualRuns).where(and(inArray(schema.actualRuns.siteId, siteIds), gte(schema.actualRuns.startedAt, earliest)));
-    const incidents = await db.select({ siteId: schema.incidents.siteId, status: schema.incidents.status }).from(schema.incidents).where(and(inArray(schema.incidents.siteId, siteIds), ne(schema.incidents.status, "RESOLVED")));
+    const incidents = await db.select({ siteId: schema.incidents.siteId, status: schema.incidents.status }).from(schema.incidents).where(and(inArray(schema.incidents.siteId, siteIds), ne(schema.incidents.status, "RESOLVED"), isNull(schema.incidents.dismissedAt)));
 
     for (const site of sites) {
       const byStatus = emptyByStatus();

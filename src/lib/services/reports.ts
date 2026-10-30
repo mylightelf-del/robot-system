@@ -1,11 +1,13 @@
 import { and, desc, eq, gt, gte, inArray, lt, lte, sql } from "drizzle-orm";
-import type { ActualRun, ReportComments, ReportStatus, ReportVersion, User } from "@/lib/domain/types";
+import type { ActualRun, ReportComments, ReportContent, ReportPhoto, ReportStatus, ReportVersion, User } from "@/lib/domain/types";
 import { accessibleSiteIds, assertActive, assertSiteAccess, canConfirmReports, canEditReports, isCustomer } from "@/lib/auth/authz";
 import { getDb, schema } from "@/lib/db/client";
 import { getSite, listSitesByIds, type DbLike } from "@/lib/db/repo";
 import { ForbiddenError, NotFoundError, ValidationError } from "@/lib/util/errors";
 import { localDateKey, localHourMinute, localToUtcIso, nowIso } from "@/lib/util/time";
-import { addDays, DRAFT_HOUR, parsePeriodKey, periodKey, reportSchedule, reportTitle, type ReportPeriod, type ScheduledReport } from "@/lib/reports/schedule";
+import { applyAdjustments, isValidAdjustKey, originalValue } from "@/lib/reports/adjust";
+import { newId } from "@/lib/util/random";
+import { addDays, DRAFT_HOUR, isDateKey, monthAnniversary, parsePeriodKey, periodKey, reportSchedule, reportTitle, type ReportPeriod, type ScheduledReport } from "@/lib/reports/schedule";
 import { audit } from "./audit";
 import { computeAggregates } from "./reportAggregates";
 import { loadAggregateInput } from "./reportData";
@@ -98,6 +100,29 @@ function emptyComments(): ReportComments {
   return { overallOpinion: "", incompleteReasons: "", improvements: "", focusZones: "", nextMonthPlan: "" };
 }
 
+/** 새 보고서의 기본 구조화 내용. 설치 보고서는 단계 일정(설치일 기준 기본값)과 작업 일지, 일간은 작업 일지. */
+export function defaultContent(period: ReportPeriod): ReportContent {
+  const workLog = [
+    { part: "오전", staff: "", content: "" },
+    { part: "오후", staff: "", content: "" },
+    { part: "명일 계획", staff: "", content: "" },
+  ];
+  if (period.kind === "INSTALLATION") {
+    const d0 = period.periodStart;
+    return {
+      phases: [
+        { label: "제품 설치 및 맵핑", from: d0, to: d0 },
+        { label: "운영 및 세부 조정", from: addDays(d0, 1), to: addDays(d0, 6) },
+        { label: "안정화(주간 점검)", from: addDays(d0, 7), to: addDays(d0, 21) },
+        { label: "정상 운영", from: addDays(d0, 22), to: monthAnniversary(d0, 1) },
+      ],
+      workLog,
+    };
+  }
+  if (period.kind === "DAILY") return { workLog };
+  return {};
+}
+
 /**
  * 버전 작성(공통). 같은 기간에 작성 중(초안·검토)인 버전이 있으면 거절한다. 확정본이 있으면 새 버전으로 만들고 기존 확정본은 그대로 둔다.
  */
@@ -120,6 +145,9 @@ async function createVersion(actor: Pick<User, "id" | "name">, siteId: string, p
     status: "DRAFT",
     aggregates: computeAggregates(input, siteId, period, now),
     comments: prev ? { ...prev.comments } : emptyComments(),
+    // 수치 보정은 새 버전에 넘기지 않는다(새 실적으로 다시 집계한 값이 기준). 단계 일정·작업 일지·사진은 이어받는다.
+    adjustments: {},
+    content: prev ? structuredClone(prev.content ?? {}) : defaultContent(period),
     createdAt: now,
     createdBy: actor.id,
     reviewedAt: null,
@@ -129,6 +157,10 @@ async function createVersion(actor: Pick<User, "id" | "name">, siteId: string, p
     publishedAt: null,
   };
   await db.insert(schema.reportVersions).values(r);
+  if (prev) {
+    const photos = await db.select().from(schema.reportPhotos).where(eq(schema.reportPhotos.reportId, prev.id));
+    for (const ph of photos) await db.insert(schema.reportPhotos).values({ ...ph, id: newId("rph"), reportId: r.id });
+  }
   await audit(
     actor,
     { siteId, robotId: null, action: "REPORT:CREATE_DRAFT", params: { kind: period.kind, seq: period.seq, periodStart: period.periodStart, periodEnd: period.periodEnd, version }, result: "OK", detail: note ?? (prev ? `기존 v${prev.version} 은 유지, 새 버전 작성` : null), vendorTraceId: null },
@@ -309,6 +341,128 @@ export async function publishReport(user: User, reportId: string): Promise<void>
   if (r.status !== "CONFIRMED") throw new ValidationError("확정된 보고서만 고객에게 공개할 수 있습니다.");
   await db.update(schema.reportVersions).set({ status: "PUBLISHED", publishedAt: nowIso() }).where(eq(schema.reportVersions.id, reportId));
   await audit(user, { siteId: r.siteId, robotId: null, action: "REPORT:PUBLISH", params: { reportId }, result: "OK", detail: null, vendorTraceId: null }, db);
+}
+
+/** 수치 보정(초안·검토 상태). value 가 null 이면 보정을 지우고 원래 집계값으로 되돌린다. 원래값·보정값·사용자를 감사 기록에 남긴다. */
+export async function adjustNumber(user: User, reportId: string, key: string, value: number | null): Promise<void> {
+  const db = getDb();
+  const r = await loadEditable(user, reportId, db);
+  if (r.status !== "DRAFT" && r.status !== "REVIEW") throw new ValidationError("확정된 보고서의 수치는 수정할 수 없습니다. 새 버전을 작성하세요.");
+  if (!isValidAdjustKey(r.aggregates, key)) throw new ValidationError("수정할 수 없는 항목입니다.");
+  if (value !== null && (!Number.isFinite(value) || value < 0 || value > 1e9)) throw new ValidationError("0 이상의 숫자를 입력하세요.");
+  if (key === "summary.completionRatePct" && value !== null && value > 100) throw new ValidationError("완료율은 0~100 사이입니다.");
+  const original = originalValue(r.aggregates, key) ?? null;
+  const adjustments = { ...(r.adjustments ?? {}) };
+  if (value === null || value === original) delete adjustments[key];
+  else adjustments[key] = { value, original, by: user.id, at: nowIso() };
+  await db.update(schema.reportVersions).set({ adjustments }).where(eq(schema.reportVersions.id, reportId));
+  await audit(user, { siteId: r.siteId, robotId: null, action: "REPORT:ADJUST", params: { reportId, key, original, value }, result: "OK", detail: value === null ? "보정 취소" : null, vendorTraceId: null }, db);
+}
+
+/** 표시·출력용 집계(보정 반영). */
+export function effectiveAggregates(r: Pick<ReportVersion, "aggregates" | "adjustments">) {
+  return applyAdjustments(r.aggregates, r.adjustments);
+}
+
+const MAX_TEXT = 2000;
+/** 단계 일정·작업 일지 저장(초안·검토 상태). */
+export async function updateContent(user: User, reportId: string, content: ReportContent): Promise<void> {
+  const db = getDb();
+  const r = await loadEditable(user, reportId, db);
+  if (r.status !== "DRAFT" && r.status !== "REVIEW") throw new ValidationError("확정된 보고서는 수정할 수 없습니다. 새 버전을 작성하세요.");
+  const next: ReportContent = { ...(r.content ?? {}) };
+  if (content.phases !== undefined) {
+    if (content.phases.length > 8) throw new ValidationError("단계는 8개까지입니다.");
+    next.phases = content.phases.map((p) => {
+      const label = String(p.label ?? "").trim().slice(0, 40);
+      if (!label) throw new ValidationError("단계 이름을 입력하세요.");
+      if (!isDateKey(p.from) || !isDateKey(p.to) || p.from > p.to) throw new ValidationError(`'${label}' 기간이 올바르지 않습니다.`);
+      return { label, from: p.from, to: p.to };
+    });
+  }
+  if (content.workLog !== undefined) {
+    if (content.workLog.length > 20) throw new ValidationError("작업 일지는 20행까지입니다.");
+    next.workLog = content.workLog.map((w) => ({ part: String(w.part ?? "").slice(0, 40), staff: String(w.staff ?? "").slice(0, 100), content: String(w.content ?? "").slice(0, MAX_TEXT) }));
+  }
+  await db.update(schema.reportVersions).set({ content: next }).where(eq(schema.reportVersions.id, reportId));
+  await audit(user, { siteId: r.siteId, robotId: null, action: "REPORT:UPDATE_CONTENT", params: { reportId, parts: Object.keys(content) }, result: "OK", detail: null, vendorTraceId: null }, db);
+}
+
+// ---- 사진 ----
+export const PHOTO_MAX_BYTES = 8 * 1024 * 1024;
+export const PHOTO_MAX_COUNT = 30;
+const PHOTO_TYPES = ["image/jpeg", "image/png", "image/webp"];
+
+function sniffPhotoType(buf: Buffer): string | null {
+  if (buf.length > 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return "image/jpeg";
+  if (buf.length > 8 && buf.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return "image/png";
+  if (buf.length > 12 && buf.subarray(0, 4).toString("ascii") === "RIFF" && buf.subarray(8, 12).toString("ascii") === "WEBP") return "image/webp";
+  return null;
+}
+
+/** 사진 목록(고객은 공개본만). 내용(바이트)은 /api/reports/photos/<id> 로 받는다. */
+export async function listPhotos(user: User, reportId: string): Promise<ReportPhoto[]> {
+  const r = await getReport(user, reportId);
+  const db = getDb();
+  const rows = await db
+    .select({ id: schema.reportPhotos.id, reportId: schema.reportPhotos.reportId, caption: schema.reportPhotos.caption, contentType: schema.reportPhotos.contentType, sort: schema.reportPhotos.sort, createdAt: schema.reportPhotos.createdAt, createdBy: schema.reportPhotos.createdBy })
+    .from(schema.reportPhotos)
+    .where(eq(schema.reportPhotos.reportId, r.id))
+    .orderBy(schema.reportPhotos.sort, schema.reportPhotos.createdAt);
+  return rows;
+}
+
+export async function addPhoto(user: User, reportId: string, input: { caption: string; data: Buffer }): Promise<ReportPhoto> {
+  const db = getDb();
+  const r = await loadEditable(user, reportId, db);
+  if (r.status !== "DRAFT" && r.status !== "REVIEW") throw new ValidationError("확정된 보고서에는 사진을 추가할 수 없습니다. 새 버전을 작성하세요.");
+  if (input.data.length === 0) throw new ValidationError("빈 파일입니다.");
+  if (input.data.length > PHOTO_MAX_BYTES) throw new ValidationError(`사진은 ${PHOTO_MAX_BYTES / 1024 / 1024}MB 이하만 올릴 수 있습니다.`);
+  const contentType = sniffPhotoType(input.data);
+  if (!contentType || !PHOTO_TYPES.includes(contentType)) throw new ValidationError("JPEG·PNG·WebP 사진만 올릴 수 있습니다.");
+  const [cnt] = await db.select({ n: sql<number>`count(*)::int`, max: sql<number>`coalesce(max(${schema.reportPhotos.sort}), 0)::int` }).from(schema.reportPhotos).where(eq(schema.reportPhotos.reportId, reportId));
+  if ((cnt?.n ?? 0) >= PHOTO_MAX_COUNT) throw new ValidationError(`사진은 보고서당 ${PHOTO_MAX_COUNT}장까지입니다.`);
+  const row = { id: newId("rph"), reportId, caption: input.caption.trim().slice(0, 60), contentType, data: input.data, sort: (cnt?.max ?? 0) + 1, createdAt: nowIso(), createdBy: user.id };
+  await db.insert(schema.reportPhotos).values(row);
+  await audit(user, { siteId: r.siteId, robotId: null, action: "REPORT:PHOTO_ADD", params: { reportId, photoId: row.id, bytes: input.data.length }, result: "OK", detail: row.caption || null, vendorTraceId: null }, db);
+  const { data: _d, ...meta } = row;
+  return meta;
+}
+
+async function loadPhotoForEdit(user: User, photoId: string, db: DbLike) {
+  const ph = await db.query.reportPhotos.findFirst({ where: eq(schema.reportPhotos.id, photoId), columns: { data: false } });
+  if (!ph) throw new NotFoundError("사진을 찾을 수 없습니다.");
+  const r = await loadEditable(user, ph.reportId, db);
+  if (r.status !== "DRAFT" && r.status !== "REVIEW") throw new ValidationError("확정된 보고서의 사진은 바꿀 수 없습니다.");
+  return { ph, r };
+}
+
+export async function updatePhotoCaption(user: User, photoId: string, caption: string): Promise<void> {
+  const db = getDb();
+  const { r } = await loadPhotoForEdit(user, photoId, db);
+  await db.update(schema.reportPhotos).set({ caption: caption.trim().slice(0, 60) }).where(eq(schema.reportPhotos.id, photoId));
+  await audit(user, { siteId: r.siteId, robotId: null, action: "REPORT:PHOTO_CAPTION", params: { reportId: r.id, photoId }, result: "OK", detail: null, vendorTraceId: null }, db);
+}
+
+export async function deletePhoto(user: User, photoId: string): Promise<void> {
+  const db = getDb();
+  const { r } = await loadPhotoForEdit(user, photoId, db);
+  await db.delete(schema.reportPhotos).where(eq(schema.reportPhotos.id, photoId));
+  await audit(user, { siteId: r.siteId, robotId: null, action: "REPORT:PHOTO_DELETE", params: { reportId: r.id, photoId }, result: "OK", detail: "초안에서 삭제", vendorTraceId: null }, db);
+}
+
+/** 사진 내용. 보고서 접근 권한(고객은 공개본만)을 그대로 따른다. */
+export async function getPhotoData(user: User, photoId: string): Promise<{ contentType: string; data: Buffer }> {
+  const db = getDb();
+  const ph = await db.query.reportPhotos.findFirst({ where: eq(schema.reportPhotos.id, photoId) });
+  if (!ph) throw new NotFoundError("사진을 찾을 수 없거나 접근 권한이 없습니다.");
+  await getReport(user, ph.reportId); // 권한 없음은 NotFound 로 같게 처리된다
+  return { contentType: ph.contentType, data: ph.data };
+}
+
+/** 내보내기용: 사진 내용 전체(권한 확인 후 호출). */
+export async function loadPhotosWithData(reportId: string): Promise<(ReportPhoto & { data: Buffer })[]> {
+  return getDb().select().from(schema.reportPhotos).where(eq(schema.reportPhotos.reportId, reportId)).orderBy(schema.reportPhotos.sort, schema.reportPhotos.createdAt);
 }
 
 /** 실적 조회(필터). 고객도 자기 사업장 실적은 볼 수 있다. */

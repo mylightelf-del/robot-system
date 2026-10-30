@@ -91,7 +91,7 @@ export default async function ReportsPage({ searchParams }: { searchParams: Prom
             siteSchedule.installedOn ? (
               <>
                 <p className="text-xs text-gray-600 mb-2">
-                  설치일 <b>{siteSchedule.installedOn}</b> 기준. 초안은 대상 기간 다음 날 06시에 자동 작성됩니다(설치 완료보고서는 설치 당일). 기간이 진행 중이면 미리 작성해 두고 재집계로 갱신할 수 있습니다.
+                  설치일 <b>{siteSchedule.installedOn}</b> 기준. 『초안 만들기』를 누르면 그 기간의 실적으로 초안이 만들어집니다(작성일은 기간 다음 날 기준 안내). 기간이 진행 중이면 미리 작성해 두고 재집계로 갱신할 수 있습니다.
                 </p>
                 <ReportScheduleTable siteId={site} rows={siteSchedule.rows} canEdit={editor} />
                 {siteSchedule.others.length > 0 && (

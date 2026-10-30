@@ -50,6 +50,20 @@
       "when": 1793367245625,
       "tag": "0006_report_schedule",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1793375765712,
+      "tag": "0007_report_edit_photos",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1793376624008,
+      "tag": "0008_incident_dismiss",
+      "breakpoints": true
     }
   ]
 }

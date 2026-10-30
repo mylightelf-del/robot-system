@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { puduCallbackSelfTestAction, puduImportRobotsAction, puduSyncNowAction, puduTestConnectionAction } from "@/app/actions";
+import { alignFloorMapsAction, puduCallbackSelfTestAction, puduImportRobotsAction, puduSyncNowAction, puduTestConnectionAction } from "@/app/actions";
 import { btn, ResultLine, useAction } from "./ActionButton";
 
 type PuduRobotRow = { sn: string; productCode: string; model: string | null; shopId: string; shopName: string; nickname: string; registered: boolean };
@@ -70,6 +70,7 @@ export function PuduPanel({
         ))}
       </div>
       <ResultLine result={result} />
+      <AlignMaps live={live} />
       <div className="border rounded p-2 bg-slate-50 text-xs space-y-1">
         <div className="font-medium">콜백(알림 수신) 등록</div>
         <div>
@@ -128,6 +129,41 @@ export function PuduPanel({
             </button>
           </div>
         </div>
+      )}
+    </div>
+  );
+}
+
+/** 로봇이 지금 쓰는 PUDU 지도로 층 지도를 맞춘다(사업장 관제에 지도·로봇 위치가 나오게). */
+function AlignMaps({ live }: { live: boolean }) {
+  const [rows, setRows] = useState<{ site: string; floor: string; map: string | null; result: string }[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  return (
+    <div className="border rounded p-2 bg-slate-50 text-xs space-y-1">
+      <div className="font-medium">층 지도 맞추기</div>
+      <div className="text-gray-600">PUDU 로봇이 배치된 층마다 로봇이 지금 쓰는 지도를 확인해, 층 지도와 다르면 그 지도(이미지·청소 구역)를 가져옵니다. 지도가 없는 층은 사업장 관제에 지도와 로봇 위치가 나오지 않습니다.</div>
+      <button
+        type="button"
+        className={btn.secondary}
+        disabled={busy || !live}
+        onClick={async () => {
+          setBusy(true);
+          setErr(null);
+          const r = await alignFloorMapsAction();
+          setBusy(false);
+          if (r.ok) setRows(r.rows ?? []);
+          else setErr(r.error ?? "실패");
+        }}
+      >
+        {busy ? "확인 중…" : "로봇이 쓰는 지도로 층 지도 맞추기"}
+      </button>
+      {err && <div className="text-red-700">{err}</div>}
+      {rows && (
+        <table className="data bg-white">
+          <thead><tr><th>사업장</th><th>층</th><th>지도</th><th>결과</th></tr></thead>
+          <tbody>{rows.map((x, i) => <tr key={i}><td>{x.site}</td><td>{x.floor}</td><td>{x.map ?? "-"}</td><td>{x.result}</td></tr>)}</tbody>
+        </table>
       )}
     </div>
   );

@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 import type { ActualRun, Command, CommandType, Floor, Inspection, MaintenanceItem, MapVersion, Robot, RobotPlacement, RobotStatus, Site, User, Zone } from "@/lib/domain/types";
 import { accessibleSiteIds, assertActive, assertRobotAccess, assertSiteAccess, canCommandOf, isCustomer } from "@/lib/auth/authz";
 import { getDb, schema } from "@/lib/db/client";
@@ -109,7 +109,7 @@ export async function getRobotDetail(user: User, robotId: string): Promise<Robot
   const map = (await getMapVersion(floor.currentMapVersionId, db)) ?? null;
   const customer = isCustomer(user);
   const accessible = await accessibleSiteIds(user, db);
-  const incidentRows = await db.select().from(schema.incidents).where(eq(schema.incidents.robotId, robot.id)).orderBy(desc(schema.incidents.occurredAt)).limit(20);
+  const incidentRows = await db.select().from(schema.incidents).where(and(eq(schema.incidents.robotId, robot.id), isNull(schema.incidents.dismissedAt))).orderBy(desc(schema.incidents.occurredAt)).limit(20);
   const incidents = await assembleIncidents(incidentRows, db);
   const placements = await db.select().from(schema.robotPlacements).where(eq(schema.robotPlacements.robotId, robot.id)).orderBy(schema.robotPlacements.from);
   const siteNames = new Map((await listSitesByIds(Array.from(new Set(placements.map((p) => p.siteId))), db)).map((s) => [s.id, s.name]));

@@ -20,7 +20,9 @@ import type {
   PlannedRunStatus,
   Pose,
   ReportAggregates,
+  ReportAdjustments,
   ReportComments,
+  ReportContent,
   ReportStatus,
   RobotModel,
   Role,
@@ -304,6 +306,10 @@ export const incidents = pgTable(
     lastOccurredAt: isoTimestamp(),
     /** 묶인 반복 발생의 제조사 이벤트 키(재동기화 시 중복 집계 방지). */
     groupedEventIds: jsonb().$type<string[]>().notNull().default([]),
+    /** 불필요한 알림 삭제(숨김). 행은 남겨 같은 제조사 이벤트가 다시 적재되지 않게 하고, 본사 관리자가 복원할 수 있다. */
+    dismissedAt: isoTimestamp(),
+    dismissedBy: text(),
+    dismissReason: text(),
   },
   (t) => [uniqueIndex("incidents_vendor_event_key").on(t.vendorEventId), index("incidents_site_idx").on(t.siteId, t.occurredAt), index("incidents_robot_code_status_idx").on(t.robotId, t.code, t.status)],
 );
@@ -371,6 +377,8 @@ export const reportVersions = pgTable(
     status: text().$type<ReportStatus>().notNull(),
     aggregates: jsonb().$type<ReportAggregates>().notNull(),
     comments: jsonb().$type<ReportComments>().notNull(),
+    adjustments: jsonb().$type<ReportAdjustments>().notNull().default({}),
+    content: jsonb().$type<ReportContent>().notNull().default({}),
     createdAt: isoTimestamp().notNull(),
     createdBy: text().notNull(),
     reviewedAt: isoTimestamp(),
@@ -380,6 +388,27 @@ export const reportVersions = pgTable(
     publishedAt: isoTimestamp(),
   },
   (t) => [uniqueIndex("report_versions_site_period_version").on(t.siteId, t.kind, t.periodStart, t.periodEnd, t.version)],
+);
+
+/**
+ * 보고서 첨부 사진(현장·설치 사진). 보고서 버전에 딸리며 보존 기한 없이 보관한다(pg_dump 백업에 포함).
+ * 화면에서 줄인 JPEG 로 올라온다(긴 변 1600px). 확정된 버전의 사진은 바꿀 수 없다.
+ */
+export const reportPhotos = pgTable(
+  "report_photos",
+  {
+    id: text().primaryKey(),
+    reportId: text()
+      .notNull()
+      .references(() => reportVersions.id),
+    caption: text().notNull().default(""),
+    contentType: text().notNull(),
+    data: bytea().notNull(),
+    sort: integer().notNull().default(0),
+    createdAt: isoTimestamp().notNull(),
+    createdBy: text().notNull(),
+  },
+  (t) => [index("report_photos_report_idx").on(t.reportId)],
 );
 
 export const auditLogs = pgTable(

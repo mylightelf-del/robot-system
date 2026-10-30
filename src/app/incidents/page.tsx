@@ -2,22 +2,23 @@ import Link from "next/link";
 import { getCurrentUser } from "@/lib/auth/session";
 import { escalationMinutesBySite, listAssignableUsers, listIncidents, SIMULATABLE_CODES } from "@/lib/services/incidents";
 import { listRobots, listSites } from "@/lib/services/robots";
-import { canHandleIncidents, isCustomer } from "@/lib/auth/authz";
+import { canAdmin, canHandleIncidents, isCustomer } from "@/lib/auth/authz";
 import { AppError } from "@/lib/util/errors";
 import { Card, Empty, PageTitle, SimTag } from "@/components/ui";
 import { AccessDenied } from "@/components/AccessDenied";
 import { SiteFilter } from "@/components/SiteFilter";
-import { IncidentActions, SimulateIncidentForm } from "@/components/IncidentPanel";
+import { CancelActionButton, DismissSelected, IncidentActions, RestoreIncidentButton, SimulateIncidentForm } from "@/components/IncidentPanel";
 import { IncidentStatusBadge, SeverityBadge } from "@/components/StatusBadge";
-import { formatDateTime, nowIso, relativeFromNow } from "@/lib/util/time";
+import { formatDateTime, formatDurationMin, nowIso, relativeFromNow } from "@/lib/util/time";
 
-export default async function IncidentsPage({ searchParams }: { searchParams: Promise<{ site?: string; all?: string }> }) {
+export default async function IncidentsPage({ searchParams }: { searchParams: Promise<{ site?: string; all?: string; dismissed?: string }> }) {
   const { site, all } = await searchParams;
+  const dismissedView = (await searchParams).dismissed === "1";
   const user = await getCurrentUser();
   let rows, sites, robots;
   try {
     sites = await listSites(user);
-    rows = await listIncidents(user, { siteId: site || undefined, includeResolved: all === "1" });
+    rows = await listIncidents(user, { siteId: site || undefined, includeResolved: all === "1", dismissed: dismissedView });
     robots = await listRobots(user, site || undefined);
   } catch (e) {
     return <AccessDenied reason={e instanceof AppError ? e.message : "접근할 수 없습니다."} />;
@@ -40,6 +41,11 @@ export default async function IncidentsPage({ searchParams }: { searchParams: Pr
             <Link href={`/incidents?${site ? `site=${site}&` : ""}${all === "1" ? "" : "all=1"}`} className="text-xs text-navy underline">
               {all === "1" ? "미조치만" : "복구 포함 전체"}
             </Link>
+            {handler && (
+              <Link href={`/incidents?${site ? `site=${site}&` : ""}${dismissedView ? "" : "dismissed=1"}`} className="text-xs text-navy underline">
+                {dismissedView ? "장애 목록으로" : "삭제한 알림 보기"}
+              </Link>
+            )}
           </div>
         }
       />
@@ -52,9 +58,12 @@ export default async function IncidentsPage({ searchParams }: { searchParams: Pr
         </div>
       )}
 
-      <Card>
+      <Card
+        title={dismissedView ? "삭제한 알림" : `장애 목록 (${rows.length}건)`}
+        right={handler && !dismissedView && rows.length > 0 ? <DismissSelected /> : undefined}
+      >
         {rows.length === 0 ? (
-          <Empty>표시할 장애가 없습니다.</Empty>
+          <Empty>{dismissedView ? "삭제한 알림이 없습니다." : "표시할 장애가 없습니다."}</Empty>
         ) : (
           <ul className="divide-y">
             {rows.map((i) => {
@@ -63,6 +72,7 @@ export default async function IncidentsPage({ searchParams }: { searchParams: Pr
                 <li key={i.id} className="py-3 grid lg:grid-cols-[1fr_320px] gap-3">
                   <div>
                     <div className="flex flex-wrap items-center gap-1.5">
+                      {handler && !dismissedView && <input type="checkbox" name="dismiss" value={i.id} aria-label="삭제 선택" className="no-print" />}
                       <SeverityBadge severity={i.severity} />
                       <IncidentStatusBadge status={i.status} />
                       <span className="font-mono text-xs text-gray-500">{i.code}</span>
@@ -74,7 +84,8 @@ export default async function IncidentsPage({ searchParams }: { searchParams: Pr
                           반복 {i.occurrences}회{i.lastOccurredAt ? ` · 최근 ${relativeFromNow(i.lastOccurredAt, now)}` : ""}
                         </span>
                       )}
-                      {overdue && <span className="text-xs bg-red-100 text-red-800 rounded px-1.5">미조치 {i.minutesOpen}분 — 확대 통보 기준({escalate(i.siteId)}분) 초과</span>}
+                      {overdue && <span className="text-xs bg-red-100 text-red-800 rounded px-1.5">미조치 {formatDurationMin(i.minutesOpen)} — 확대 통보 기준({formatDurationMin(escalate(i.siteId))}) 초과</span>}
+                      {!overdue && i.status !== "RESOLVED" && !dismissedView && <span className="text-xs text-gray-600">경과 {formatDurationMin(i.minutesOpen)}</span>}
                     </div>
                     <div className="mt-1 text-sm">
                       <Link href={`/robots/${i.robotId}`} className="font-medium text-navy hover:underline">{i.robotName}</Link>
@@ -87,12 +98,14 @@ export default async function IncidentsPage({ searchParams }: { searchParams: Pr
                       <ul className="mt-1 text-xs text-gray-700 space-y-0.5">
                         {i.actions.map((a) => (
                           <li key={a.id}>
-                            <span className="text-gray-500">{formatDateTime(a.at)}</span> {a.internal ? <span className="text-amber-700">[내부]</span> : null} {a.note}
+                            <span className="text-gray-500">{formatDateTime(a.at)}</span> {a.internal ? <span className="text-amber-700">[내부]</span> : null} {a.note}{" "}
+                            {handler && !dismissedView && i.status !== "RESOLVED" && <CancelActionButton actionId={a.id} />}
                           </li>
                         ))}
                       </ul>
                     )}
-                    {i.resolvedAt && <div className="text-xs text-emerald-700 mt-0.5">복구 {formatDateTime(i.resolvedAt)} (소요 {i.minutesOpen}분)</div>}
+                    {i.resolvedAt && <div className="text-xs text-emerald-700 mt-0.5">복구 {formatDateTime(i.resolvedAt)} (소요 {formatDurationMin(i.minutesOpen)})</div>}
+                    {i.dismissedAt && <div className="text-xs text-gray-600 mt-0.5">삭제 {formatDateTime(i.dismissedAt)} — 사유: {i.dismissReason}</div>}
                     {!customer && i.notifications.length > 0 && (
                       <details className="text-xs mt-1">
                         <summary className="cursor-pointer text-gray-600">알림 발송 {i.notifications.length}건 (모의)</summary>
@@ -110,7 +123,15 @@ export default async function IncidentsPage({ searchParams }: { searchParams: Pr
                       </details>
                     )}
                   </div>
-                  <div className="no-print">{handler ? <IncidentActions incidentId={i.id} status={i.status} assignees={assignees} /> : <span className="text-xs text-gray-400">조회 전용</span>}</div>
+                  <div className="no-print">
+                    {dismissedView ? (
+                      canAdmin(user) ? <RestoreIncidentButton incidentId={i.id} /> : <span className="text-xs text-gray-400">복원은 본사 관리자</span>
+                    ) : handler ? (
+                      <IncidentActions incidentId={i.id} status={i.status} assignees={assignees} revertLabel={i.revertLabel} />
+                    ) : (
+                      <span className="text-xs text-gray-400">조회 전용</span>
+                    )}
+                  </div>
                 </li>
               );
             })}

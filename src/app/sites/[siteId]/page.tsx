@@ -1,3 +1,4 @@
+import { isCustomer } from "@/lib/auth/authz";
 import Link from "next/link";
 import { getCurrentUser } from "@/lib/auth/session";
 import { getSiteView } from "@/lib/services/robots";
@@ -50,6 +51,21 @@ export default async function SitePage({ params, searchParams }: { params: Promi
           <Notice tone="warn">이 층의 현재 지도(v{view.map.version})는 모서리 좌표가 없는 구형 지도입니다. 영역 지정 명령은 좌표 변환 검증 없이 전송되지 않도록 차단됩니다.</Notice>
         </div>
       )}
+
+      {(() => {
+        // 로봇이 쓰는 PUDU 지도가 이 층 지도와 다르거나 층에 제조사 지도가 없으면 위치를 그리지 못한다 → 담당자에게 맞추기 안내
+        const names = Array.from(new Set(view.robots.map((r) => r.status.mapVersionId).filter((m): m is string => !!m && m.startsWith("pudu:")).map((m) => m.slice(5))));
+        if (!names.length) return null;
+        return (
+          <div className="mb-3">
+            <Notice tone="warn">
+              {isCustomer(user)
+                ? "이 층의 로봇 지도를 준비 중입니다. 준비되면 로봇 위치가 지도에 표시됩니다."
+                : `이 층 로봇이 쓰는 지도(${names.join(", ")})가 층 지도와 달라 위치를 그리지 못합니다. 관리 설정 → PUDU → 『로봇이 쓰는 지도로 층 지도 맞추기』를 누르세요.`}
+            </Notice>
+          </div>
+        );
+      })()}
 
       <div className="grid lg:grid-cols-3 gap-4">
         <Card title={`${view.selectedFloor.name} 지도 (v${view.map.version})`} className="lg:col-span-2" right={<span className="text-xs text-gray-500">{view.zones.length}개 구역 · {view.robots.length}대</span>}>

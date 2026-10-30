@@ -16,7 +16,7 @@ export function Card({ title, children, className = "", right }: { title?: React
   return (
     <section className={`bg-white rounded-lg border border-gray-200 shadow-sm ${className}`}>
       {title ? (
-        <div className="px-4 py-2.5 border-b border-gray-100 flex items-center justify-between gap-2">
+        <div className="px-4 py-2.5 border-b border-gray-100 flex flex-wrap items-center justify-between gap-2">
           <h2 className="font-semibold text-navy text-sm sm:text-base">{title}</h2>
           {right}
         </div>

@@ -151,6 +151,12 @@ export async function deleteFloor(user: User, floorId: string): Promise<void> {
   if (robots.length) throw new ConflictError("로봇이 배치된 층은 삭제할 수 없습니다. 로봇을 먼저 이동하세요.");
   const [{ n }] = await db.select({ n: sql<number>`count(*)::int` }).from(schema.actualRuns).where(eq(schema.actualRuns.floorId, floorId));
   if (n > 0) throw new ConflictError("실적 이력이 있는 층은 삭제할 수 없습니다(이력 보존).");
+  // 설치 보고서에 지도가 실린 층은 지도·이미지를 보존해야 하므로 삭제하지 않는다(보고서는 보존 기한 없음)
+  const [inReport] = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(schema.reportVersions)
+    .where(sql`${schema.reportVersions.aggregates} -> 'installation' -> 'maps' @> ${JSON.stringify([{ floorId }])}::jsonb`);
+  if ((inReport?.n ?? 0) > 0) throw new ConflictError("보고서에 지도가 실린 층은 삭제할 수 없습니다(보고서 보존).");
   await db.transaction(async (tx) => {
     await tx.delete(schema.zones).where(eq(schema.zones.floorId, floorId));
     // floors.current_map_version_id 는 FK 가 아니므로 지도 버전을 먼저 지운 뒤 층을 지운다
@@ -171,6 +177,16 @@ async function puduContextForSite(siteId: string): Promise<{ sn: string; shopId:
   const r = robots.find((x) => x.vendorMeta?.shopId);
   if (!r) throw new ValidationError("이 사업장에 PUDU API 로 등록한 로봇이 없어 지도 목록을 조회할 수 없습니다. 먼저 로봇을 등록·배치하세요.");
   return { sn: r.vendorRobotId, shopId: String(r.vendorMeta!.shopId) };
+}
+
+/** 층 기준 PUDU 조회 대상: 그 층에 배치된 로봇(매장이 다를 수 있으므로) → 없으면 사업장의 로봇. */
+async function puduContextForFloor(floor: { id: string; siteId: string }): Promise<{ sn: string; shopId: string }> {
+  const robots = await getDb()
+    .select()
+    .from(schema.robots)
+    .where(and(eq(schema.robots.floorId, floor.id), eq(schema.robots.vendor, "PUDU"), eq(schema.robots.active, true), sql`${schema.robots.vendorMeta}->>'source' = 'api'`));
+  const r = robots.find((x) => x.vendorMeta?.shopId);
+  return r ? { sn: r.vendorRobotId, shopId: String(r.vendorMeta!.shopId) } : puduContextForSite(floor.siteId);
 }
 
 export async function listPuduMapsForSite(user: User, siteId: string): Promise<{ shopId: string; maps: PuduMapListItem[] }> {
@@ -205,7 +221,7 @@ export async function importPuduMap(user: User, floorId: string, mapName: string
   const db = getDb();
   const floor = await db.query.floors.findFirst({ where: eq(schema.floors.id, floorId) });
   if (!floor) throw new NotFoundError("층을 찾을 수 없습니다.");
-  const ctx = await puduContextForSite(floor.siteId);
+  const ctx = await puduContextForFloor(floor);
   const detail: PuduMapDetail = await createPuduApi().mapDetail(ctx.shopId, mapName);
   if (!detail?.url || !detail.width || !detail.height || !detail.resolution || !Array.isArray(detail.origin) || detail.origin.length < 2) {
     throw new ValidationError("지도 상세 응답에 이미지·크기·해상도·원점이 모두 있지 않아 가져오지 않습니다.");
@@ -247,6 +263,60 @@ export async function importPuduMap(user: User, floorId: string, mapName: string
   // 이미지 자체 보관(실패해도 가져오기는 성공으로 두고 원본 URL 을 그대로 참조한다 — 관리 화면에서 다시 받기 가능)
   const stored = await storeMapImage(mapVersionId, detail.url);
   return { mapVersionId, version, zones: zoneRows.length, imageStored: stored.ok, imageError: stored.ok ? undefined : stored.error };
+}
+
+/**
+ * 로봇이 지금 쓰는 지도로 층 지도 맞추기: PUDU 로봇이 배치된 층마다 로봇들이 보고하는 지도 이름(상세 조회)을 모아
+ * 가장 많이 쓰는 지도가 층의 현재 지도와 다르면 그 지도를 가져온다. 로봇마다 지도가 다르면 다수결로 고르고 결과에 알린다.
+ */
+export async function alignFloorMapsToRobots(user: User): Promise<{ site: string; floor: string; map: string | null; result: string }[]> {
+  assertActive(user);
+  assertAdmin(user);
+  const db = getDb();
+  const api = createPuduApi();
+  const robots = await db
+    .select()
+    .from(schema.robots)
+    .where(and(eq(schema.robots.vendor, "PUDU"), eq(schema.robots.active, true), sql`${schema.robots.vendorMeta}->>'source' = 'api'`));
+  const byFloor = new Map<string, typeof robots>();
+  for (const r of robots) byFloor.set(r.floorId, [...(byFloor.get(r.floorId) ?? []), r]);
+  const out: { site: string; floor: string; map: string | null; result: string }[] = [];
+  for (const [floorId, rs] of byFloor) {
+    const floor = await db.query.floors.findFirst({ where: eq(schema.floors.id, floorId) });
+    if (!floor) continue;
+    const site = await db.query.sites.findFirst({ where: eq(schema.sites.id, floor.siteId) });
+    const names: string[] = [];
+    for (const r of rs) {
+      try {
+        const d = await api.cleanDetail(r.vendorRobotId);
+        const n = (d as { map?: { name?: string } }).map?.name;
+        if (n) names.push(n);
+      } catch {
+        /* 조회 실패 로봇은 건너뛴다 */
+      }
+    }
+    const row = { site: site?.name ?? floor.siteId, floor: floor.name };
+    if (!names.length) {
+      out.push({ ...row, map: null, result: "로봇이 지도 정보를 주지 않음(오프라인 등) — 건너뜀" });
+      continue;
+    }
+    const counts = new Map<string, number>();
+    names.forEach((n) => counts.set(n, (counts.get(n) ?? 0) + 1));
+    const [best] = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+    const note = counts.size > 1 ? ` (로봇마다 지도가 다름: ${[...counts.keys()].join(", ")} — 층을 나누는 것을 검토)` : "";
+    const cur = await db.query.mapVersions.findFirst({ where: eq(schema.mapVersions.id, floor.currentMapVersionId) });
+    if (cur?.vendor === "PUDU" && cur.vendorMapName === best[0]) {
+      out.push({ ...row, map: best[0], result: `이미 맞음${note}` });
+      continue;
+    }
+    try {
+      const r = await importPuduMap(user, floorId, best[0]);
+      out.push({ ...row, map: best[0], result: `가져옴 v${r.version} · 구역 ${r.zones}개 · 이미지 ${r.imageStored ? "보관" : `원격 참조(${r.imageError})`}${note}` });
+    } catch (e) {
+      out.push({ ...row, map: best[0], result: `실패: ${(e as Error).message}` });
+    }
+  }
+  return out;
 }
 
 // ---- 지도 이미지 보관 ----

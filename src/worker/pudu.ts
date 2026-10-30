@@ -1,10 +1,11 @@
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import type { Incident, Robot, Schedule } from "@/lib/domain/types";
 import { getDb, schema } from "@/lib/db/client";
 import { getNotificationSetting, getSite, getStatus, siteAt } from "@/lib/db/repo";
 import { notifyIncident } from "@/lib/notify/notifier";
 import { newId } from "@/lib/util/random";
-import { addMinutes, nowIso } from "@/lib/util/time";
+import { addMinutes, localDateKey, localToUtcIso, nowIso } from "@/lib/util/time";
+import { addDays } from "@/lib/reports/schedule";
 import { vendorMode } from "@/lib/vendors";
 import { PuduAdapter, createPuduApi, tzOffsetHours } from "@/lib/vendors/pudu/puduAdapter";
 import { customerMessageFor, errorToIncidentKey, mapErrorLevel, mapReportToRun, productParamFor } from "@/lib/vendors/pudu/mapping";
@@ -123,14 +124,17 @@ export async function confirmPendingCommands(robot: Robot, common: string): Prom
 }
 
 /** 청소 보고서 → 실적 적재(최근 windowHours). 상세 조회로 물 사용량 등을 보강한다(통계 API 직렬). */
-export async function syncPuduReports(api: PuduApi = createPuduApi(), windowHours = 48): Promise<SyncResult> {
-  return recordSync("reports", async () => {
+/** 조회 구간(초). 지정하지 않으면 지금부터 windowHours 전까지. 과거 이력 적재(scripts/pudu-backfill.ts)는 7일 이하 구간을 넘긴다(통계 API 권장). */
+export type SyncRange = { start: number; end: number };
+
+export async function syncPuduReports(api: PuduApi = createPuduApi(), windowHours = 48, range?: SyncRange): Promise<SyncResult> {
+  return recordSync(range ? "reports-backfill" : "reports", async () => {
     const db = getDb();
     const robots = await puduRobots();
     const bySn = new Map(robots.map((r) => [r.vendorRobotId, r]));
     const now = nowIso();
-    const end = Math.floor(Date.now() / 1000);
-    const start = end - windowHours * 3600;
+    const end = range?.end ?? Math.floor(Date.now() / 1000);
+    const start = range?.start ?? end - windowHours * 3600;
     const tz = tzOffsetHours("Asia/Seoul");
     let seen = 0;
     let inserted = 0;
@@ -174,12 +178,14 @@ export async function syncPuduReports(api: PuduApi = createPuduApi(), windowHour
 }
 
 /** 장애 로그 → 장애 적재(중복은 vendorEventId 로 차단). Fatal/Error 만 통보, Warning/Event 는 기록만. */
-export async function syncPuduErrors(api: PuduApi = createPuduApi(), windowHours = 48): Promise<SyncResult> {
-  return recordSync("errors", async () => {
+export async function syncPuduErrors(api: PuduApi = createPuduApi(), windowHours = 48, range?: SyncRange): Promise<SyncResult> {
+  return recordSync(range ? "errors-backfill" : "errors", async () => {
     const robots = await puduRobots();
     const bySn = new Map(robots.map((r) => [r.vendorRobotId, r]));
-    const end = Math.floor(Date.now() / 1000);
-    const start = end - windowHours * 3600;
+    const end = range?.end ?? Math.floor(Date.now() / 1000);
+    const start = range?.start ?? end - windowHours * 3600;
+    // 과거 이력 적재(range 지정)에서 7일보다 오래된 로그는 조치할 대상이 아니라 이력이다 → 복구 상태로 적재해 미조치 목록을 채우지 않는다.
+    const historicalBefore = new Date(Date.now() - HISTORICAL_ERROR_DAYS * 86_400_000).toISOString();
     let seen = 0;
     let inserted = 0;
     for (const shopId of parseShopIds(process.env.PUDU_SHOP_IDS)) for (let offset = 0; offset < 10000; offset += 20) {
@@ -191,7 +197,8 @@ export async function syncPuduErrors(api: PuduApi = createPuduApi(), windowHours
         if (!robot) continue;
         const occurredAt = e.task_time ? new Date(e.task_time.replace(" ", "T") + (e.task_time.includes("+") || e.task_time.endsWith("Z") ? "" : "+09:00")).toISOString() : nowIso();
         // 로그 동기화는 과거 이력 적재이므로 현재 상태를 덮지 않는다(실기: 며칠 전 로그로 정상 로봇이 ERROR 로 표시되는 문제). 현재 상태는 상세 폴링(task=-100/-200)이 정한다.
-        if (await upsertIncidentFromError(robot, { code: e.error_type, level: e.error_level, detail: e.error_detail, key: errorToIncidentKey(e), occurredAt, payload: e, notify: false, touchStatus: false })) inserted += 1;
+        const historical = !!range && occurredAt < historicalBefore;
+        if (await upsertIncidentFromError(robot, { code: e.error_type, level: e.error_level, detail: e.error_detail, key: errorToIncidentKey(e), occurredAt, payload: e, notify: false, touchStatus: false, historical })) inserted += 1;
       }
       if (list.length < 20) break;
     }
@@ -199,7 +206,7 @@ export async function syncPuduErrors(api: PuduApi = createPuduApi(), windowHours
   });
 }
 
-async function upsertIncidentFromError(robot: Robot, e: { code: string; level: string; detail: string; key: string; occurredAt: string; payload: unknown; notify: boolean; touchStatus: boolean }): Promise<boolean> {
+async function upsertIncidentFromError(robot: Robot, e: { code: string; level: string; detail: string; key: string; occurredAt: string; payload: unknown; notify: boolean; touchStatus: boolean; historical?: boolean }): Promise<boolean> {
   const db = getDb();
   const dup = await db.query.incidents.findFirst({ where: eq(schema.incidents.vendorEventId, e.key) });
   if (dup) return false;
@@ -210,13 +217,13 @@ async function upsertIncidentFromError(robot: Robot, e: { code: string; level: s
   const open = await db
     .select()
     .from(schema.incidents)
-    .where(and(eq(schema.incidents.robotId, robot.id), eq(schema.incidents.code, e.code), inArray(schema.incidents.status, ["OPEN", "ACKED", "ASSIGNED", "IN_PROGRESS"])));
+    .where(and(eq(schema.incidents.robotId, robot.id), eq(schema.incidents.code, e.code), isNull(schema.incidents.dismissedAt), inArray(schema.incidents.status, e.historical ? ["RESOLVED"] : ["OPEN", "ACKED", "ASSIGNED", "IN_PROGRESS"])));
   const recent = open.find((i) => Math.abs(new Date(e.occurredAt).getTime() - new Date(i.lastOccurredAt ?? i.occurredAt).getTime()) <= INCIDENT_GROUP_HOURS * 3600_000);
   if (recent) {
     const newer = e.occurredAt > (recent.lastOccurredAt ?? recent.occurredAt);
     await db
       .update(schema.incidents)
-      .set({ occurrences: recent.occurrences + 1, lastOccurredAt: newer ? e.occurredAt : (recent.lastOccurredAt ?? recent.occurredAt), groupedEventIds: [...(recent.groupedEventIds ?? []), e.key], ...(newer ? { rawMessage: `[${e.level}] ${e.code}: ${e.detail}`, rawPayload: e.payload } : {}) })
+      .set({ occurrences: recent.occurrences + 1, lastOccurredAt: newer ? e.occurredAt : (recent.lastOccurredAt ?? recent.occurredAt), ...(e.historical && newer ? { resolvedAt: e.occurredAt } : {}), groupedEventIds: [...(recent.groupedEventIds ?? []), e.key], ...(newer ? { rawMessage: `[${e.level}] ${e.code}: ${e.detail}`, rawPayload: e.payload } : {}) })
       .where(eq(schema.incidents.id, recent.id));
     return false;
   }
@@ -230,14 +237,15 @@ async function upsertIncidentFromError(robot: Robot, e: { code: string; level: s
     rawMessage: `[${e.level}] ${e.code}: ${e.detail}`,
     customerMessage: customerMessageFor(e.code),
     occurredAt: e.occurredAt,
-    status: "OPEN",
+    status: e.historical ? "RESOLVED" : "OPEN",
     acknowledgedAt: null,
     assigneeId: null,
-    resolvedAt: null,
+    // 과거 이력: 실제 복구 시각은 모른다 → 마지막 발생 시각으로 두고 조치 기록에 그렇게 밝힌다.
+    resolvedAt: e.historical ? e.occurredAt : null,
     vendorEventId: e.key,
     occurrences: 1,
     lastOccurredAt: e.occurredAt,
-    actions: [],
+    actions: e.historical ? [{ id: newId("act"), at: nowIso(), userId: "system", note: "제조사 장애 로그 이력에서 적재(조치·복구 기록 없음)", internal: false }] : [],
     notifications: [],
   };
   let logs = inc.notifications;
@@ -246,8 +254,9 @@ async function upsertIncidentFromError(robot: Robot, e: { code: string; level: s
     logs = await notifyIncident(setting, inc, null, nowIso(), site.timezone, "OCCURRED");
   }
   await db.transaction(async (tx) => {
-    const { actions: _a, notifications: _n, ...row } = inc;
+    const { actions, notifications: _n, ...row } = inc;
     await tx.insert(schema.incidents).values({ ...row, rawPayload: e.payload }).onConflictDoNothing();
+    if (actions.length) await tx.insert(schema.incidentActions).values(actions.map((a) => ({ ...a, incidentId: inc.id }))).onConflictDoNothing();
     if (logs.length) await tx.insert(schema.notificationLogs).values(logs.map((l) => ({ ...l, incidentId: inc.id })));
     if (e.touchStatus && (severity === "HIGH" || severity === "CRITICAL")) {
       await tx.update(schema.robotStatus).set({ common: "ERROR", raw: `ERROR:${e.code}`, lastReceivedAt: nowIso(), dataAt: e.occurredAt }).where(eq(schema.robotStatus.robotId, robot.id));
@@ -301,6 +310,68 @@ export async function syncPuduCatalog(api: PuduApi = createPuduApi()): Promise<S
       }
     }
     return { detail: `작업 ${tasks} · 예약 ${crons} · 소모품 ${components}`, counts: { tasks, crons, components } };
+  });
+}
+
+/** 예정 회차와 실적을 같은 회차로 보는 시각 차(분). 보고서 동기화의 연결 규칙과 같다. */
+export const PLAN_MATCH_MINUTES = 90;
+/** 예정 시각이 이만큼 지나야 수행/미실행을 판정한다(작업 시간·보고서 업로드 지연 여유). */
+export const PLAN_SETTLE_HOURS = 3;
+
+/**
+ * PUDU 예약(제조사가 실행) → 계획 회차. 보고서의 계획 완료율 분모가 된다.
+ * - 사업장 날짜로 오늘·내일 회차만 만든다(멱등). 지금 예약으로 과거 회차를 소급하지 않는다(그때 예약이 지금과 같다는 보장이 없다).
+ * - 예정 시각이 PLAN_SETTLE_HOURS 지난 회차는 같은 로봇의 실적(±PLAN_MATCH_MINUTES)과 맞춰 수행(DONE) 또는 미실행(MISSED)으로 정리한다.
+ */
+export async function syncPuduPlannedRuns(now: string = nowIso()): Promise<SyncResult> {
+  return recordSync("plan", async () => {
+    const db = getDb();
+    const robots = await puduRobots();
+    let created = 0;
+    let done = 0;
+    let missed = 0;
+    for (const robot of robots) {
+      const tz = (await getSite(robot.siteId, db))?.timezone ?? "Asia/Seoul";
+      const tasks = await db.select().from(schema.registeredTasks).where(eq(schema.registeredTasks.robotId, robot.id));
+      const schedules = tasks.length ? await db.select().from(schema.schedules).where(and(inArray(schema.schedules.taskId, tasks.map((t) => t.id)), eq(schema.schedules.enabled, true))) : [];
+      const today = localDateKey(now, tz);
+      for (const day of [today, addDays(today, 1)]) {
+        const dow = new Date(`${day}T00:00:00Z`).getUTCDay();
+        for (const s of schedules) {
+          if (!s.daysOfWeek.includes(dow)) continue;
+          const plannedAt = localToUtcIso(day, s.time, tz);
+          const res = await db
+            .insert(schema.plannedRuns)
+            .values({ id: `plan-${s.id}-${plannedAt}`, scheduleId: s.id, taskId: s.taskId, robotId: robot.id, siteId: robot.siteId, plannedAt, status: "PLANNED", reason: null, actualRunId: null, changeHistory: [] })
+            .onConflictDoNothing()
+            .returning({ id: schema.plannedRuns.id });
+          created += res.length;
+        }
+      }
+      const settleBefore = new Date(new Date(now).getTime() - PLAN_SETTLE_HOURS * 3600_000).toISOString();
+      const pending = await db
+        .select()
+        .from(schema.plannedRuns)
+        .where(and(eq(schema.plannedRuns.robotId, robot.id), eq(schema.plannedRuns.status, "PLANNED"), sql`${schema.plannedRuns.plannedAt} < ${settleBefore}`));
+      if (!pending.length) continue;
+      const runs = await db.select().from(schema.actualRuns).where(eq(schema.actualRuns.robotId, robot.id));
+      const linked = new Set((await db.select({ id: schema.plannedRuns.actualRunId }).from(schema.plannedRuns).where(eq(schema.plannedRuns.robotId, robot.id))).map((r) => r.id).filter(Boolean));
+      for (const p of pending.sort((a, b) => a.plannedAt.localeCompare(b.plannedAt))) {
+        const t = new Date(p.plannedAt).getTime();
+        const hit = runs
+          .filter((r) => !linked.has(r.id) && Math.abs(new Date(r.startedAt).getTime() - t) <= PLAN_MATCH_MINUTES * 60_000)
+          .sort((a, b) => Math.abs(new Date(a.startedAt).getTime() - t) - Math.abs(new Date(b.startedAt).getTime() - t))[0];
+        if (hit) {
+          linked.add(hit.id);
+          await db.update(schema.plannedRuns).set({ status: "DONE", actualRunId: hit.id }).where(eq(schema.plannedRuns.id, p.id));
+          done += 1;
+        } else {
+          await db.update(schema.plannedRuns).set({ status: "MISSED", reason: `예정 시각 ±${PLAN_MATCH_MINUTES}분 안에 실적 없음(자동 판정)` }).where(eq(schema.plannedRuns.id, p.id));
+          missed += 1;
+        }
+      }
+    }
+    return { detail: `계획 회차 신규 ${created} · 수행 ${done} · 미실행 ${missed}`, counts: { created, done, missed } };
   });
 }
 
@@ -396,4 +467,6 @@ export function puduLiveEnabled(): boolean {
 /** 같은 로봇·같은 코드의 반복 발생을 한 장애로 묶는 시간 창(시간). */
 export const INCIDENT_GROUP_HOURS = Number(process.env.INCIDENT_GROUP_HOURS ?? 6);
 export const PUDU_WINDOW_HOURS = Number(process.env.PUDU_POLL_WINDOW_HOURS ?? 48);
+/** 이보다 오래된 장애 로그는 과거 이력(복구 상태)으로 적재한다. */
+export const HISTORICAL_ERROR_DAYS = 7;
 export { addMinutes };

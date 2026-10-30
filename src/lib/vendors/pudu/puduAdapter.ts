@@ -139,7 +139,8 @@ export class PuduAdapter implements VendorAdapter {
         mapVersionId = `pudu:${m.mapName}`;
       }
     } else {
-      mapVersionId = null; // 샘플 지도에는 제조사 좌표를 그리지 않는다
+      // 층에 아직 제조사 지도가 없다: 좌표는 그리지 않고(미터를 px 로 오인하지 않도록) 로봇이 쓰는 지도 이름만 남겨 화면이 '지도 가져오기'를 안내한다
+      mapVersionId = m.mapName ? `pudu:${m.mapName}` : null;
     }
     const rawWithPos = m.pose ? `${m.raw} pos=(${m.pose.x.toFixed(1)}, ${m.pose.y.toFixed(1)})m map=${m.mapName ?? "-"}` : m.raw;
     return {

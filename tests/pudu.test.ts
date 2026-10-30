@@ -7,7 +7,9 @@ import { PuduApi } from "@/lib/vendors/pudu/api";
 import { buildExecBodies, mapCleanbotTaskCode, mapProductCode, mapReportStatus, mapReportToRun } from "@/lib/vendors/pudu/mapping";
 import { PuduAdapter } from "@/lib/vendors/pudu/puduAdapter";
 import { ingestPuduCallback } from "@/lib/vendors/pudu/webhook";
-import { confirmPendingCommands, processPuduEvents, syncPuduCatalog, syncPuduErrors, syncPuduReports, syncPuduStatus } from "@/worker/pudu";
+import { confirmPendingCommands, processPuduEvents, syncPuduCatalog, syncPuduErrors, syncPuduPlannedRuns, syncPuduReports, syncPuduStatus } from "@/worker/pudu";
+import { addMinutes, localDateKey, localToUtcIso, nowIso } from "@/lib/util/time";
+import { addDays } from "@/lib/reports/schedule";
 import { issueCommand } from "@/lib/services/commands";
 import { puduImportRobots, puduTestConnection } from "@/lib/services/admin";
 import { getAdapter } from "@/lib/vendors";
@@ -227,6 +229,53 @@ describe("PUDU 클라이언트·어댑터·워커 (모의 서버)", () => {
     expect(incs[0].rawMessage).toContain("again");
     // 과거 로그 적재는 현재 상태를 덮지 않는다(실기에서 정상 로봇이 ERROR 로 표시되던 문제)
     expect((await db().query.robotStatus.findFirst({ where: eq(schema.robotStatus.robotId, id) }))!.common).not.toBe("ERROR");
+  });
+
+  it("예약 → 계획 회차: 오늘·내일만 만들고(멱등), 3시간 지나면 실적과 맞춰 수행/미실행 판정", async () => {
+    const id = await registerMockRobot();
+    await db().insert(schema.registeredTasks).values({ id: "task-plan-t", siteId: "site-01", robotId: id, name: "야간 청소", zoneIds: [], mode: "SCRUB", vendorTaskRef: "t@1" });
+    await db().insert(schema.schedules).values({ id: "sch-plan-t", taskId: "task-plan-t", daysOfWeek: [0, 1, 2, 3, 4, 5, 6], time: "10:00", enabled: true, executor: "VENDOR" });
+    const d0 = localDateKey(nowIso());
+    const at = (day: string, hhmm: string) => localToUtcIso(day, hhmm);
+    const r1 = await syncPuduPlannedRuns(at(d0, "12:00"));
+    expect(r1.counts).toMatchObject({ created: 2, done: 0, missed: 0 });
+    expect((await syncPuduPlannedRuns(at(d0, "12:00"))).counts?.created).toBe(0);
+    const startedAt = at(d0, "10:20");
+    await db().insert(schema.actualRuns).values({ id: "run-plan-t", vendor: "PUDU", vendorRobotId: MOCK_SN, vendorRunId: "vr-plan-t", robotId: id, siteId: "site-01", floorId: "site-01-f1", taskId: null, zoneIds: [], startedAt, endedAt: addMinutes(startedAt, 40), result: "COMPLETED", endReason: null, areaM2: 300, durationMin: 40, waterL: null, detergentMl: null, origin: "PLANNED", receivedAt: addMinutes(startedAt, 50) });
+    expect((await syncPuduPlannedRuns(at(d0, "14:00"))).counts).toMatchObject({ done: 1, missed: 0 });
+    const d1 = addDays(d0, 1);
+    expect((await syncPuduPlannedRuns(at(d1, "14:00"))).counts).toMatchObject({ created: 1, done: 0, missed: 1 }); // 내일(d1) 실적 없음, 모레 회차 생성
+    const plans = await db().select().from(schema.plannedRuns).where(eq(schema.plannedRuns.robotId, id)).orderBy(schema.plannedRuns.plannedAt);
+    expect(plans.map((p) => p.status)).toEqual(["DONE", "MISSED", "PLANNED"]);
+    expect(plans[0].actualRunId).toBe("run-plan-t");
+  });
+
+  it("과거 이력 적재(구간 지정): 7일보다 오래된 장애 로그는 복구 상태 이력으로, 같은 코드끼리 묶는다", async () => {
+    const id = await registerMockRobot();
+    const saved = state.errors;
+    const kst = (daysAgo: number, hhmm: string) => {
+      const d = new Date(Date.now() - daysAgo * 86_400_000 + 9 * 3600_000).toISOString().slice(0, 10);
+      return `${d} ${hhmm}:00`;
+    };
+    state.errors = [
+      { ...saved[0], id: "h1", error_id: "hist-1", task_time: kst(30, "10:00") },
+      { ...saved[0], id: "h2", error_id: "hist-2", task_time: kst(30, "11:00"), error_detail: "sewage tank full later" },
+      { ...saved[0], id: "h3", error_id: "recent-1", task_time: kst(1, "10:00") },
+    ];
+    try {
+      const end = Math.floor(Date.now() / 1000);
+      const r = await syncPuduErrors(api, 0, { start: end - 40 * 86_400, end });
+      expect(r.ok).toBe(true);
+      const incs = await db().select().from(schema.incidents).where(eq(schema.incidents.robotId, id)).orderBy(schema.incidents.occurredAt);
+      expect(incs.length).toBe(2);
+      expect(incs[0]).toMatchObject({ status: "RESOLVED", occurrences: 2 });
+      expect(incs[0].resolvedAt).toBe(incs[0].lastOccurredAt);
+      const acts = await db().select().from(schema.incidentActions).where(eq(schema.incidentActions.incidentId, incs[0].id));
+      expect(acts[0].note).toContain("이력");
+      expect(incs[1].status).toBe("OPEN"); // 최근 것은 조치 대상
+    } finally {
+      state.errors = saved;
+    }
   });
 
   it("명령: 등록 작업 실행 → 접수(ACCEPTED, trace_id) → 폴링으로 실행 확인(EXECUTING)", async () => {

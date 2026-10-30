@@ -60,6 +60,20 @@ export function relativeFromNow(iso: string | null | undefined, now: string = no
   return `${Math.floor(h / 24)}일 전`;
 }
 
+/** 경과 시간(분)을 읽기 쉽게: 59분 → "59분", 135분 → "2시간 15분", 1500분 → "1일 1시간". */
+export function formatDurationMin(min: number): string {
+  const m = Math.max(0, Math.round(min));
+  if (m < 60) return `${m}분`;
+  if (m < 1440) {
+    const h = Math.floor(m / 60);
+    const r = m % 60;
+    return r ? `${h}시간 ${r}분` : `${h}시간`;
+  }
+  const d = Math.floor(m / 1440);
+  const h = Math.floor((m % 1440) / 60);
+  return h ? `${d}일 ${h}시간` : `${d}일`;
+}
+
 /** YYYY-MM 문자열에서 전월/익월 */
 export function shiftMonth(month: string, delta: number): string {
   const [y, m] = month.split("-").map(Number);

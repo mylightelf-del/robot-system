@@ -207,5 +207,28 @@ function installationSnapshot(data: AggregateInput, site: Site, floors: Floor[],
       time: s.time,
       enabled: s.enabled,
     }));
-  return { installedOn, robots, floors: floorRows, tasks, schedules };
+  // 층별 지도와 청소 구역(제조사 지도에 등록된 구역 = 청소 범위)
+  const maps = floors
+    .map((f) => {
+      const mv = data.mapVersions?.find((m) => m.id === f.currentMapVersionId);
+      const fz = zones.filter((z) => z.floorId === f.id);
+      if (!mv || (fz.length === 0 && !mv.imageUrl)) return null;
+      return { floorId: f.id, floorName: f.name, mapVersionId: mv.id, hasImage: !!mv.imageUrl, widthPx: mv.widthPx, heightPx: mv.heightPx, zones: fz.map((z) => ({ name: z.name, polygon: z.polygon, areaM2: Math.round(z.areaM2) })) };
+    })
+    .filter((m): m is NonNullable<typeof m> => m !== null);
+  // 주간 예약 타임라인: 사용 중인 예약, 소요 시간은 그 작업의 최근 실적 평균(없으면 미정)
+  const weekly = (data.schedules ?? [])
+    .filter((s) => s.enabled && siteTasks.some((t) => t.id === s.taskId))
+    .map((s) => {
+      const task = siteTasks.find((t) => t.id === s.taskId)!;
+      const robot = data.robots.find((r) => r.id === task.robotId);
+      const runs = data.actualRuns
+        .filter((r) => r.taskId === task.id && r.durationMin > 0)
+        .sort((a, b) => a.startedAt.localeCompare(b.startedAt))
+        .slice(-20);
+      const durationMin = runs.length ? Math.round(runs.reduce((a, r) => a + r.durationMin, 0) / runs.length) : null;
+      return { robotName: robot?.name ?? task.robotId, taskName: task.name, floorName: robot ? floorName(robot.floorId) : "-", daysOfWeek: [...s.daysOfWeek].sort(), time: s.time, durationMin };
+    })
+    .sort((a, b) => a.time.localeCompare(b.time) || a.robotName.localeCompare(b.robotName, "ko"));
+  return { installedOn, robots, floors: floorRows, tasks, schedules, maps, weekly };
 }

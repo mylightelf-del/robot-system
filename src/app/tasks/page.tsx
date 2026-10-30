@@ -15,8 +15,10 @@ import { addMinutes, formatDateTime, nowIso } from "@/lib/util/time";
 
 const DOW = ["일", "월", "화", "수", "목", "금", "토"];
 
-export default async function TasksPage({ searchParams }: { searchParams: Promise<{ site?: string }> }) {
-  const { site } = await searchParams;
+export default async function TasksPage({ searchParams }: { searchParams: Promise<{ site?: string; show?: string }> }) {
+  const { site, show } = await searchParams;
+  // 등록 작업 필터: 예약된 작업만(기본) / 등록 작업 포함(예약 없는 작업까지 전체)
+  const showAll = show === "all";
   const user = await getCurrentUser();
   let tasks, sites, planned, commands, robots;
   const now = nowIso();
@@ -31,15 +33,29 @@ export default async function TasksPage({ searchParams }: { searchParams: Promis
   }
   const customer = isCustomer(user);
   const zones = await listZonesInSites(site ? [site] : sites.map((s) => s.id));
+  const allTasks = tasks;
+  const scheduledCount = allTasks.filter((t) => t.schedules.some((s) => s.enabled)).length;
+  tasks = showAll ? allTasks : allTasks.filter((t) => t.schedules.some((s) => s.enabled));
+  const q = (v: string) => `/tasks?${new URLSearchParams({ ...(site ? { site } : {}), ...(v === "all" ? { show: "all" } : {}) }).toString()}`;
+  const chip = (active: boolean) => `px-2 py-0.5 rounded border text-xs ${active ? "bg-navy text-white border-navy" : "bg-white border-gray-300 text-gray-700"}`;
 
   return (
     <>
-      <PageTitle title="작업·일정" subtitle="등록 작업, 예약, 예정 회차와 원격 명령 이력" right={<SiteFilter sites={sites} current={site ?? ""} basePath="/tasks" />} />
+      <PageTitle title="작업·일정" subtitle="등록 작업, 예약, 예정 회차와 원격 명령 이력" right={<SiteFilter sites={sites} current={site ?? ""} basePath="/tasks" extra={showAll ? "show=all" : ""} />} />
 
       <div className="grid lg:grid-cols-2 gap-4">
-        <Card title="등록 작업 · 예약" right={<span className="text-xs text-gray-500">{tasks.length}개 작업</span>}>
+        <Card
+          className="min-w-0"
+          title="등록 작업 · 예약"
+          right={
+            <span className="flex flex-wrap gap-1 items-center">
+              <Link href={q("scheduled")} className={chip(!showAll)}>예약된 작업만 {scheduledCount}</Link>
+              <Link href={q("all")} className={chip(showAll)}>등록 작업 포함 {allTasks.length}</Link>
+            </span>
+          }
+        >
           {tasks.length === 0 ? (
-            <Empty>등록 작업이 없습니다.</Empty>
+            <Empty>{showAll ? "등록 작업이 없습니다." : "사용 중인 예약이 있는 작업이 없습니다. '등록 작업 포함'을 누르면 예약 없는 작업까지 보입니다."}</Empty>
           ) : (
             <div className="overflow-x-auto">
               <table className="data">
@@ -97,14 +113,14 @@ export default async function TasksPage({ searchParams }: { searchParams: Promis
               <details className="border rounded p-3">
                 <summary className="cursor-pointer text-sm font-medium">예약 추가</summary>
                 <div className="mt-2">
-                  <NewScheduleForm tasks={tasks.map((t) => ({ id: t.task.id, name: t.task.name, robotName: t.robotName }))} />
+                  <NewScheduleForm tasks={allTasks.map((t) => ({ id: t.task.id, name: t.task.name, robotName: t.robotName }))} />
                 </div>
               </details>
             </div>
           )}
         </Card>
 
-        <Card title="예정 작업 회차 (어제 ~ 모레)" right={<span className="text-xs text-gray-500">{planned.length}회</span>}>
+        <Card className="min-w-0" title="예정 작업 회차 (어제 ~ 모레)" right={<span className="text-xs text-gray-500">{planned.length}회</span>}>
           {planned.length === 0 ? (
             <Empty>표시할 회차가 없습니다.</Empty>
           ) : (

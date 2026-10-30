@@ -1,6 +1,6 @@
-import { and, desc, eq, inArray, ne } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, isNull, ne } from "drizzle-orm";
 import type { Incident, IncidentAction, Severity, User } from "@/lib/domain/types";
-import { accessibleSiteIds, assertActive, assertSiteAccess, canHandleIncidents, isCustomer } from "@/lib/auth/authz";
+import { accessibleSiteIds, assertActive, assertAdmin, assertSiteAccess, canHandleIncidents, isCustomer } from "@/lib/auth/authz";
 import { getDb, schema } from "@/lib/db/client";
 import { assembleIncidents, getIncident, getNotificationSetting, getRobot, getSite, listSitesByIds, listUsers, type DbLike } from "@/lib/db/repo";
 import { notifyIncident } from "@/lib/notify/notifier";
@@ -32,6 +32,11 @@ export interface IncidentView {
   actions: IncidentAction[];
   notifications: Incident["notifications"];
   minutesOpen: number;
+  /** 삭제(숨김)된 알림이면 그 시각·사유(담당자 화면의 '삭제한 알림' 보기에서만). */
+  dismissedAt: string | null;
+  dismissReason: string | null;
+  /** '한 단계 되돌리기'가 할 일(없으면 null). */
+  revertLabel: string | null;
 }
 
 export interface NameContext {
@@ -64,7 +69,37 @@ export function sanitizeIncident(i: Incident, user: User, ctx: NameContext): Inc
     actions: customer ? i.actions.filter((a) => !a.internal) : i.actions,
     notifications: customer ? [] : i.notifications,
     minutesOpen: Math.round((new Date(end).getTime() - new Date(i.occurredAt).getTime()) / 60000),
+    dismissedAt: customer ? null : (i.dismissedAt ?? null),
+    dismissReason: customer ? null : (i.dismissReason ?? null),
+    revertLabel: customer ? null : revertPlan(i)?.label ?? null,
   };
+}
+
+/**
+ * 단계 되돌리기 계획: 복구 → (복구 전 단계), 조치 중 → 마지막 조치 취소, 담당자 지정 → 지정 해제, 확인 → 발생.
+ * 실수로 누른 단계를 한 번에 하나씩 되돌린다. 모든 되돌리기는 감사 기록에 사유와 함께 남는다.
+ */
+function revertPlan(i: Pick<Incident, "status" | "assigneeId" | "acknowledgedAt" | "actions" | "resolvedAt">): { label: string } | null {
+  switch (i.status) {
+    case "RESOLVED":
+      return { label: "복구 취소" };
+    case "IN_PROGRESS":
+      return { label: "마지막 조치 취소" };
+    case "ASSIGNED":
+      return { label: "담당자 지정 취소" };
+    case "ACKED":
+      return { label: "확인 취소" };
+    default:
+      return null;
+  }
+}
+
+/** 조치 기록·담당·확인 여부로 지금 상태를 다시 정한다(복구 제외). */
+function statusFromState(i: { assigneeId: string | null; acknowledgedAt: string | null }, actionCount: number): Incident["status"] {
+  if (actionCount > 0) return "IN_PROGRESS";
+  if (i.assigneeId) return "ASSIGNED";
+  if (i.acknowledgedAt) return "ACKED";
+  return "OPEN";
 }
 
 async function nameContexts(incidents: Incident[], db: DbLike): Promise<Map<string, NameContext>> {
@@ -76,7 +111,7 @@ async function nameContexts(incidents: Incident[], db: DbLike): Promise<Map<stri
   return new Map(incidents.map((i) => [i.id, { siteName: sites.get(i.siteId) ?? i.siteId, robotName: robots.get(i.robotId) ?? i.robotId, assigneeName: i.assigneeId ? (users.get(i.assigneeId) ?? i.assigneeId) : null }]));
 }
 
-export async function listIncidents(user: User, opts: { siteId?: string; includeResolved?: boolean } = {}): Promise<IncidentView[]> {
+export async function listIncidents(user: User, opts: { siteId?: string; includeResolved?: boolean; dismissed?: boolean } = {}): Promise<IncidentView[]> {
   assertActive(user);
   const db = getDb();
   const siteIds = await accessibleSiteIds(user, db);
@@ -86,7 +121,14 @@ export async function listIncidents(user: User, opts: { siteId?: string; include
   const rows = await db
     .select()
     .from(schema.incidents)
-    .where(and(inArray(schema.incidents.siteId, ids), opts.includeResolved ? undefined : ne(schema.incidents.status, "RESOLVED")))
+    .where(
+      and(
+        inArray(schema.incidents.siteId, ids),
+        // 삭제(숨김)한 알림은 담당자의 '삭제한 알림' 보기에서만 보인다
+        opts.dismissed && !isCustomer(user) ? isNotNull(schema.incidents.dismissedAt) : isNull(schema.incidents.dismissedAt),
+        opts.includeResolved || opts.dismissed ? undefined : ne(schema.incidents.status, "RESOLVED"),
+      ),
+    )
     .orderBy(desc(schema.incidents.occurredAt))
     .limit(200);
   const incidents = await assembleIncidents(rows, db);
@@ -100,6 +142,7 @@ async function loadForHandling(user: User, incidentId: string, db: DbLike): Prom
   const inc = await getIncident(incidentId, db);
   if (!inc) throw new NotFoundError("장애를 찾을 수 없습니다.");
   await assertSiteAccess(user, inc.siteId, db);
+  if (inc.dismissedAt) throw new ValidationError("삭제한 알림입니다. 먼저 복원하세요.");
   return inc;
 }
 
@@ -161,6 +204,91 @@ export async function resolveIncident(user: User, incidentId: string, note: stri
   });
 }
 
+/** 한 단계 되돌리기(사유 필수). 복구 취소 시 복구 때 남긴 조치 기록도 지운다(감사 기록에는 남는다). */
+export async function revertIncidentStep(user: User, incidentId: string, reason: string): Promise<{ from: Incident["status"]; to: Incident["status"] }> {
+  const db = getDb();
+  const inc = await loadForHandling(user, incidentId, db);
+  if (!reason.trim()) throw new ValidationError("되돌리는 사유를 입력하세요.");
+  const plan = revertPlan(inc);
+  if (!plan) throw new ValidationError("발생 단계는 더 되돌릴 수 없습니다. 불필요한 알림이면 '알림 삭제'를 쓰세요.");
+  const actions = [...inc.actions].sort((a, b) => a.at.localeCompare(b.at));
+  let removed: (typeof actions)[number] | undefined;
+  const patch: Partial<typeof schema.incidents.$inferInsert> = {};
+  if (inc.status === "RESOLVED") {
+    // 복구 처리 때 같은 시각으로 남긴 조치 기록(복구 확인 메모)을 지운다
+    removed = actions.filter((a) => a.at === inc.resolvedAt).at(-1);
+    patch.resolvedAt = null;
+    patch.status = statusFromState(inc, actions.length - (removed ? 1 : 0));
+  } else if (inc.status === "IN_PROGRESS") {
+    removed = actions.at(-1);
+    patch.status = statusFromState(inc, actions.length - (removed ? 1 : 0));
+  } else if (inc.status === "ASSIGNED") {
+    patch.assigneeId = null;
+    patch.status = statusFromState({ assigneeId: null, acknowledgedAt: inc.acknowledgedAt }, 0);
+  } else if (inc.status === "ACKED") {
+    patch.acknowledgedAt = null;
+    patch.status = "OPEN";
+  }
+  await db.transaction(async (tx) => {
+    if (removed) await tx.delete(schema.incidentActions).where(eq(schema.incidentActions.id, removed.id));
+    await tx.update(schema.incidents).set(patch).where(eq(schema.incidents.id, incidentId));
+    await audit(user, { siteId: inc.siteId, robotId: inc.robotId, action: "INCIDENT:REVERT", params: { incidentId, from: inc.status, to: patch.status, step: plan.label, removedAction: removed ? { at: removed.at, note: removed.note, internal: removed.internal } : null }, result: "OK", detail: reason.trim(), vendorTraceId: null }, tx);
+  });
+  return { from: inc.status, to: patch.status! };
+}
+
+/** 조치 기록 하나 취소(잘못 쓴 메모). 내용은 감사 기록에 남는다. */
+export async function deleteIncidentAction(user: User, actionId: string, reason: string): Promise<void> {
+  const db = getDb();
+  const act = await db.query.incidentActions.findFirst({ where: eq(schema.incidentActions.id, actionId) });
+  if (!act) throw new NotFoundError("조치 기록을 찾을 수 없습니다.");
+  const inc = await loadForHandling(user, act.incidentId, db);
+  if (!reason.trim()) throw new ValidationError("취소 사유를 입력하세요.");
+  const remaining = inc.actions.filter((a) => a.id !== actionId).length;
+  await db.transaction(async (tx) => {
+    await tx.delete(schema.incidentActions).where(eq(schema.incidentActions.id, actionId));
+    if (inc.status === "IN_PROGRESS") await tx.update(schema.incidents).set({ status: statusFromState(inc, remaining) }).where(eq(schema.incidents.id, inc.id));
+    await audit(user, { siteId: inc.siteId, robotId: inc.robotId, action: "INCIDENT:ACTION_CANCEL", params: { incidentId: inc.id, actionId, at: act.at, note: act.note, internal: act.internal }, result: "OK", detail: reason.trim(), vendorTraceId: null }, tx);
+  });
+}
+
+/**
+ * 불필요한 알림 삭제(숨김): 목록·대시보드·보고서에서 빠진다. 행은 남겨 같은 제조사 이벤트가 다시 적재되지 않게 하고 감사 기록에 남긴다.
+ * 여러 건을 한 번에 지울 수 있다. 다른 사업장 건이 섞이면 전체를 거절한다.
+ */
+export async function dismissIncidents(user: User, incidentIds: string[], reason: string): Promise<number> {
+  assertActive(user);
+  if (!canHandleIncidents(user)) throw new ForbiddenError("알림 삭제는 현장/본사 담당자만 할 수 있습니다.");
+  if (!reason.trim()) throw new ValidationError("삭제 사유를 입력하세요(예: 정상 동작 중 발생한 경고).");
+  const ids = Array.from(new Set(incidentIds)).slice(0, 500);
+  if (!ids.length) return 0;
+  const db = getDb();
+  const rows = await db.select().from(schema.incidents).where(inArray(schema.incidents.id, ids));
+  for (const siteId of new Set(rows.map((r) => r.siteId))) await assertSiteAccess(user, siteId, db);
+  const targets = rows.filter((r) => !r.dismissedAt);
+  if (!targets.length) return 0;
+  const now = nowIso();
+  await db.transaction(async (tx) => {
+    await tx.update(schema.incidents).set({ dismissedAt: now, dismissedBy: user.id, dismissReason: reason.trim().slice(0, 200) }).where(inArray(schema.incidents.id, targets.map((t) => t.id)));
+    for (const t of targets) {
+      await audit(user, { siteId: t.siteId, robotId: t.robotId, action: "INCIDENT:DISMISS", params: { incidentId: t.id, code: t.code, severity: t.severity, status: t.status, occurredAt: t.occurredAt }, result: "OK", detail: reason.trim(), vendorTraceId: null }, tx);
+    }
+  });
+  return targets.length;
+}
+
+/** 삭제한 알림 복원(본사 관리자). */
+export async function restoreIncident(user: User, incidentId: string): Promise<void> {
+  assertActive(user);
+  assertAdmin(user);
+  const db = getDb();
+  const inc = await db.query.incidents.findFirst({ where: eq(schema.incidents.id, incidentId) });
+  if (!inc) throw new NotFoundError("장애를 찾을 수 없습니다.");
+  if (!inc.dismissedAt) throw new ValidationError("삭제된 알림이 아닙니다.");
+  await db.update(schema.incidents).set({ dismissedAt: null, dismissedBy: null, dismissReason: null }).where(eq(schema.incidents.id, incidentId));
+  await audit(user, { siteId: inc.siteId, robotId: inc.robotId, action: "INCIDENT:RESTORE", params: { incidentId }, result: "OK", detail: null, vendorTraceId: null }, db);
+}
+
 /** 샘플: 장애 발생 시뮬레이션(Webhook 수신을 대신). 중복 이벤트 ID 는 무시한다. */
 export async function simulateIncident(user: User, robotId: string, code: string, severity: Severity, vendorEventId: string | null): Promise<Incident | null> {
   const db = getDb();
@@ -196,7 +324,7 @@ export async function simulateIncident(user: User, robotId: string, code: string
     notifications: [],
   };
   // 같은 로봇·같은 코드의 미복구 장애에 대해 최근 발송 시각(중복 억제 판단)
-  const openSame = await db.select({ id: schema.incidents.id }).from(schema.incidents).where(and(eq(schema.incidents.robotId, robotId), eq(schema.incidents.code, code), ne(schema.incidents.status, "RESOLVED")));
+  const openSame = await db.select({ id: schema.incidents.id }).from(schema.incidents).where(and(eq(schema.incidents.robotId, robotId), eq(schema.incidents.code, code), ne(schema.incidents.status, "RESOLVED"), isNull(schema.incidents.dismissedAt)));
   let recent: string | null = null;
   if (openSame.length) {
     const logs = await db

@@ -280,6 +280,10 @@ export interface Incident {
   /** 같은 코드의 반복 발생 횟수(묶음). */
   occurrences?: number;
   lastOccurredAt?: string | null;
+  /** 불필요한 알림으로 삭제(숨김)된 시각·사용자·사유. 목록·보고서에서 빠진다. */
+  dismissedAt?: string | null;
+  dismissedBy?: string | null;
+  dismissReason?: string | null;
   actions: IncidentAction[];
   notifications: NotificationLog[];
 }
@@ -348,11 +352,34 @@ export interface ReportAggregates {
     floors: { name: string; mapVersion: number | null; mapSource: string; zones: number }[];
     tasks: { name: string; robotName: string; zones: number }[];
     schedules: { taskName: string; days: string; time: string; enabled: boolean }[];
+    /** 층별 지도와 청소 구역(지도 좌표 px). 이미지가 없는 층은 구역만 그린다. */
+    maps?: { floorId: string; floorName: string; mapVersionId: string; hasImage: boolean; widthPx: number; heightPx: number; zones: { name: string; polygon: [number, number][]; areaM2: number }[] }[];
+    /** 주간 예약 타임라인(사용 중인 예약만). durationMin 은 최근 실적 평균(없으면 null = 미정). */
+    weekly?: { robotName: string; taskName: string; floorName: string; daysOfWeek: number[]; time: string; durationMin: number | null }[];
   };
   dataGapDays: string[]; // 데이터 미수신 일자
   unsupportedMetrics: string[];
   /** 이 집계에 포함된 실적 중 가장 늦은 수신 시각. 이후 수신분은 "늦은 실적"으로 별도 계산한다. */
   includesRunsReceivedUntil: string;
+}
+
+/** 웹에서 고친 수치. 키 예: "summary.totalRuns", "byFloor.<floorId>.areaM2", "byDay.2026-10-16.runs". 원래 집계값은 aggregates 에 그대로 둔다. */
+export type ReportAdjustments = Record<string, { value: number; original: number | null; by: string; at: string }>;
+
+/** 보고서에 사람이 적는 구조화 내용(설치 보고서의 단계 일정·작업 일지 등). */
+export interface ReportContent {
+  phases?: { label: string; from: string; to: string }[];
+  workLog?: { part: string; staff: string; content: string }[];
+}
+
+export interface ReportPhoto {
+  id: string;
+  reportId: string;
+  caption: string;
+  contentType: string;
+  sort: number;
+  createdAt: string;
+  createdBy: string;
 }
 
 export interface ReportVersion {
@@ -366,6 +393,8 @@ export interface ReportVersion {
   status: ReportStatus;
   aggregates: ReportAggregates; // 초안은 재집계 가능, 확정 후 스냅샷
   comments: ReportComments;
+  adjustments: ReportAdjustments;
+  content: ReportContent;
   createdAt: string;
   createdBy: string;
   reviewedAt: string | null;

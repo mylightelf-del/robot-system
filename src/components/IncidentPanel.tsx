@@ -2,17 +2,47 @@
 
 import { useState } from "react";
 import type { Severity } from "@/lib/domain/types";
-import { ackIncidentAction, addIncidentActionAction, assignIncidentAction, resolveIncidentAction, simulateIncidentAction } from "@/app/actions";
+import { ackIncidentAction, addIncidentActionAction, assignIncidentAction, cancelIncidentActionAction, dismissIncidentsAction, resolveIncidentAction, restoreIncidentAction, revertIncidentAction, simulateIncidentAction } from "@/app/actions";
 import { ActionButton, btn, ResultLine, useAction } from "./ActionButton";
 
-export function IncidentActions({ incidentId, status, assignees }: { incidentId: string; status: string; assignees: { id: string; name: string }[] }) {
+/** 한 단계 되돌리기(사유 입력). */
+function RevertButton({ incidentId, label, run, pending }: { incidentId: string; label: string; run: ReturnType<typeof useAction>["run"]; pending: boolean }) {
+  return (
+    <button
+      type="button"
+      className={`${btn.small} border-amber-300 bg-amber-50 text-amber-900`}
+      disabled={pending}
+      onClick={() => {
+        const reason = window.prompt(`${label} — 사유를 입력하세요(감사 기록에 남습니다).`, "잘못 처리함");
+        if (reason === null) return;
+        run(() => revertIncidentAction(incidentId, reason));
+      }}
+    >
+      ↶ {label}
+    </button>
+  );
+}
+
+export function IncidentActions({ incidentId, status, assignees, revertLabel }: { incidentId: string; status: string; assignees: { id: string; name: string }[]; revertLabel: string | null }) {
   const { pending, result, run } = useAction();
   const [note, setNote] = useState("");
   const [internal, setInternal] = useState(true);
   const [assignee, setAssignee] = useState(assignees[0]?.id ?? "");
-  if (status === "RESOLVED") return <span className="text-xs text-gray-500">복구 완료</span>;
+  if (status === "RESOLVED")
+    return (
+      <div className="space-y-1 text-xs">
+        <span className="text-gray-500 mr-2">복구 완료</span>
+        {revertLabel && <RevertButton incidentId={incidentId} label={revertLabel} run={run} pending={pending} />}
+        <ResultLine result={result} />
+      </div>
+    );
   return (
     <div className="space-y-2 text-xs">
+      {revertLabel && (
+        <div>
+          <RevertButton incidentId={incidentId} label={revertLabel} run={run} pending={pending} />
+        </div>
+      )}
       <div className="flex flex-wrap gap-1 items-center">
         {status === "OPEN" && (
           <ActionButton variant="small" action={() => ackIncidentAction(incidentId)} showResult={false}>
@@ -86,5 +116,72 @@ export function SimulateIncidentForm({ robots, codes }: { robots: { id: string; 
       <ResultLine result={result} />
       <p className="text-xs text-gray-500">Webhook 수신을 대신하는 시뮬레이션입니다. 같은 이벤트 ID 를 두 번 보내면 중복으로 무시됩니다. 알림은 수신자 설정(등급·시간대·중복 억제)에 따라 모의 발송 또는 억제로 기록됩니다.</p>
     </div>
+  );
+}
+
+/** 조치 기록 하나 취소(잘못 쓴 메모). */
+export function CancelActionButton({ actionId }: { actionId: string }) {
+  const { pending, result, run } = useAction();
+  return (
+    <span className="inline-flex items-center gap-1 no-print">
+      <button
+        type="button"
+        className="text-[11px] text-red-700 underline disabled:opacity-50"
+        disabled={pending}
+        onClick={() => {
+          const reason = window.prompt("이 조치 기록을 취소할까요? 사유를 입력하세요(감사 기록에 남습니다).", "잘못 입력함");
+          if (reason === null) return;
+          run(() => cancelIncidentActionAction(actionId, reason));
+        }}
+      >
+        취소
+      </button>
+      <ResultLine result={result} />
+    </span>
+  );
+}
+
+/** 선택한 알림 삭제: 목록의 체크박스(name="dismiss")를 모아 지운다. */
+export function DismissSelected() {
+  const { pending, result, run } = useAction();
+  const [reason, setReason] = useState("");
+  const selected = () => Array.from(document.querySelectorAll<HTMLInputElement>('input[name="dismiss"]:checked')).map((el) => el.value);
+  return (
+    <div className="flex flex-wrap gap-2 items-center text-xs">
+      <label className="flex items-center gap-1">
+        <input
+          type="checkbox"
+          onChange={(e) => document.querySelectorAll<HTMLInputElement>('input[name="dismiss"]').forEach((el) => (el.checked = e.target.checked))}
+        />
+        전체 선택
+      </label>
+      <input className="border rounded px-2 py-1 w-64" placeholder="삭제 사유(예: 정상 동작 중 경고, 시험 중 발생)" value={reason} onChange={(e) => setReason(e.target.value)} />
+      <button
+        type="button"
+        className={btn.danger}
+        disabled={pending || !reason.trim()}
+        onClick={() => {
+          const ids = selected();
+          if (!ids.length) return window.alert("삭제할 알림을 체크하세요.");
+          if (!window.confirm(`알림 ${ids.length}건을 삭제할까요? 목록·대시보드·보고서에서 빠지고, 본사 관리자가 복원할 수 있습니다.`)) return;
+          run(() => dismissIncidentsAction(ids, reason));
+        }}
+      >
+        선택한 알림 삭제
+      </button>
+      <ResultLine result={result} />
+    </div>
+  );
+}
+
+export function RestoreIncidentButton({ incidentId }: { incidentId: string }) {
+  const { pending, result, run } = useAction();
+  return (
+    <span className="inline-flex flex-col">
+      <button type="button" className={btn.small} disabled={pending} onClick={() => run(() => restoreIncidentAction(incidentId))}>
+        복원
+      </button>
+      <ResultLine result={result} />
+    </span>
   );
 }

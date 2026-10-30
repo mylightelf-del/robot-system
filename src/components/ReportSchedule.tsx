@@ -39,7 +39,7 @@ export function ReportScheduleTable({ siteId, rows, canEdit, showSite }: { siteI
             {showSite && <th>사업장</th>}
             <th>보고서</th>
             <th>대상 기간</th>
-            <th>초안 작성일</th>
+            <th>작성일</th>
             <th>상태</th>
             <th></th>
           </tr>
