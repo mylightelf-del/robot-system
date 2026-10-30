@@ -198,7 +198,9 @@ export async function syncPuduErrors(api: PuduApi = createPuduApi(), windowHours
         const occurredAt = e.task_time ? new Date(e.task_time.replace(" ", "T") + (e.task_time.includes("+") || e.task_time.endsWith("Z") ? "" : "+09:00")).toISOString() : nowIso();
         // 로그 동기화는 과거 이력 적재이므로 현재 상태를 덮지 않는다(실기: 며칠 전 로그로 정상 로봇이 ERROR 로 표시되는 문제). 현재 상태는 상세 폴링(task=-100/-200)이 정한다.
         const historical = !!range && occurredAt < historicalBefore;
-        if (await upsertIncidentFromError(robot, { code: e.error_type, level: e.error_level, detail: e.error_detail, key: errorToIncidentKey(e), occurredAt, payload: e, notify: false, touchStatus: false, historical })) inserted += 1;
+        // 콜백 등록 전에는 폴링이 유일한 장애 수신 경로다 → 최근(NOTIFY_FRESH_MINUTES 이내) 발생분은 알림을 보낸다. 과거 이력 적재는 보내지 않는다.
+        const fresh = !range && Date.now() - new Date(occurredAt).getTime() <= NOTIFY_FRESH_MINUTES * 60_000;
+        if (await upsertIncidentFromError(robot, { code: e.error_type, level: e.error_level, detail: e.error_detail, key: errorToIncidentKey(e), occurredAt, payload: e, notify: fresh, touchStatus: false, historical })) inserted += 1;
       }
       if (list.length < 20) break;
     }
@@ -467,6 +469,8 @@ export function puduLiveEnabled(): boolean {
 /** 같은 로봇·같은 코드의 반복 발생을 한 장애로 묶는 시간 창(시간). */
 export const INCIDENT_GROUP_HOURS = Number(process.env.INCIDENT_GROUP_HOURS ?? 6);
 export const PUDU_WINDOW_HOURS = Number(process.env.PUDU_POLL_WINDOW_HOURS ?? 48);
+/** 폴링으로 받은 장애 로그 중 발생 후 이 시간(분) 안의 것만 알림을 보낸다(통계 API 약 10분 지연 + 10분 주기 고려). */
+export const NOTIFY_FRESH_MINUTES = Number(process.env.NOTIFY_FRESH_MINUTES ?? 60);
 /** 이보다 오래된 장애 로그는 과거 이력(복구 상태)으로 적재한다. */
 export const HISTORICAL_ERROR_DAYS = 7;
 export { addMinutes };

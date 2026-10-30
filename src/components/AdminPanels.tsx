@@ -9,6 +9,7 @@ import {
   reissueInviteAction,
   relocateRobotAction,
   removeRecipientAction,
+  testRecipientAction,
   resetSampleAction,
   setSiteManagerCanConfirmAction,
   setUserActiveAction,
@@ -137,23 +138,34 @@ export function NewUserForm({ sites }: { sites: { id: string; name: string }[] }
   );
 }
 
-export function RecipientsPanel({ siteId, recipients, dedupeMinutes, escalateAfterMinutes }: { siteId: string; recipients: { id: string; channel: "EMAIL" | "KAKAO"; address: string; minSeverity: Severity; hoursFrom: string; hoursTo: string }[]; dedupeMinutes: number; escalateAfterMinutes: number }) {
+export function RecipientsPanel({ siteId, recipients, dedupeMinutes, escalateAfterMinutes, kakaoUsers }: { siteId: string; recipients: { id: string; channel: "EMAIL" | "KAKAO"; address: string; minSeverity: Severity; hoursFrom: string; hoursTo: string }[]; dedupeMinutes: number; escalateAfterMinutes: number; kakaoUsers: { id: string; name: string; linked: boolean }[] }) {
   const { pending, result, run } = useAction();
   const [channel, setChannel] = useState<"EMAIL" | "KAKAO">("EMAIL");
   const [address, setAddress] = useState("");
-  const [sev, setSev] = useState<Severity>("MEDIUM");
+  const [kakaoUser, setKakaoUser] = useState(kakaoUsers[0]?.id ?? "");
+  const [sev, setSev] = useState<Severity>("HIGH");
   const [from, setFrom] = useState("00:00");
   const [to, setTo] = useState("23:59");
   const [dedupe, setDedupe] = useState(dedupeMinutes);
   const [esc, setEsc] = useState(escalateAfterMinutes);
+  const label = (r: { channel: string; address: string }) => {
+    if (r.channel === "EMAIL") return r.address;
+    if (!r.address.startsWith("user:")) return `${r.address} (전화번호 알림톡 — 모의)`;
+    const u = kakaoUsers.find((k) => k.id === r.address.slice(5));
+    return u ? `${u.name}${u.linked ? "" : " (카카오톡 미연결 — 본인이 내 계정에서 연결)"}` : `${r.address} (사용자 없음)`;
+  };
   return (
     <div className="space-y-2 text-xs">
       <ul className="space-y-1">
+        {recipients.length === 0 && <li className="text-gray-500">수신자가 없습니다. 아래에서 추가하세요.</li>}
         {recipients.map((r) => (
           <li key={r.id} className="flex items-center gap-2 flex-wrap">
-            <span className="rounded bg-gray-100 px-1">{r.channel === "EMAIL" ? "이메일" : "알림톡"}</span>
-            <span>{r.address}</span>
+            <span className="rounded bg-gray-100 px-1">{r.channel === "EMAIL" ? "이메일" : "카카오톡"}</span>
+            <span>{label(r)}</span>
             <span className="text-gray-500">등급 ≥ {r.minSeverity} · {r.hoursFrom}~{r.hoursTo}</span>
+            <ActionButton variant="small" action={() => testRecipientAction(siteId, r.id)}>
+              시험 발송
+            </ActionButton>
             <ActionButton variant="small" action={() => removeRecipientAction(siteId, r.id)} showResult={false}>
               삭제
             </ActionButton>
@@ -163,9 +175,19 @@ export function RecipientsPanel({ siteId, recipients, dedupeMinutes, escalateAft
       <div className="flex flex-wrap gap-1 items-center">
         <select className="border rounded px-1 py-0.5" value={channel} onChange={(e) => setChannel(e.target.value as "EMAIL" | "KAKAO")}>
           <option value="EMAIL">이메일</option>
-          <option value="KAKAO">알림톡</option>
+          <option value="KAKAO">카카오톡(사용자 본인)</option>
         </select>
-        <input className="border rounded px-1 py-0.5 w-40" placeholder="주소/번호(샘플)" value={address} onChange={(e) => setAddress(e.target.value)} />
+        {channel === "EMAIL" ? (
+          <input className="border rounded px-1 py-0.5 w-48" placeholder="이메일 주소" value={address} onChange={(e) => setAddress(e.target.value)} />
+        ) : (
+          <select className="border rounded px-1 py-0.5" value={kakaoUser} onChange={(e) => setKakaoUser(e.target.value)}>
+            {kakaoUsers.map((u) => (
+              <option key={u.id} value={u.id}>
+                {u.name}{u.linked ? "" : " (미연결)"}
+              </option>
+            ))}
+          </select>
+        )}
         <select className="border rounded px-1 py-0.5" value={sev} onChange={(e) => setSev(e.target.value as Severity)}>
           {(["LOW", "MEDIUM", "HIGH", "CRITICAL"] as Severity[]).map((s) => (
             <option key={s} value={s}>
@@ -175,7 +197,12 @@ export function RecipientsPanel({ siteId, recipients, dedupeMinutes, escalateAft
         </select>
         <input type="time" className="border rounded px-1 py-0.5" value={from} onChange={(e) => setFrom(e.target.value)} />~
         <input type="time" className="border rounded px-1 py-0.5" value={to} onChange={(e) => setTo(e.target.value)} />
-        <button type="button" className={btn.small} disabled={pending} onClick={() => run(() => addRecipientAction(siteId, { channel, address, minSeverity: sev, hoursFrom: from, hoursTo: to }))}>
+        <button
+          type="button"
+          className={btn.small}
+          disabled={pending || (channel === "EMAIL" ? !address.trim() : !kakaoUser)}
+          onClick={() => run(() => addRecipientAction(siteId, { channel, address: channel === "EMAIL" ? address : `user:${kakaoUser}`, minSeverity: sev, hoursFrom: from, hoursTo: to }))}
+        >
           수신자 추가
         </button>
       </div>

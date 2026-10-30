@@ -9,6 +9,7 @@ import { NotFoundError, ValidationError } from "@/lib/util/errors";
 import { newId } from "@/lib/util/random";
 import { addMinutes, nowIso } from "@/lib/util/time";
 import { audit } from "./audit";
+import { assertKakaoAddress } from "./notify";
 
 const INVITE_HOURS = 72;
 
@@ -116,6 +117,8 @@ export async function addRecipient(user: User, siteId: string, r: Omit<Notificat
   const s = await db.query.notificationSettings.findFirst({ where: eq(schema.notificationSettings.siteId, siteId) });
   if (!s) throw new NotFoundError();
   if (!r.address.trim()) throw new ValidationError("수신 주소를 입력하세요.");
+  if (r.channel === "EMAIL" && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(r.address.trim())) throw new ValidationError("이메일 주소 형식이 올바르지 않습니다.");
+  if (r.channel === "KAKAO") await assertKakaoAddress(r.address.trim());
   await db.insert(schema.notificationRecipients).values({ id: newId("rcp"), siteId, ...r, address: r.address.trim() });
   await audit(user, { siteId, robotId: null, action: "NOTIFY:ADD_RECIPIENT", params: { channel: r.channel, minSeverity: r.minSeverity }, result: "OK", detail: null, vendorTraceId: null }, db);
 }

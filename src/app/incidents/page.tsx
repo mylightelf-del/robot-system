@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { listUsers } from "@/lib/db/repo";
 import { getCurrentUser } from "@/lib/auth/session";
 import { escalationMinutesBySite, listAssignableUsers, listIncidents, SIMULATABLE_CODES } from "@/lib/services/incidents";
 import { listRobots, listSites } from "@/lib/services/robots";
@@ -26,6 +27,7 @@ export default async function IncidentsPage({ searchParams }: { searchParams: Pr
   const customer = isCustomer(user);
   const handler = canHandleIncidents(user);
   const assignees = handler ? await listAssignableUsers() : [];
+  const userNames = new Map((handler ? await listUsers() : []).map((u) => [u.id, u.name]));
   const escalation = await escalationMinutesBySite(sites.map((s) => s.id));
   const now = nowIso();
   const escalate = (siteId: string) => escalation[siteId] ?? 60;
@@ -108,13 +110,15 @@ export default async function IncidentsPage({ searchParams }: { searchParams: Pr
                     {i.dismissedAt && <div className="text-xs text-gray-600 mt-0.5">삭제 {formatDateTime(i.dismissedAt)} — 사유: {i.dismissReason}</div>}
                     {!customer && i.notifications.length > 0 && (
                       <details className="text-xs mt-1">
-                        <summary className="cursor-pointer text-gray-600">알림 발송 {i.notifications.length}건 (모의)</summary>
+                        <summary className="cursor-pointer text-gray-600">
+                          알림 {i.notifications.length}건 (발송 {i.notifications.filter((n) => n.status === "SENT").length} · 모의 {i.notifications.filter((n) => n.status === "MOCK_SENT").length} · 억제 {i.notifications.filter((n) => n.status === "SUPPRESSED").length} · 실패 {i.notifications.filter((n) => n.status === "FAILED").length})
+                        </summary>
                         <ul className="mt-0.5 space-y-0.5">
                           {i.notifications.map((n) => (
                             <li key={n.id}>
-                              <span className="text-gray-500">{formatDateTime(n.at)}</span> {n.channel === "EMAIL" ? "이메일" : "알림톡"} → {n.recipient}{" "}
-                              <span className={n.status === "MOCK_SENT" ? "text-emerald-700" : n.status === "SUPPRESSED" ? "text-gray-500" : "text-red-700"}>
-                                {n.status === "MOCK_SENT" ? "모의 발송" : n.status === "SUPPRESSED" ? "억제" : "실패"}
+                              <span className="text-gray-500">{formatDateTime(n.at)}</span> {n.channel === "EMAIL" ? "이메일" : "카카오톡"} → {n.recipient.startsWith("user:") ? (userNames.get(n.recipient.slice(5)) ?? n.recipient) : n.recipient}{" "}
+                              <span className={n.status === "SENT" ? "text-emerald-700 font-medium" : n.status === "MOCK_SENT" ? "text-sky-700" : n.status === "SUPPRESSED" ? "text-gray-500" : "text-red-700"}>
+                                {n.status === "SENT" ? "발송" : n.status === "MOCK_SENT" ? "모의 발송" : n.status === "SUPPRESSED" ? "억제" : "실패"}
                               </span>{" "}
                               <span className="text-gray-500">— {n.reason}</span>
                             </li>

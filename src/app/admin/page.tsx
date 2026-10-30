@@ -1,3 +1,4 @@
+import { kakaoCandidates, notifyStatus } from "@/lib/services/notify";
 import { getCurrentUser } from "@/lib/auth/session";
 import { getAdminData, getVendorStatus } from "@/lib/services/admin";
 import { PuduPanel } from "@/components/VendorPanel";
@@ -18,6 +19,8 @@ export default async function AdminPage() {
     return <AccessDenied reason={e instanceof AppError ? e.message : "접근할 수 없습니다."} />;
   }
   const vendor = await getVendorStatus(user);
+  const notify = notifyStatus();
+  const kakaoUsers = await kakaoCandidates();
   const sites = d.sites.map((s) => ({ id: s.id, name: s.name }));
   const floors = d.floors.map((f) => ({ id: f.id, siteId: f.siteId, name: f.name, siteName: d.sites.find((s) => s.id === f.siteId)?.name ?? f.siteId }));
 
@@ -99,11 +102,14 @@ export default async function AdminPage() {
             {d.notificationSettings.map((n) => (
               <div key={n.siteId} className="border rounded p-3">
                 <div className="font-medium text-sm mb-1">{d.sites.find((s) => s.id === n.siteId)?.name}</div>
-                <RecipientsPanel siteId={n.siteId} recipients={n.recipients} dedupeMinutes={n.dedupeMinutes} escalateAfterMinutes={n.escalateAfterMinutes} />
+                <RecipientsPanel siteId={n.siteId} recipients={n.recipients} dedupeMinutes={n.dedupeMinutes} escalateAfterMinutes={n.escalateAfterMinutes} kakaoUsers={kakaoUsers} />
               </div>
             ))}
           </div>
-          <p className="text-xs text-gray-500 mt-2">이메일·알림톡 공급사, 발신 설정, 템플릿, 과금은 미정입니다. 시제품은 모의 발송만 합니다.</p>
+          <p className="text-xs text-gray-500 mt-2">
+            이메일: <b>{notify.modes.EMAIL === "live" ? `실제 발송(AWS SES, 보내는 주소 ${notify.emailFrom})` : "모의 발송(서버 설정 전)"}</b> · 카카오톡: <b>{notify.modes.KAKAO === "live" ? "실제 발송(나에게 보내기 — 수신자 본인이 내 계정에서 연결)" : "모의 발송(서버 설정 전)"}</b>.
+            장애 발생(등급 HIGH 이상)·복구·미조치 확대 통보를 보냅니다. 전화번호로 보내는 알림톡은 발송대행사 선정 뒤 붙입니다.
+          </p>
         </Card>
 
         <Card title="제조사 연결 — PUDU Cloud API">

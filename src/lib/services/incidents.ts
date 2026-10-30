@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, isNotNull, isNull, ne } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNotNull, isNull, ne } from "drizzle-orm";
 import type { Incident, IncidentAction, Severity, User } from "@/lib/domain/types";
 import { accessibleSiteIds, assertActive, assertAdmin, assertSiteAccess, canHandleIncidents, isCustomer } from "@/lib/auth/authz";
 import { getDb, schema } from "@/lib/db/client";
@@ -287,6 +287,33 @@ export async function restoreIncident(user: User, incidentId: string): Promise<v
   if (!inc.dismissedAt) throw new ValidationError("삭제된 알림이 아닙니다.");
   await db.update(schema.incidents).set({ dismissedAt: null, dismissedBy: null, dismissReason: null }).where(eq(schema.incidents.id, incidentId));
   await audit(user, { siteId: inc.siteId, robotId: inc.robotId, action: "INCIDENT:RESTORE", params: { incidentId }, result: "OK", detail: null, vendorTraceId: null }, db);
+}
+
+/**
+ * 미조치 확대 통보(워커 5분 주기): 확인·담당·조치 없이(발생/확인 상태) 사업장 설정의 '미조치 확대 통보' 분을 넘긴 장애를 한 번만 통보한다.
+ * 배포 직후 오래된 장애가 한꺼번에 나가지 않도록 최근 ESCALATE_LOOKBACK_HOURS 안에 발생한 건만 본다. 삭제(숨김)한 알림은 제외.
+ */
+export const ESCALATE_LOOKBACK_HOURS = 24;
+export async function escalateOverdueIncidents(now: string = nowIso()): Promise<number> {
+  const db = getDb();
+  const since = new Date(new Date(now).getTime() - ESCALATE_LOOKBACK_HOURS * 3600_000).toISOString();
+  const rows = await db
+    .select()
+    .from(schema.incidents)
+    .where(and(inArray(schema.incidents.status, ["OPEN", "ACKED"]), isNull(schema.incidents.dismissedAt), gte(schema.incidents.occurredAt, since)));
+  let sent = 0;
+  for (const inc of await assembleIncidents(rows, db)) {
+    const setting = await getNotificationSetting(inc.siteId, db);
+    if (!setting || setting.escalateAfterMinutes <= 0) continue;
+    if ((new Date(now).getTime() - new Date(inc.occurredAt).getTime()) / 60000 < setting.escalateAfterMinutes) continue;
+    if (inc.notifications.some((n) => n.reason.startsWith("미조치 확대 통보"))) continue;
+    const site = await getSite(inc.siteId, db);
+    const logs = await notifyIncident(setting, inc, null, now, site?.timezone ?? "Asia/Seoul", "ESCALATED");
+    if (!logs.length) continue;
+    await db.insert(schema.notificationLogs).values(logs.map((l) => ({ ...l, incidentId: inc.id })));
+    sent += 1;
+  }
+  return sent;
 }
 
 /** 샘플: 장애 발생 시뮬레이션(Webhook 수신을 대신). 중복 이벤트 ID 는 무시한다. */

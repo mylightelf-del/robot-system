@@ -10,6 +10,7 @@ import { issueCommand, type IssueCommandInput } from "@/lib/services/commands";
 import * as incidents from "@/lib/services/incidents";
 import * as tasks from "@/lib/services/tasks";
 import * as reports from "@/lib/services/reports";
+import * as notifySvc from "@/lib/services/notify";
 import * as admin from "@/lib/services/admin";
 import * as auth from "@/lib/services/auth";
 import { addManualInspection, completeInspection } from "@/lib/services/robots";
@@ -284,6 +285,30 @@ export async function alignFloorMapsAction(): Promise<ActionResult & { rows?: { 
     if (!(e instanceof AppError)) console.error("[action] 처리 오류:", e);
     return { ok: false, error: errorMessage(e) };
   }
+}
+// ---- 알림(이메일·카카오톡) ----
+const sendResultMessage = (r: { status: string; reason: string }) => (r.status === "SENT" ? `보냈습니다 — ${r.reason}` : r.status === "MOCK_SENT" ? `모의 발송으로 기록했습니다 — ${r.reason}` : `실패 — ${r.reason}`);
+export async function testSelfNotifyAction(channel: "EMAIL" | "KAKAO"): Promise<ActionResult> {
+  try {
+    const r = await notifySvc.testSelf(await getCurrentUser(), channel);
+    return r.status === "FAILED" ? { ok: false, error: sendResultMessage(r) } : { ok: true, message: sendResultMessage(r) };
+  } catch (e) {
+    return { ok: false, error: errorMessage(e) };
+  }
+}
+export async function testRecipientAction(siteId: string, recipientId: string): Promise<ActionResult> {
+  try {
+    const r = await notifySvc.testRecipient(await getCurrentUser(), siteId, recipientId);
+    return r.status === "FAILED" ? { ok: false, error: sendResultMessage(r) } : { ok: true, message: sendResultMessage(r) };
+  } catch (e) {
+    return { ok: false, error: errorMessage(e) };
+  }
+}
+export async function unlinkKakaoAction(): Promise<ActionResult> {
+  return run(async () => {
+    await notifySvc.unlinkMyKakao(await getCurrentUser());
+    return { message: "카카오톡 연결을 해제했습니다." };
+  });
 }
 export async function createSiteAction(input: { name: string; address: string; timezone?: string }): Promise<ActionResult> {
   return run(async () => {

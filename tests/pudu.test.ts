@@ -250,6 +250,25 @@ describe("PUDU 클라이언트·어댑터·워커 (모의 서버)", () => {
     expect(plans[0].actualRunId).toBe("run-plan-t");
   });
 
+  it("폴링 알림: 방금 생긴 장애 로그는 수신자에게 알림, 오래된 로그는 보내지 않음", async () => {
+    const id = await registerMockRobot();
+    const saved = state.errors;
+    const kst = (msAgo: number) => new Date(Date.now() - msAgo + 9 * 3600_000).toISOString().replace("T", " ").slice(0, 19);
+    state.errors = [
+      { ...saved[0], id: "f1", error_id: "fresh-1", error_type: "FreshFault", task_time: kst(5 * 60_000) },
+      { ...saved[0], id: "o1", error_id: "old-1", error_type: "OldFault", task_time: kst(3 * 3600_000) },
+    ];
+    try {
+      await syncPuduErrors(api, 24);
+      const incs = await db().select().from(schema.incidents).where(eq(schema.incidents.robotId, id));
+      const logs = async (code: string) => db().select().from(schema.notificationLogs).where(eq(schema.notificationLogs.incidentId, incs.find((i) => i.code === code)!.id));
+      expect((await logs("FreshFault")).length).toBeGreaterThan(0); // 샘플 사업장 1 수신자 설정(모의 발송/억제 기록)
+      expect((await logs("OldFault")).length).toBe(0);
+    } finally {
+      state.errors = saved;
+    }
+  });
+
   it("과거 이력 적재(구간 지정): 7일보다 오래된 장애 로그는 복구 상태 이력으로, 같은 코드끼리 묶는다", async () => {
     const id = await registerMockRobot();
     const saved = state.errors;

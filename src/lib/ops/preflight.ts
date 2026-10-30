@@ -35,6 +35,16 @@ export function checkEnv(env: NodeJS.ProcessEnv): Finding[] {
     }
   }
   if (prod && !env.ACME_EMAIL) push("warn", "ACME_EMAIL", "ACME_EMAIL 이 없습니다(인증서 발급기관 계정·만료 알림용). Caddy 가 ZeroSSL 대체 발급을 못 할 수 있습니다.");
+  // 알림: 이메일(SES)·카카오톡. 비밀값 자체는 출력하지 않는다.
+  if (env.MAIL_MODE === "live") {
+    if (!env.MAIL_FROM) push("error", "MAIL_FROM", "MAIL_MODE=live 인데 MAIL_FROM(보내는 주소)이 없습니다.");
+    if (!env.SES_ACCESS_KEY_ID || !env.SES_SECRET_ACCESS_KEY) push("error", "SES_KEY", "MAIL_MODE=live 인데 SES_ACCESS_KEY_ID/SES_SECRET_ACCESS_KEY 가 없습니다.");
+  } else if (prod) push("warn", "MAIL_MODE", "이메일 알림이 모의 발송입니다(MAIL_MODE=live 로 켜면 실제 발송).");
+  if (env.KAKAO_REST_API_KEY) {
+    const k = Buffer.from(env.TOKEN_ENCRYPTION_KEY || "", "base64");
+    if (k.length !== 32) push("error", "TOKEN_ENCRYPTION_KEY", "카카오 연동에는 TOKEN_ENCRYPTION_KEY(32바이트 base64)가 필요합니다(토큰 암호화). 예: openssl rand -base64 32");
+    if (!env.KAKAO_CLIENT_SECRET) push("warn", "KAKAO_CLIENT_SECRET", "KAKAO_CLIENT_SECRET 이 없습니다. 카카오 앱의 클라이언트 시크릿이 켜져 있으면(기본) 토큰 발급이 실패합니다.");
+  }
   if (prod && env.ALLOW_SAMPLE_RESET === "true") push("error", "ALLOW_SAMPLE_RESET", "운영에서 샘플 초기화가 켜져 있습니다(ALLOW_SAMPLE_RESET=false).");
   if (prod && env.SAMPLE_USER_PASSWORD) push("warn", "SAMPLE_USER_PASSWORD", "운영 .env 에 샘플 사용자 비밀번호가 있습니다. 샘플 적재를 하지 않는다면 지우세요.");
   if (prod && (env.VENDOR_MODE || "sample") === "sample") push("warn", "VENDOR_MODE", "운영인데 VENDOR_MODE=sample 입니다(모든 로봇이 시뮬레이션). 실제 연동이면 live 로.");

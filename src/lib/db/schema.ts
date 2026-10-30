@@ -333,7 +333,7 @@ export const notificationLogs = pgTable("notification_logs", {
   at: isoTimestamp().notNull(),
   channel: text().$type<"EMAIL" | "KAKAO">().notNull(),
   recipient: text().notNull(),
-  status: text().$type<"MOCK_SENT" | "SUPPRESSED" | "FAILED">().notNull(),
+  status: text().$type<"SENT" | "MOCK_SENT" | "SUPPRESSED" | "FAILED">().notNull(),
   reason: text().notNull().default(""),
 });
 
@@ -477,6 +477,24 @@ export const sessions = pgTable(
   },
   (t) => [index("sessions_user_idx").on(t.userId), index("sessions_expires_idx").on(t.expiresAt)],
 );
+
+/**
+ * 카카오톡 알림 연결(사용자별 "나에게 보내기"). 사용자가 카카오 로그인으로 직접 연결하고, 서버는 그 사용자 자신의 카카오톡으로만 보낸다.
+ * 토큰은 TOKEN_ENCRYPTION_KEY 로 암호화해 둔다. 리프레시 토큰은 남은 기간이 1개월 미만일 때 갱신 응답에 새로 온다(공식 문서).
+ */
+export const kakaoLinks = pgTable("kakao_links", {
+  userId: text()
+    .primaryKey()
+    .references(() => users.id, { onDelete: "cascade" }),
+  kakaoUserId: text().notNull(),
+  accessToken: text().notNull(),
+  accessExpiresAt: isoTimestamp().notNull(),
+  refreshToken: text().notNull(),
+  refreshExpiresAt: isoTimestamp(),
+  linkedAt: isoTimestamp().notNull(),
+  lastSentAt: isoTimestamp(),
+  lastError: text(),
+});
 
 export const notificationSettings = pgTable("notification_settings", {
   siteId: text()

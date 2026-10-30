@@ -256,7 +256,8 @@ export interface NotificationLog {
   at: string;
   channel: "EMAIL" | "KAKAO";
   recipient: string;
-  status: "MOCK_SENT" | "SUPPRESSED" | "FAILED";
+  /** SENT: 실제 발송(공급사 접수), MOCK_SENT: 모의(설정 전), SUPPRESSED: 설정으로 억제, FAILED: 발송 실패 */
+  status: "SENT" | "MOCK_SENT" | "SUPPRESSED" | "FAILED";
   reason: string;
 }
 

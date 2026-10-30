@@ -64,6 +64,13 @@
       "when": 1793376624008,
       "tag": "0008_incident_dismiss",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1793403253546,
+      "tag": "0009_kakao_links",
+      "breakpoints": true
     }
   ]
 }

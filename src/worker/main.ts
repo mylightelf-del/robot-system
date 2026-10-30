@@ -13,6 +13,9 @@ import { createPuduApi } from "@/lib/vendors/pudu/puduAdapter";
 import { vendorModes } from "@/lib/vendors";
 import { purgeOldVendorEvents, writeHeartbeat } from "@/lib/ops/heartbeat";
 import { autoCreateScheduledDrafts } from "@/lib/services/reports";
+import { escalateOverdueIncidents } from "@/lib/services/incidents";
+import { keepKakaoLinksAlive } from "@/lib/notify/kakao";
+import { channelModes } from "@/lib/notify/notifier";
 
 const tickSeconds = Number(process.env.SIMULATION_TICK_SECONDS ?? 2);
 const vendorMode = process.env.VENDOR_MODE || "sample";
@@ -38,7 +41,7 @@ async function loop(name: string, intervalMs: number, fn: () => Promise<void>) {
 }
 
 async function main() {
-  log(`시작 — VENDOR_MODE=${vendorMode}, 제조사별 ${JSON.stringify(vendorModes())}, tick=${tickSeconds}s`);
+  log(`시작 — VENDOR_MODE=${vendorMode}, 제조사별 ${JSON.stringify(vendorModes())}, 알림 ${JSON.stringify(channelModes())}, tick=${tickSeconds}s`);
   const jobs: Promise<void>[] = [];
   if (anySample) {
     jobs.push(
@@ -89,6 +92,20 @@ async function main() {
       }),
     );
   }
+  // 미조치 확대 통보(5분): 사업장 설정 시간을 넘긴 미확인 장애를 한 번 통보
+  jobs.push(
+    loop("escalation", 5 * 60_000, async () => {
+      const n = await escalateOverdueIncidents();
+      if (n) log(`미조치 확대 통보 ${n}건`);
+    }),
+  );
+  // 카카오톡 연결 유지(하루 1회): 만료가 가까운 리프레시 토큰 갱신
+  jobs.push(
+    loop("kakao-keepalive", 24 * 3600_000, async () => {
+      const r = await keepKakaoLinksAlive();
+      if (r.refreshed || r.failed) log(`카카오 토큰 갱신 ${r.refreshed}건, 실패 ${r.failed}건`);
+    }),
+  );
   // 생존 신호(30초): /api/health 가 이 값의 나이로 워커 생사를 알린다
   jobs.push(loop("heartbeat", 30_000, async () => writeHeartbeat({ modes: vendorModes(), pid: process.pid })));
   // 보관 정책(하루 1회): 처리 끝난 콜백 원문 정리

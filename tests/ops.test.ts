@@ -18,9 +18,13 @@ describe("배포 전 점검·운영 보조", () => {
     expect(codes).toEqual(expect.arrayContaining(["DATABASE_URL", "APP_BASE_URL", "ALLOW_SAMPLE_RESET", "PUDU_CLUSTER", "PUDU_SHOP_IDS"]));
     expect(summarize(bad).errors).toBeGreaterThanOrEqual(5);
 
-    const good = checkEnv({ DATABASE_URL: "postgres://x", APP_ENV: "production", APP_BASE_URL: "https://robot.example.com", ALLOW_SAMPLE_RESET: "false", VENDOR_MODE: "live", PUDU_API_APP_KEY: "k", PUDU_API_APP_SECRET: "s", PUDU_API_CLUSTER: "sea", PUDU_SHOP_IDS: "602550006,641450007", PUDU_CALLBACK_CODE: "abcdefghijklmnopqrstuvwxyz012345", DOMAIN: "robot.example.com", ACME_EMAIL: "ops@example.com" } as unknown as NodeJS.ProcessEnv);
+    const good = checkEnv({ DATABASE_URL: "postgres://x", APP_ENV: "production", APP_BASE_URL: "https://robot.example.com", ALLOW_SAMPLE_RESET: "false", VENDOR_MODE: "live", PUDU_API_APP_KEY: "k", PUDU_API_APP_SECRET: "s", PUDU_API_CLUSTER: "sea", PUDU_SHOP_IDS: "602550006,641450007", PUDU_CALLBACK_CODE: "abcdefghijklmnopqrstuvwxyz012345", DOMAIN: "robot.example.com", ACME_EMAIL: "ops@example.com", MAIL_MODE: "live", MAIL_FROM: "관제 <noreply@robot.example.com>", SES_ACCESS_KEY_ID: "a", SES_SECRET_ACCESS_KEY: "b" } as unknown as NodeJS.ProcessEnv);
     expect(summarize(good).errors).toBe(0);
     expect(good.find((f) => f.code === "ENV")?.level).toBe("ok");
+    // 알림: live 인데 키 없음 = 오류, 카카오 키만 있고 암호화 키 없음 = 오류, 운영에서 이메일 모의 = 주의
+    const notif = checkEnv({ DATABASE_URL: "postgres://x", APP_ENV: "production", APP_BASE_URL: "https://robot.example.com", MAIL_MODE: "live", KAKAO_REST_API_KEY: "k" } as unknown as NodeJS.ProcessEnv);
+    expect(notif.filter((f) => f.level === "error").map((f) => f.code)).toEqual(expect.arrayContaining(["MAIL_FROM", "SES_KEY", "TOKEN_ENCRYPTION_KEY"]));
+    expect(checkEnv({ DATABASE_URL: "postgres://x", APP_ENV: "production", APP_BASE_URL: "https://robot.example.com" } as unknown as NodeJS.ProcessEnv).find((f) => f.code === "MAIL_MODE")?.level).toBe("warn");
     // 도메인 불일치·ACME 이메일 없음은 주의
     const dom = checkEnv({ DATABASE_URL: "postgres://x", APP_ENV: "production", APP_BASE_URL: "https://widebot.kro.kr", DOMAIN: "other.kro.kr", ALLOW_SAMPLE_RESET: "false", VENDOR_MODE: "sample" } as unknown as NodeJS.ProcessEnv);
     expect(dom.find((f) => f.code === "DOMAIN")?.level).toBe("warn");
