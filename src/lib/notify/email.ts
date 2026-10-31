@@ -8,6 +8,8 @@ import { SESv2Client, SendEmailCommand } from "@aws-sdk/client-sesv2";
 
 export interface EmailConfig {
   from: string;
+  /** 보내는 주소가 아직 SES 에서 확인되지 않아 거부되면 이 주소로 다시 보낸다(도메인 DKIM 확인 대기 중). */
+  fallbackFrom: string | null;
   region: string;
   accessKeyId: string;
   secretAccessKey: string;
@@ -19,7 +21,7 @@ export function emailConfig(): EmailConfig | null {
   const accessKeyId = process.env.SES_ACCESS_KEY_ID || "";
   const secretAccessKey = process.env.SES_SECRET_ACCESS_KEY || "";
   if (!from || !accessKeyId || !secretAccessKey) return null;
-  return { from, region: process.env.SES_REGION || "ap-southeast-2", accessKeyId, secretAccessKey };
+  return { from, fallbackFrom: process.env.MAIL_FROM_FALLBACK || null, region: process.env.SES_REGION || "ap-southeast-2", accessKeyId, secretAccessKey };
 }
 
 type Sender = (input: { from: string; to: string; subject: string; text: string; html: string }) => Promise<{ messageId: string }>;
@@ -66,11 +68,24 @@ export function renderEmail(title: string, lines: string[], url: string): { text
 export async function sendEmail(to: string, subject: string, text: string, html: string): Promise<{ ok: boolean; reason: string }> {
   const cfg = emailConfig();
   if (!cfg && !senderOverride) return { ok: false, reason: "이메일 발송 미설정" };
+  const send = senderOverride ?? sesSender(cfg!);
+  const from = cfg?.from ?? "test@example.invalid";
   try {
-    const send = senderOverride ?? sesSender(cfg!);
-    const { messageId } = await send({ from: cfg?.from ?? "test@example.invalid", to, subject, text, html });
+    const { messageId } = await send({ from, to, subject, text, html });
     return { ok: true, reason: `이메일 발송(SES ${messageId.slice(0, 12)}…)` };
-  } catch (e) {
+  } catch (first) {
+    let e = first;
+    const err0 = first as { name?: string; message?: string };
+    // 보내는 주소(도메인) 확인 전: "Email address is not verified ... <보내는 주소>" → 대체 주소로 한 번 더
+    const senderUnverified = err0.name === "MessageRejected" && /not verified/i.test(String(err0.message)) && String(err0.message).includes(from.replace(/^.*<|>$/g, ""));
+    if (senderUnverified && cfg?.fallbackFrom) {
+      try {
+        const { messageId } = await send({ from: cfg.fallbackFrom, to, subject, text, html });
+        return { ok: true, reason: `이메일 발송(대체 주소, SES ${messageId.slice(0, 12)}…)` };
+      } catch (e2) {
+        e = e2;
+      }
+    }
     const err = e as { name?: string; message?: string };
     // 샌드박스에서 인증 안 된 수신자: MessageRejected "Email address is not verified"
     return { ok: false, reason: `이메일 발송 실패: ${err.name ?? "Error"} ${String(err.message ?? "").slice(0, 200)}` };

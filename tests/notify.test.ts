@@ -111,6 +111,19 @@ describe("알림 발송(이메일·카카오톡)", () => {
     const bad = await deliver({ channel: "EMAIL", address: "x@example.com" }, { subject: "s", title: "t", lines: [], url: "https://x" });
     expect(bad).toMatchObject({ status: "FAILED" });
     expect(bad.reason).toContain("MessageRejected");
+    // 보내는 도메인이 아직 확인 전이면 대체 주소로 한 번 더 보낸다
+    process.env.MAIL_FROM_FALLBACK = "관제 <fallback@gmail.example>";
+    const froms: string[] = [];
+    setEmailSenderForTest(async (m) => {
+      froms.push(m.from);
+      if (m.from.includes("noreply@widebot.kro.kr")) throw Object.assign(new Error("Email address is not verified. The following identities failed the check in region AP-SOUTHEAST-2: noreply@widebot.kro.kr"), { name: "MessageRejected" });
+      return { messageId: "fallback-id" };
+    });
+    const fb = await deliver({ channel: "EMAIL", address: "ops@example.com" }, { subject: "s", title: "t", lines: [], url: "https://x" });
+    expect(fb.status).toBe("SENT");
+    expect(fb.reason).toContain("대체 주소");
+    expect(froms).toEqual(["관제 <noreply@widebot.kro.kr>", "관제 <fallback@gmail.example>"]);
+    delete process.env.MAIL_FROM_FALLBACK;
   });
 
   it("카카오톡: 연결(토큰 암호화 저장) → 나에게 보내기(200자·링크) → 401 이면 갱신 후 재시도 → 연결 유지 갱신", async () => {
