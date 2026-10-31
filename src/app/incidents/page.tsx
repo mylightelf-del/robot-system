@@ -77,7 +77,7 @@ export default async function IncidentsPage({ searchParams }: { searchParams: Pr
                       {handler && !dismissedView && <input type="checkbox" name="dismiss" value={i.id} aria-label="삭제 선택" className="no-print" />}
                       <SeverityBadge severity={i.severity} />
                       <IncidentStatusBadge status={i.status} />
-                      <span className="font-mono text-xs text-gray-500">{i.code}</span>
+                      {!customer && <span className="font-mono text-xs text-gray-500">{i.code}</span>}
                       <span className="text-xs text-gray-500" title={formatDateTime(i.occurredAt)}>
                         {relativeFromNow(i.occurredAt, now)} 발생
                       </span>

@@ -62,7 +62,9 @@ export function computeAggregates(data: AggregateInput, siteId: string, period: 
   });
 
   const zones = data.zones.filter((z) => floors.some((f) => f.id === z.floorId));
-  const byZone = zones.map((z) => {
+  // 제조사 실적에 구역 정보가 없으면(PUDU 등) 구역 표를 만들지 않는다 — 모든 구역이 0 으로 보이는 오해를 막는다
+  const hasZoneInfo = runs.some((r) => r.zoneIds.length > 0);
+  const byZone = (hasZoneInfo ? zones : []).map((z) => {
     const zr = runs.filter((r) => r.zoneIds.includes(z.id));
     // 구역별 면적은 작업 면적을 구역 수로 균등 배분한 근사치. 제조사 API 가 구역별 면적을 주면 그 값을 사용한다.
     const areaM2 = Math.round(zr.reduce((s, r) => s + r.areaM2 / Math.max(1, r.zoneIds.length), 0));
@@ -137,15 +139,16 @@ export function computeAggregates(data: AggregateInput, siteId: string, period: 
   if (vendorsInPeriod.includes("PUDU")) unsupportedMetrics.push("PUDU 모델 물(L)·세제(mL) 사용량: API 제공 여부 미검증 — 미제공으로 표시");
   if (waterRuns.length === 0) unsupportedMetrics.push("물 사용량(L): 이 기간 제공 데이터 없음");
   if (detRuns.length === 0) unsupportedMetrics.push("세제 사용량(mL): 이 기간 제공 데이터 없음");
+  if (runs.length > 0 && !hasZoneInfo) unsupportedMetrics.push("구역별 실적: 제조사 실적에 구역 정보가 없어 표시하지 않음(층별·로봇별로 집계)");
   unsupportedMetrics.push("고유 청소 면적: 제공하지 않음(누적 면적은 반복 구역 포함)");
   unsupportedMetrics.push("청결 품질·인건비 절감액: 청소 면적만으로 단정하지 않음");
 
   // 기간과 겹치는 배치(로봇 단위 중복 제거)
-  const robotCount = new Set(
-    data.placements
-      .filter((p) => p.siteId === siteId && localDateKey(p.from, tz) <= periodEnd && (p.to === null || localDateKey(p.to, tz) >= periodStart))
-      .map((p) => p.robotId),
-  ).size;
+  // 기간과 겹치는 배치 + 기간에 실적이 있는 로봇(등록 전 기간을 이력 적재한 경우 배치 기록이 없다)
+  const robotCount = new Set([
+    ...data.placements.filter((p) => p.siteId === siteId && localDateKey(p.from, tz) <= periodEnd && (p.to === null || localDateKey(p.to, tz) >= periodStart)).map((p) => p.robotId),
+    ...runs.map((r) => r.robotId),
+  ]).size;
 
   const latestReceived = runs.reduce((m, r) => (r.receivedAt > m ? r.receivedAt : m), "");
 

@@ -194,6 +194,12 @@ describe("알림 발송(이메일·카카오톡)", () => {
     expect((await db().select().from(schema.notificationLogs).where(eq(schema.notificationLogs.incidentId, inc2.id))).filter((n) => n.reason.startsWith("미조치 확대 통보")).length).toBe(0);
     const setting = await getNotificationSetting("site-01");
     expect(setting!.recipients.length).toBe(1);
+    // 등급 미달로 억제되는 확대 통보도 한 번만 기록(5분마다 쌓이지 않음)
+    const med = (await simulateIncident(hq, "PW-R-002", "OBSTACLE_STUCK", "MEDIUM", "esc-med"))!;
+    await escalateOverdueIncidents(addMinutes(nowIso(), 90));
+    await escalateOverdueIncidents(addMinutes(nowIso(), 95));
+    const medLogs = (await db().select().from(schema.notificationLogs).where(eq(schema.notificationLogs.incidentId, med.id))).filter((n) => n.reason.startsWith("미조치 확대 통보"));
+    expect(medLogs.map((n) => n.status)).toEqual(["SUPPRESSED"]);
     // 등급 미달은 억제
     const low = await notifyIncident(setting, { ...inc, severity: "LOW" }, null, nowIso(), "Asia/Seoul", "OCCURRED");
     expect(low[0].status).toBe("SUPPRESSED");

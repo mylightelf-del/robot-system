@@ -31,14 +31,14 @@ const md = (k: string) => `${Number(k.slice(5, 7))}/${Number(k.slice(8, 10))}`;
 
 /** 수치 표시기: 수정 모드면 입력칸, 아니면 값(+보정 표시 *). */
 type NumFn = (k: string, v: number | null, opts?: { unit?: string; text?: (v: number) => string; step?: number; empty?: string }) => ReactNode;
-function makeNum(reportId: string, base: ReportAggregates, adj: ReportAdjustments, edit: boolean): NumFn {
+function makeNum(reportId: string, base: ReportAggregates, adj: ReportAdjustments, edit: boolean, showOriginal: boolean): NumFn {
   const fn: NumFn = (k, v, opts = {}) => {
     if (edit) return <EditableNum reportId={reportId} k={k} value={v} original={originalValue(base, k) ?? null} unit={opts.unit} step={opts.step} />;
     const shown = v === null ? (opts.empty ?? "미제공") : opts.text ? opts.text(v) : `${v.toLocaleString()}${opts.unit ?? ""}`;
     return (
       <>
         {shown}
-        {adj[k] && <sup className="text-amber-700" title={`원래 집계 ${adj[k].original ?? "미제공"}`}>*</sup>}
+        {adj[k] && <sup className="text-amber-700" title={showOriginal ? `원래 집계 ${adj[k].original ?? "미제공"}` : "담당자 보정"}>*</sup>}
       </>
     );
   };
@@ -317,7 +317,7 @@ export default async function ReportPage({ params, searchParams }: { params: Pro
   const edit = editable && sp.edit === "1";
   const a = effectiveAggregates(r);
   const adj = r.adjustments ?? {};
-  const n = makeNum(r.id, r.aggregates, adj, edit);
+  const n = makeNum(r.id, r.aggregates, adj, edit, !customer); // 고객에게는 원래 집계값을 보여 주지 않는다
   const users = await listUsers();
   const userName = (id: string | null) => (id === "system" ? "자동 작성" : id ? (users.find((u) => u.id === id)?.name ?? id) : "-");
   const frozen = r.status === "CONFIRMED" || r.status === "PUBLISHED";

@@ -46,7 +46,7 @@ export function MyNotifyPanel({
             {kakao.lastError && <div className="text-red-700">최근 오류: {kakao.lastError} — 계속되면 다시 연결하세요.</div>}
           </div>
         ) : (
-          <p className="text-xs text-gray-600 mb-1">카카오 로그인으로 연결하면 관리자가 수신자로 지정한 장애 알림이 내 카카오톡 '나와의 채팅'으로 옵니다.</p>
+          <p className="text-xs text-gray-600 mb-1">카카오 로그인으로 연결하면 관리자가 수신자로 지정한 장애 알림이 내 카카오톡 &lsquo;나와의 채팅&rsquo;으로 옵니다.</p>
         )}
         {msg && <p className={`text-xs mb-1 ${msg.tone}`}>{msg.text}</p>}
         <div className="flex flex-wrap gap-2">

@@ -160,7 +160,10 @@ function FloorRow({ siteId, floor, hasPuduRobot }: { siteId: string; floor: Floo
               </option>
             ))}
           </select>
-          <button type="button" className={btn.primary} disabled={pending || !mapName} onClick={() => run(async () => { const r = await importPuduMapAction(floor.id, mapName); if (r.ok) setMaps(null); return r; })}>
+          <button type="button" className={btn.primary} disabled={pending || !mapName} onClick={() => {
+            if (!confirm(`'${floor.name}' 층의 지도와 청소 구역을 '${mapName}' 으로 바꿉니다.\n로봇 자체의 지도는 바뀌지 않지만, 이 시스템의 위치 표시·청소 구역·보고서 지도가 새 지도 기준이 됩니다. 로봇이 실제로 쓰는 지도와 같은지 확인하셨나요?`)) return;
+            run(async () => { const r = await importPuduMapAction(floor.id, mapName); if (r.ok) setMaps(null); return r; });
+          }}>
             이 층의 지도로 가져오기
           </button>
           <button type="button" className={btn.small} onClick={() => setMaps(null)}>닫기</button>

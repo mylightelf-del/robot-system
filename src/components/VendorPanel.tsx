@@ -134,36 +134,63 @@ export function PuduPanel({
   );
 }
 
-/** 로봇이 지금 쓰는 PUDU 지도로 층 지도를 맞춘다(사업장 관제에 지도·로봇 위치가 나오게). */
+type AlignRow = { floorId: string; site: string; floor: string; current: string | null; map: string | null; status: string; result: string };
+
+/** 로봇이 지금 쓰는 PUDU 지도와 층 지도 비교 → 고른 층만 적용. 로봇 자체의 지도는 바꾸지 않는다. */
 function AlignMaps({ live }: { live: boolean }) {
-  const [rows, setRows] = useState<{ site: string; floor: string; map: string | null; result: string }[] | null>(null);
+  const [rows, setRows] = useState<AlignRow[] | null>(null);
+  const [picked, setPicked] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const call = async (apply: boolean) => {
+    setBusy(true);
+    setErr(null);
+    const r = await alignFloorMapsAction(apply, picked);
+    setBusy(false);
+    if (!r.ok) return setErr(r.error ?? "실패");
+    if (apply) {
+      const done = new Map((r.rows ?? []).map((x) => [x.floorId, x]));
+      setRows((prev) => (prev ?? []).map((x) => done.get(x.floorId) ?? x));
+      setPicked([]);
+    } else setRows(r.rows ?? []);
+  };
   return (
     <div className="border rounded p-2 bg-slate-50 text-xs space-y-1">
-      <div className="font-medium">층 지도 맞추기</div>
-      <div className="text-gray-600">PUDU 로봇이 배치된 층마다 로봇이 지금 쓰는 지도를 확인해, 층 지도와 다르면 그 지도(이미지·청소 구역)를 가져옵니다. 지도가 없는 층은 사업장 관제에 지도와 로봇 위치가 나오지 않습니다.</div>
-      <button
-        type="button"
-        className={btn.secondary}
-        disabled={busy || !live}
-        onClick={async () => {
-          setBusy(true);
-          setErr(null);
-          const r = await alignFloorMapsAction();
-          setBusy(false);
-          if (r.ok) setRows(r.rows ?? []);
-          else setErr(r.error ?? "실패");
-        }}
-      >
-        {busy ? "확인 중…" : "로봇이 쓰는 지도로 층 지도 맞추기"}
+      <div className="font-medium">층 지도 확인 · 맞추기</div>
+      <div className="text-gray-600">
+        로봇이 지금 쓰는 PUDU 지도와 이 시스템의 층 지도를 비교합니다. <b>로봇 자체의 지도·층은 바꾸지 않습니다</b>(제조사에 명령을 보내지 않음). 적용하면 이 시스템의 그 층 지도·청소 구역만 로봇 지도 기준으로 바뀝니다.
+      </div>
+      <button type="button" className={btn.secondary} disabled={busy || !live} onClick={() => void call(false)}>
+        {busy ? "확인 중…" : "비교하기(바꾸지 않음)"}
       </button>
       {err && <div className="text-red-700">{err}</div>}
       {rows && (
-        <table className="data bg-white">
-          <thead><tr><th>사업장</th><th>층</th><th>지도</th><th>결과</th></tr></thead>
-          <tbody>{rows.map((x, i) => <tr key={i}><td>{x.site}</td><td>{x.floor}</td><td>{x.map ?? "-"}</td><td>{x.result}</td></tr>)}</tbody>
-        </table>
+        <>
+          <table className="data bg-white">
+            <thead><tr><th></th><th>사업장</th><th>층</th><th>층 지도</th><th>로봇 지도</th><th>결과</th></tr></thead>
+            <tbody>
+              {rows.map((x) => (
+                <tr key={x.floorId}>
+                  <td>{x.status === "DIFFERENT" && <input type="checkbox" checked={picked.includes(x.floorId)} onChange={(e) => setPicked(e.target.checked ? [...picked, x.floorId] : picked.filter((f) => f !== x.floorId))} aria-label="적용할 층" />}</td>
+                  <td>{x.site}</td><td>{x.floor}</td><td>{x.current ?? "-"}</td><td>{x.map ?? "-"}</td><td>{x.result}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {rows.some((x) => x.status === "DIFFERENT") && (
+            <button
+              type="button"
+              className={btn.primary}
+              disabled={busy || picked.length === 0}
+              onClick={() => {
+                if (!confirm(`고른 ${picked.length}개 층의 지도·청소 구역을 로봇 지도로 바꿉니다(이 시스템 안에서만). 계속할까요?`)) return;
+                void call(true);
+              }}
+            >
+              고른 층에 적용
+            </button>
+          )}
+        </>
       )}
     </div>
   );

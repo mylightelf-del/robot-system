@@ -8,6 +8,7 @@ import { ForbiddenError, NotFoundError, ValidationError } from "@/lib/util/error
 import { newId } from "@/lib/util/random";
 import { nowIso } from "@/lib/util/time";
 import { audit } from "./audit";
+import { isLiveRobot } from "@/lib/vendors";
 
 /** 고객 화면용 장애 뷰: 오류 원문·내부 메모·통신 로그를 제거한다. */
 export interface IncidentView {
@@ -198,8 +199,11 @@ export async function resolveIncident(user: User, incidentId: string, note: stri
     await tx.insert(schema.incidentActions).values({ id: newId("act"), incidentId, at: now, userId: user.id, note: note.trim() || "복구 확인", internal: false });
     await tx.update(schema.incidents).set({ status: "RESOLVED", resolvedAt: now, acknowledgedAt: inc.acknowledgedAt ?? now }).where(eq(schema.incidents.id, incidentId));
     if (logs.length) await tx.insert(schema.notificationLogs).values(logs.map((l) => ({ ...l, incidentId })));
-    // 로봇 상태가 오류였다면 대기로 복귀(샘플 시뮬레이션). 실제 연동에서는 제조사 상태 수신으로 갱신된다.
-    await tx.update(schema.robotStatus).set({ common: "IDLE", raw: "FREE", lastReceivedAt: now, dataAt: now }).where(and(eq(schema.robotStatus.robotId, inc.robotId), eq(schema.robotStatus.common, "ERROR")));
+    // 로봇 상태가 오류였다면 대기로 복귀 — 샘플 로봇만. 실제 로봇은 제조사 상태 수신으로만 바뀐다(여기서 덮으면 실제 오류가 가려질 수 있다).
+    const robot = await getRobot(inc.robotId, tx);
+    if (robot && !isLiveRobot(robot)) {
+      await tx.update(schema.robotStatus).set({ common: "IDLE", raw: "FREE", lastReceivedAt: now, dataAt: now }).where(and(eq(schema.robotStatus.robotId, inc.robotId), eq(schema.robotStatus.common, "ERROR")));
+    }
     await audit(user, { siteId: inc.siteId, robotId: inc.robotId, action: "INCIDENT:RESOLVE", params: { incidentId }, result: "OK", detail: null, vendorTraceId: null }, tx);
   });
 }

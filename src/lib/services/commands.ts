@@ -1,3 +1,4 @@
+import { isLiveRobot } from "@/lib/vendors";
 import { and, desc, eq, gt, inArray, notInArray } from "drizzle-orm";
 import type { Command, CommandType, User } from "@/lib/domain/types";
 import { ALLOWED_BY_STATUS } from "@/lib/domain/commands";
@@ -21,6 +22,9 @@ export interface IssueCommandInput {
 }
 
 const PENDING: Command["state"][] = ["REQUESTED", "ACCEPTED", "EXECUTING"];
+const START_LIKE: Command["type"][] = ["START_TASK", "RESUME", "AREA_CLEAN"];
+/** 실제 로봇에 명령을 보낼 때 허용하는 상태 나이(폴링 60초 주기의 5배). */
+const LIVE_STATUS_MAX_AGE_MS = 5 * 60_000;
 
 /**
  * 영역 청소 명령 검증: 지도 버전 일치, 모서리 좌표 존재, 다각형이 지도 범위 안, L 시리즈는 SWEEP 만.
@@ -75,6 +79,11 @@ export async function issueCommand(user: User, input: IssueCommandInput): Promis
   if (!ALLOWED_BY_STATUS[common]?.includes(type)) {
     throw new ValidationError(`현재 상태(${common})에서는 '${type}' 명령을 보낼 수 없습니다.`);
   }
+  // 실제 로봇: 상태가 오래되면(폴링 실패 등) 화면의 상태를 믿고 보내지 않는다
+  if (isLiveRobot(robot)) {
+    const age = status?.lastReceivedAt ? Date.now() - new Date(status.lastReceivedAt).getTime() : Infinity;
+    if (age > LIVE_STATUS_MAX_AGE_MS) throw new ValidationError(`로봇 상태가 ${Number.isFinite(age) ? `${Math.round(age / 60000)}분` : "한 번도"} 갱신되지 않아 명령을 보내지 않습니다. 상태가 갱신된 뒤 다시 시도하세요.`);
+  }
 
   // 3) 중복 클릭 · 동시 명령 충돌 방지 (선 조작 우선: 처리 중 명령이 있으면 역할과 무관하게 거부)
   if (input.idempotencyKey) {
@@ -87,6 +96,17 @@ export async function issueCommand(user: User, input: IssueCommandInput): Promis
   if (pending) {
     const who = (await listUsers(db)).find((u) => u.id === pending.userId)?.name ?? pending.userId;
     throw new ConflictError(`${who} 의 '${pending.type}' 명령이 처리 중입니다. 결과 확인 후 다시 시도하세요.`);
+  }
+  // 시작 계열(작업 시작·재개·구역 청소)끼리는 아직 실행 확인 전(요청·접수)이거나 결과 불명인 것이 있으면 또 보내지 않는다(동시 시작·즉시 재전송 방지).
+  // 실행이 확인된(EXECUTING) 시작은 막지 않는다 — 일시정지 뒤 재개처럼 정상 흐름이다.
+  if (START_LIKE.includes(type)) {
+    const startPending = await db.query.commands.findFirst({
+      where: and(eq(schema.commands.robotId, robot.id), inArray(schema.commands.state, ["REQUESTED", "ACCEPTED", "UNKNOWN"]), inArray(schema.commands.type, START_LIKE), gt(schema.commands.expiresAt, now)),
+    });
+    if (startPending) {
+      const who = (await listUsers(db)).find((u) => u.id === startPending.userId)?.name ?? startPending.userId;
+      throw new ConflictError(`${who} 의 '${startPending.type}' 명령이 ${startPending.state === "UNKNOWN" ? "결과 불명 상태입니다(로봇 상태 확인 후 만료되면 다시)" : "처리 중입니다"}. 결과 확인 후 다시 시도하세요.`);
+    }
   }
 
   // 4) 명령별 파라미터 검증

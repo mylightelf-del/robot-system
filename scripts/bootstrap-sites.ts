@@ -57,7 +57,7 @@ async function main() {
           const n = await puduImportRobots(admin, site.id, floor.id, [sn]);
           console.log(`    로봇 등록: ${sn} (${n}대)`);
         } else if (existing.floorId !== floor.id) {
-          await relocateRobot(admin, existing.id, site.id, floor.id);
+          await relocateRobot(admin, existing.id, site.id, floor.id, "운영 초기 구성(bootstrap-sites)");
           console.log(`    로봇 이동: ${existing.id} ${sn} → ${s.name}/${f.name}`);
         } else console.log(`    로봇 있음: ${existing.id} ${sn}`);
       }

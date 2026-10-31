@@ -288,7 +288,14 @@ export async function recomputeDraft(user: User, reportId: string): Promise<void
   const r = await loadEditable(user, reportId, db);
   if (r.status !== "DRAFT" && r.status !== "REVIEW") throw new ValidationError("확정된 보고서는 재집계할 수 없습니다. 새 버전을 작성하세요.");
   const aggregates = computeAggregates(await loadAggregateInput(r.siteId, db), r.siteId, r, nowIso());
-  await db.update(schema.reportVersions).set({ aggregates }).where(eq(schema.reportVersions.id, reportId));
+  // 수치 보정은 유지하되, 기록해 둔 '원래 집계'를 새 집계값으로 갱신하고 행이 사라진 보정은 지운다
+  const adjustments = Object.fromEntries(
+    Object.entries(r.adjustments ?? {})
+      .map(([k, v]) => [k, { ...v, original: originalValue(aggregates, k) }] as const)
+      .filter(([, v]) => v.original !== undefined)
+      .map(([k, v]) => [k, { ...v, original: v.original ?? null }]),
+  );
+  await db.update(schema.reportVersions).set({ aggregates, adjustments }).where(eq(schema.reportVersions.id, reportId));
   await audit(user, { siteId: r.siteId, robotId: null, action: "REPORT:RECOMPUTE", params: { reportId }, result: "OK", detail: null, vendorTraceId: null }, db);
 }
 

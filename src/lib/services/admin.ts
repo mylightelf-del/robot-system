@@ -140,11 +140,18 @@ export async function updateNotificationThresholds(user: User, siteId: string, d
 }
 
 /** 로봇 사업장 이동: 배치 이력을 닫고 새로 연다. 과거 실적은 당시 사업장에 남는다. */
-export async function relocateRobot(user: User, robotId: string, toSiteId: string, toFloorId: string): Promise<void> {
+/**
+ * 로봇 배치(이 시스템에서 보이는 사업장·층) 변경. 로봇 자체의 지도·층은 바꾸지 않는다(제조사에 아무 명령도 보내지 않음).
+ * 실제 연동 로봇(PUDU API 등록)은 위치 표시·보고서 소속이 바뀌므로 사유를 받아 감사 기록에 남긴다(사용자 지시 2026-10-31: 함부로 바꾸지 않기).
+ */
+export async function relocateRobot(user: User, robotId: string, toSiteId: string, toFloorId: string, reason?: string): Promise<void> {
   const db = getDb();
   assertAdmin(user);
   const robot = await getRobot(robotId, db);
   if (!robot) throw new NotFoundError();
+  const live = robot.vendorMeta?.source === "api";
+  if (live && !reason?.trim()) throw new ValidationError("실제 로봇의 배치(층)를 바꾸려면 사유를 입력하세요. 로봇 자체의 지도는 바뀌지 않고, 이 시스템에서 보이는 층·보고서 소속만 바뀝니다.");
+  if (robot.siteId === toSiteId && robot.floorId === toFloorId) throw new ValidationError("이미 그 층에 배치되어 있습니다.");
   const floor = await db.query.floors.findFirst({ where: and(eq(schema.floors.id, toFloorId), eq(schema.floors.siteId, toSiteId)) });
   if (!floor) throw new ValidationError("이동할 사업장의 층을 선택하세요.");
   const st = await getStatus(robot.id, db);
@@ -164,7 +171,7 @@ export async function relocateRobot(user: User, robotId: string, toSiteId: strin
         .set({ status: "CANCELLED", reason: "로봇 사업장 이동", changeHistory: [...p.changeHistory, { at: now, by: user.id, from: p.status, to: "CANCELLED", reason: "로봇 사업장 이동" }] })
         .where(eq(schema.plannedRuns.id, p.id));
     }
-    await audit(user, { siteId: toSiteId, robotId: robot.id, action: "ROBOT:RELOCATE", params: { fromSiteId: robot.siteId, toSiteId, toFloorId }, result: "OK", detail: null, vendorTraceId: null }, tx);
+    await audit(user, { siteId: toSiteId, robotId: robot.id, action: "ROBOT:RELOCATE", params: { fromSiteId: robot.siteId, fromFloorId: robot.floorId, toSiteId, toFloorId, live }, result: "OK", detail: reason?.trim() || null, vendorTraceId: null }, tx);
   });
 }
 

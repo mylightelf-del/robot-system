@@ -1,5 +1,6 @@
 "use server";
 
+import { isCustomer } from "@/lib/auth/authz";
 import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
@@ -95,7 +96,9 @@ export async function issueCommandAction(input: IssueCommandInput): Promise<Acti
   return run(async () => {
     const user = await getCurrentUser();
     const cmd = await issueCommand(user, input);
-    return { message: `${cmd.state}: ${cmd.message ?? ""}`, id: cmd.id };
+    // 고객에게는 제조사 원문 오류를 보여 주지 않는다(상태 요약만)
+    const customerMsg: Record<string, string> = { ACCEPTED: "접수됨 — 로봇 실행 확인 중", EXECUTING: "실행 중", SUCCEEDED: "완료", FAILED: "로봇이 명령을 수행하지 못했습니다. 담당자에게 문의하세요.", UNKNOWN: "결과를 확인하지 못했습니다. 잠시 뒤 로봇 상태를 확인하세요.", REQUESTED: "요청됨" };
+    return { message: isCustomer(user) ? (customerMsg[cmd.state] ?? cmd.state) : `${cmd.state}: ${cmd.message ?? ""}`, id: cmd.id };
   });
 }
 
@@ -237,8 +240,8 @@ export async function removeRecipientAction(siteId: string, recipientId: string)
 export async function updateThresholdsAction(siteId: string, dedupeMinutes: number, escalateAfterMinutes: number): Promise<ActionResult> {
   return run(async () => admin.updateNotificationThresholds(await getCurrentUser(), siteId, dedupeMinutes, escalateAfterMinutes));
 }
-export async function relocateRobotAction(robotId: string, toSiteId: string, toFloorId: string): Promise<ActionResult> {
-  return run(async () => admin.relocateRobot(await getCurrentUser(), robotId, toSiteId, toFloorId));
+export async function relocateRobotAction(robotId: string, toSiteId: string, toFloorId: string, reason?: string): Promise<ActionResult> {
+  return run(async () => admin.relocateRobot(await getCurrentUser(), robotId, toSiteId, toFloorId, reason));
 }
 export async function setSiteManagerCanConfirmAction(value: boolean): Promise<ActionResult> {
   return run(async () => admin.setSiteManagerCanConfirm(await getCurrentUser(), value));
@@ -276,9 +279,9 @@ export async function puduSyncNowAction(job: "status" | "reports" | "catalog" | 
 
 // ---- 사업장·층·지도 (본사 관리자) ----
 import * as sitesSvc from "@/lib/services/sites";
-export async function alignFloorMapsAction(): Promise<ActionResult & { rows?: { site: string; floor: string; map: string | null; result: string }[] }> {
+export async function alignFloorMapsAction(apply = false, floorIds: string[] = []): Promise<ActionResult & { rows?: sitesSvc.AlignRow[] }> {
   try {
-    const rows = await sitesSvc.alignFloorMapsToRobots(await getCurrentUser());
+    const rows = await sitesSvc.alignFloorMapsToRobots(await getCurrentUser(), { apply, floorIds });
     revalidatePath("/", "layout");
     return { ok: true, message: `층 ${rows.length}곳 확인`, rows };
   } catch (e) {

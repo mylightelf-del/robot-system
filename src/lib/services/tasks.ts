@@ -97,6 +97,8 @@ export async function toggleSchedule(user: User, scheduleId: string, enabled: bo
   if (!s) throw new NotFoundError();
   const task = (await db.query.registeredTasks.findFirst({ where: eq(schema.registeredTasks.id, s.taskId) }))!;
   await assertSiteAccess(user, task.siteId, db);
+  // 실제 PUDU 예약은 PUDU 가 실행 주체다 — 여기서 켜고 꺼도 로봇에 반영되지 않고 다음 동기화에 되돌아간다
+  if (s.id.startsWith("sch-pudu-")) throw new ValidationError("PUDU 예약은 PUDU 앱에서 바꾸세요(이 시스템은 읽기 전용으로 동기화합니다).");
   await db.update(schema.schedules).set({ enabled }).where(eq(schema.schedules.id, scheduleId));
   await audit(user, { siteId: task.siteId, robotId: task.robotId, action: "SCHEDULE:TOGGLE", params: { scheduleId, enabled, executor: s.executor }, result: "OK", detail: s.executor === "VENDOR" ? "제조사 예약 변경은 3단계에서 API 로 반영(현재 샘플)" : null, vendorTraceId: null }, db);
 }

@@ -11,6 +11,7 @@ import { confirmPendingCommands, processPuduEvents, syncPuduCatalog, syncPuduErr
 import { addMinutes, localDateKey, localToUtcIso, nowIso } from "@/lib/util/time";
 import { addDays } from "@/lib/reports/schedule";
 import { issueCommand } from "@/lib/services/commands";
+import { toggleSchedule } from "@/lib/services/tasks";
 import { puduImportRobots, puduTestConnection } from "@/lib/services/admin";
 import { getAdapter } from "@/lib/vendors";
 import { proxy } from "@/proxy";
@@ -248,6 +249,11 @@ describe("PUDU 클라이언트·어댑터·워커 (모의 서버)", () => {
     const plans = await db().select().from(schema.plannedRuns).where(eq(schema.plannedRuns.robotId, id)).orderBy(schema.plannedRuns.plannedAt);
     expect(plans.map((p) => p.status)).toEqual(["DONE", "MISSED", "PLANNED"]);
     expect(plans[0].actualRunId).toBe("run-plan-t");
+    // 긴 작업: 보고서가 늦게 올라오면 '미실행' 판정을 48시간 안에 다시 맞춘다
+    const late = at(d1, "10:30");
+    await db().insert(schema.actualRuns).values({ id: "run-plan-late", vendor: "PUDU", vendorRobotId: MOCK_SN, vendorRunId: "vr-plan-late", robotId: id, siteId: "site-01", floorId: "site-01-f1", taskId: null, zoneIds: [], startedAt: late, endedAt: addMinutes(late, 240), result: "COMPLETED", endReason: null, areaM2: 900, durationMin: 240, waterL: null, detergentMl: null, origin: "PLANNED", receivedAt: addMinutes(late, 250) });
+    await syncPuduPlannedRuns(at(d1, "15:00"));
+    expect((await db().query.plannedRuns.findFirst({ where: eq(schema.plannedRuns.id, plans[1].id) }))!).toMatchObject({ status: "DONE", actualRunId: "run-plan-late" });
   });
 
   it("폴링 알림: 방금 생긴 장애 로그는 수신자에게 알림, 오래된 로그는 보내지 않음", async () => {
@@ -295,6 +301,27 @@ describe("PUDU 클라이언트·어댑터·워커 (모의 서버)", () => {
     } finally {
       state.errors = saved;
     }
+  });
+
+  it("명령 안전장치: 상태가 오래되면 거부, 실행 확인 전 시작은 두 번 보내지 않음, PUDU 예약은 화면에서 못 바꿈", async () => {
+    const id = await registerMockRobot();
+    await syncPuduCatalog(api);
+    await syncPuduStatus(new PuduAdapter(api));
+    const task = (await db().query.registeredTasks.findFirst({ where: eq(schema.registeredTasks.id, `task-pudu-${MOCK_SN}-897176785820073984`) }))!;
+    const hq = await user("u-hq");
+    await db().update(schema.robotStatus).set({ lastReceivedAt: addMinutes(nowIso(), -30) }).where(eq(schema.robotStatus.robotId, id));
+    await expect(issueCommand(hq, { robotId: id, type: "START_TASK", params: { taskId: task.id } })).rejects.toThrow(/갱신되지 않아/);
+    expect(state.execCalls.length).toBe(0);
+    await syncPuduStatus(new PuduAdapter(api));
+    expect((await issueCommand(hq, { robotId: id, type: "START_TASK", params: { taskId: task.id } })).state).toBe("ACCEPTED");
+    await expect(issueCommand(await user("u-site-a"), { robotId: id, type: "START_TASK", params: { taskId: task.id } })).rejects.toThrow(/처리 중/);
+    expect(state.execCalls.length).toBe(1);
+    // PUDU 에서 지운 예약은 동기화 때 사용 중지, PUDU 예약 토글은 거부
+    await db().insert(schema.schedules).values({ id: `sch-pudu-${MOCK_SN}-gone-1`, taskId: task.id, daysOfWeek: [1], time: "09:00", enabled: true, executor: "VENDOR" });
+    await syncPuduCatalog(api);
+    expect((await db().query.schedules.findFirst({ where: eq(schema.schedules.id, `sch-pudu-${MOCK_SN}-gone-1`) }))!.enabled).toBe(false);
+    const live = (await db().select().from(schema.schedules).where(eq(schema.schedules.taskId, task.id))).find((x) => x.enabled)!;
+    await expect(toggleSchedule(hq, live.id, false)).rejects.toThrow(/PUDU 앱/);
   });
 
   it("명령: 등록 작업 실행 → 접수(ACCEPTED, trace_id) → 폴링으로 실행 확인(EXECUTING)", async () => {

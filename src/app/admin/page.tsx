@@ -1,13 +1,11 @@
+import Link from "next/link";
 import { kakaoCandidates, notifyStatus } from "@/lib/services/notify";
 import { getCurrentUser } from "@/lib/auth/session";
-import { getAdminData, getVendorStatus } from "@/lib/services/admin";
-import { PuduPanel } from "@/components/VendorPanel";
-import { NewSiteForm, SiteCard } from "@/components/SitePanels";
+import { getAdminData } from "@/lib/services/admin";
 import { AppError } from "@/lib/util/errors";
-import { Card, KV, PageTitle } from "@/components/ui";
+import { Card, PageTitle } from "@/components/ui";
 import { AccessDenied } from "@/components/AccessDenied";
-import { NewUserForm, RecipientsPanel, RelocateForm, SettingsPanel, UserRow } from "@/components/AdminPanels";
-import { VENDOR_LABEL } from "@/lib/domain/commands";
+import { NewUserForm, RecipientsPanel, SettingsPanel, UserRow } from "@/components/AdminPanels";
 import { formatDateTime } from "@/lib/util/time";
 
 export default async function AdminPage() {
@@ -18,15 +16,13 @@ export default async function AdminPage() {
   } catch (e) {
     return <AccessDenied reason={e instanceof AppError ? e.message : "접근할 수 없습니다."} />;
   }
-  const vendor = await getVendorStatus(user);
   const notify = notifyStatus();
   const kakaoUsers = await kakaoCandidates();
   const sites = d.sites.map((s) => ({ id: s.id, name: s.name }));
-  const floors = d.floors.map((f) => ({ id: f.id, siteId: f.siteId, name: f.name, siteName: d.sites.find((s) => s.id === f.siteId)?.name ?? f.siteId }));
 
   return (
     <>
-      <PageTitle title="관리 설정" subtitle="사업장·층·구역·로봇·사용자·제어권한·알림수신·제조사 연결 (본사 관리자 전용)" />
+      <PageTitle title="관리 설정" subtitle="운영 설정·사용자·권한·알림 수신·감사 기록 (본사 관리자 전용). 사업장·지도·로봇 배치·제조사 연결은 고급 설정." />
 
       <div className="space-y-4">
         <Card title="운영 설정">
@@ -60,40 +56,10 @@ export default async function AdminPage() {
           <p className="text-xs text-gray-500 mt-2">비활성화하면 세션이 즉시 종료되고 모든 조회·명령이 서버에서 차단됩니다. 사용자는 초대 링크로 본인이 비밀번호를 설정합니다(이메일 자동 발송은 5단계).</p>
         </Card>
 
-        <Card title="사업장 · 층 · 구역 · 로봇 배치">
-          <div className="mb-3"><NewSiteForm /></div>
-          <div className="grid md:grid-cols-2 gap-4">
-            {d.sites.map((s) => (
-              <SiteCard
-                key={s.id}
-                site={{
-                  id: s.id,
-                  name: s.name,
-                  address: s.address,
-                  timezone: s.timezone,
-                  isSample: s.isSample,
-                  installedOn: s.installedOn ?? null,
-                  hasPuduRobot: d.robots.some((r) => r.siteId === s.id && r.vendor === "PUDU" && r.vendorMeta?.source === "api"),
-                  floors: d.floors
-                    .filter((f) => f.siteId === s.id)
-                    .map((f) => {
-                      const mv = d.mapVersions.find((m) => m.id === f.currentMapVersionId);
-                      return {
-                        id: f.id,
-                        name: f.name,
-                        map: mv ? { id: mv.id, version: mv.version, vendor: mv.vendor ?? null, vendorMapName: mv.vendorMapName ?? null, imageUrl: mv.imageUrl ?? null, widthPx: mv.widthPx, heightPx: mv.heightPx, hasCorners: !!mv.corners } : null,
-                        zones: d.zones.filter((z) => z.floorId === f.id).length,
-                        robots: d.robots.filter((r) => r.floorId === f.id).map((r) => `${r.name}[${VENDOR_LABEL[r.vendor]} ${r.model}]`),
-                      };
-                    }),
-                }}
-              />
-            ))}
-          </div>
-          <p className="text-xs text-gray-500 mt-2">사업장·층은 여기서 만들고, PUDU 로봇을 배치한 층은 『PUDU 지도 가져오기』로 실제 지도(이미지·구역)를 연결합니다. 로봇·층·실적이 있는 항목은 삭제할 수 없습니다(이력 보존).</p>
-          <div className="mt-3 border-t pt-3">
-            <div className="text-sm font-medium mb-1">로봇 사업장 이동</div>
-            <RelocateForm robots={d.robots.map((r) => ({ id: r.id, name: r.name, siteId: r.siteId }))} floors={floors} />
+        <Card title="고급 설정">
+          <div className="flex flex-wrap items-center gap-3 text-sm">
+            <Link href="/admin/advanced" className="inline-flex items-center rounded border border-amber-400 bg-amber-50 px-3 py-1.5 text-amber-900 font-medium">고급 설정 열기 →</Link>
+            <span className="text-xs text-gray-600">사업장·층·구역·로봇 배치, 지도 가져오기, 제조사 연결(PUDU). 잘못 바꾸면 위치 표시·보고서가 달라지므로 따로 두었습니다.</span>
           </div>
         </Card>
 
@@ -110,45 +76,6 @@ export default async function AdminPage() {
             이메일: <b>{notify.modes.EMAIL === "live" ? `실제 발송(AWS SES, 보내는 주소 ${notify.emailFrom})` : "모의 발송(서버 설정 전)"}</b> · 카카오톡: <b>{notify.modes.KAKAO === "live" ? "실제 발송(나에게 보내기 — 수신자 본인이 내 계정에서 연결)" : "모의 발송(서버 설정 전)"}</b>.
             장애 발생(등급 HIGH 이상)·복구·미조치 확대 통보를 보냅니다. 전화번호로 보내는 알림톡은 발송대행사 선정 뒤 붙입니다.
           </p>
-        </Card>
-
-        <Card title="제조사 연결 — PUDU Cloud API">
-          <PuduPanel live={vendor.modes.PUDU === "live"} keyConfigured={vendor.pudu.keyConfigured} cluster={vendor.pudu.cluster} clusterLabel={vendor.pudu.clusterLabel} callbackUrl={vendor.pudu.callbackUrl} callbackConfigured={vendor.pudu.callbackConfigured} callbackPublic={vendor.pudu.callbackPublic} lastCallbackAt={vendor.pudu.lastCallbackAt} callbacksLast24h={vendor.pudu.callbacksLast24h} shopIds={vendor.pudu.shopIds} floors={floors} />
-          <div className="mt-3 grid md:grid-cols-2 gap-3 text-xs">
-            <div className="border rounded p-2">
-              <div className="font-medium mb-1">동기화 상태</div>
-              {vendor.sync.length === 0 ? <div className="text-gray-500">아직 실행 기록 없음</div> : (
-                <table className="data">
-                  <thead><tr><th>작업</th><th>마지막 실행</th><th>마지막 성공</th><th>결과</th></tr></thead>
-                  <tbody>{vendor.sync.map((s) => <tr key={s.id}><td>{s.id}</td><td>{formatDateTime(s.lastRunAt)}</td><td>{formatDateTime(s.lastOkAt)}</td><td className={s.lastError ? "text-red-700" : "text-emerald-700"}>{s.lastError ?? JSON.stringify(s.stats)}</td></tr>)}</tbody>
-                </table>
-              )}
-            </div>
-            <div className="border rounded p-2">
-              <div className="font-medium mb-1">최근 콜백 이벤트 (미처리 {vendor.pendingEvents}건)</div>
-              {vendor.recentEvents.length === 0 ? <div className="text-gray-500">수신 기록 없음</div> : (
-                <ul className="space-y-0.5">{vendor.recentEvents.map((e) => <li key={e.id}><span className="text-gray-500">{formatDateTime(e.receivedAt)}</span> {e.eventType} {e.vendorRobotId ?? ""} {e.processedAt ? (e.processError ? <span className="text-red-700">오류: {e.processError}</span> : <span className="text-emerald-700">처리됨</span>) : <span className="text-amber-700">대기</span>}</li>)}</ul>
-              )}
-            </div>
-          </div>
-        </Card>
-
-        <Card title="제조사 연결 목록">
-          <div className="grid md:grid-cols-2 gap-3">
-            {d.vendorConnections.map((v) => (
-              <div key={v.id} className="border rounded p-3 text-sm">
-                <KV
-                  items={[
-                    { k: "연결", v: <>{v.label} <span className={`text-xs rounded px-1 ${v.status === "SAMPLE" ? "bg-amber-50 text-amber-800" : "bg-gray-100 text-gray-600"}`}>{v.status === "SAMPLE" ? "샘플" : "미설정"}</span></> },
-                    { k: "제조사", v: VENDOR_LABEL[v.vendor] },
-                    { k: "지역", v: v.region ?? "-" },
-                    { k: "키", v: <span className="text-gray-500">서버 비밀 설정(환경변수)에서만 관리 · 화면 입력 없음</span> },
-                    { k: "비고", v: v.notes },
-                  ]}
-                />
-              </div>
-            ))}
-          </div>
         </Card>
 
         <Card title="감사 기록 (최근 50건)">

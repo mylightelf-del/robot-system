@@ -80,7 +80,7 @@ describe("사업장·층·지도 관리(운영 준비)", () => {
     await expect(listPuduMapsForSite(hq, siteId)).rejects.toThrow(/PUDU API 로 등록한 로봇이 없어/);
     expect(await puduImportRobots(hq, "site-01", "site-01-f1", [MOCK_SN])).toBe(1);
     const robot = (await db().query.robots.findFirst({ where: and(eq(schema.robots.vendor, "PUDU"), eq(schema.robots.vendorRobotId, MOCK_SN)) }))!;
-    await relocateRobot(hq, robot.id, siteId, floorId);
+    await relocateRobot(hq, robot.id, siteId, floorId, "시험");
 
     const maps = await listPuduMapsForSite(hq, siteId);
     expect(maps.shopId).toBe(MOCK_SHOP);
@@ -127,16 +127,16 @@ describe("사업장·층·지도 관리(운영 준비)", () => {
     expect((await getRobotDetail(hq, robot.id)).mapMismatch).toBe(true);
     // 이미지 URL 이 죽은 지도: 가져오기는 되지만 보관 실패를 알리고 원격 URL 을 그대로 둔다 → 나중에 다시 받기 시도 가능
     const { id: f2 } = await createFloor(hq, siteId, "B1");
-    await relocateRobot(hq, robot.id, siteId, f2);
+    await relocateRobot(hq, robot.id, siteId, f2, "시험");
     const r2 = await importPuduMap(hq, f2, "-1#0#basement");
     expect(r2.imageStored).toBe(false);
     expect(r2.imageError).toBeTruthy();
     expect((await db().query.mapVersions.findFirst({ where: eq(schema.mapVersions.id, r2.mapVersionId) }))!.imageUrl).toBe("http://127.0.0.1:9/maps/none.png");
     await expect(getMapImage(hq, r2.mapVersionId)).rejects.toThrow(/보관된 지도 이미지가 없습니다/);
     await expect(refetchMapImage(hq, r2.mapVersionId)).rejects.toThrow(/이미지/);
-    await relocateRobot(hq, robot.id, siteId, floorId);
+    await relocateRobot(hq, robot.id, siteId, floorId, "시험");
     // 샘플 지도 층에 있는 로봇은 미터 좌표를 px 로 오인해 그리지 않는다
-    await relocateRobot(hq, robot.id, "site-01", "site-01-f1");
+    await relocateRobot(hq, robot.id, "site-01", "site-01-f1", "시험");
     await syncPuduStatus(new PuduAdapter(api));
     st = (await db().query.robotStatus.findFirst({ where: eq(schema.robotStatus.robotId, robot.id) }))!;
     expect(st.pose).toBeNull();
@@ -144,19 +144,36 @@ describe("사업장·층·지도 관리(운영 준비)", () => {
     expect(st.mapVersionId).toBe("pudu:2#0#other");
   });
 
-  it("층 지도 맞추기: 로봇이 쓰는 PUDU 지도를 층에 가져오고(이미 맞으면 건너뜀), 없는 지도는 실패로 알린다", async () => {
+  it("층 지도 맞추기: 미리 보기는 아무것도 바꾸지 않고, 고른 층만 적용, 로봇 배치(층)는 그대로", async () => {
     const hq = await user("u-hq");
     expect(await puduImportRobots(hq, "site-01", "site-01-f1", [MOCK_SN])).toBe(1);
+    const robotBefore = (await db().query.robots.findFirst({ where: and(eq(schema.robots.vendor, "PUDU"), eq(schema.robots.vendorRobotId, MOCK_SN)) }))!;
+    const floorBefore = (await db().query.floors.findFirst({ where: eq(schema.floors.id, "site-01-f1") }))!;
     state.mapName = "1#1#lobby";
-    const r1 = await alignFloorMapsToRobots(hq);
-    const row = r1.find((x) => x.map === "1#1#lobby")!;
-    expect(row.result).toMatch(/^가져옴 v\d+ · 구역 \d+개/);
-    const floor = (await db().query.floors.findFirst({ where: eq(schema.floors.id, "site-01-f1") }))!;
-    const mv = (await db().query.mapVersions.findFirst({ where: eq(schema.mapVersions.id, floor.currentMapVersionId) }))!;
+    const preview = await alignFloorMapsToRobots(hq);
+    const row = preview.find((x) => x.floorId === "site-01-f1")!;
+    expect(row).toMatchObject({ status: "DIFFERENT", map: "1#1#lobby" });
+    expect((await db().query.floors.findFirst({ where: eq(schema.floors.id, "site-01-f1") }))!.currentMapVersionId).toBe(floorBefore.currentMapVersionId); // 미리 보기는 변경 없음
+    expect((await alignFloorMapsToRobots(hq, { apply: true, floorIds: [] })).length).toBe(0); // 고른 층이 없으면 아무것도 안 함
+    const applied = await alignFloorMapsToRobots(hq, { apply: true, floorIds: ["site-01-f1"] });
+    expect(applied[0].status).toBe("IMPORTED");
+    const mv = (await db().query.mapVersions.findFirst({ where: eq(schema.mapVersions.id, (await db().query.floors.findFirst({ where: eq(schema.floors.id, "site-01-f1") }))!.currentMapVersionId) }))!;
     expect(mv).toMatchObject({ vendor: "PUDU", vendorMapName: "1#1#lobby" });
-    expect((await alignFloorMapsToRobots(hq)).find((x) => x.map === "1#1#lobby")!.result).toMatch(/^이미 맞음/);
-    state.mapName = "9#9#unknown";
-    expect((await alignFloorMapsToRobots(hq)).find((x) => x.map === "9#9#unknown")!.result).toMatch(/^실패/);
+    const robotAfter = (await db().query.robots.findFirst({ where: eq(schema.robots.id, robotBefore.id) }))!;
+    expect([robotAfter.siteId, robotAfter.floorId]).toEqual([robotBefore.siteId, robotBefore.floorId]); // 로봇 배치는 그대로
+    expect(state.execCalls.length).toBe(0); // 로봇에 명령을 보내지 않음
+    expect((await alignFloorMapsToRobots(hq)).find((x) => x.floorId === "site-01-f1")!.status).toBe("MATCH");
     await expect(alignFloorMapsToRobots(await user("u-site-a"))).rejects.toThrow();
+  });
+
+  it("실제 로봇의 배치 변경은 사유가 필요하다(로봇 자체 지도는 바꾸지 않음)", async () => {
+    const hq = await user("u-hq");
+    expect(await puduImportRobots(hq, "site-01", "site-01-f1", [MOCK_SN])).toBe(1);
+    const r = (await db().query.robots.findFirst({ where: and(eq(schema.robots.vendor, "PUDU"), eq(schema.robots.vendorRobotId, MOCK_SN)) }))!;
+    await expect(relocateRobot(hq, r.id, "site-01", "site-01-b1")).rejects.toThrow(/사유/);
+    await relocateRobot(hq, r.id, "site-01", "site-01-b1", "실제로 2층으로 옮김");
+    const a = (await db().select().from(schema.auditLogs).where(eq(schema.auditLogs.action, "ROBOT:RELOCATE"))).at(-1)!;
+    expect(a.detail).toBe("실제로 2층으로 옮김");
+    expect(state.execCalls.length).toBe(0);
   });
 });

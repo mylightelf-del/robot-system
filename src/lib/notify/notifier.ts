@@ -2,7 +2,8 @@ import type { Incident, NotificationLog, NotificationRecipient, NotificationSett
 import { SEVERITY_LABEL, SEVERITY_ORDER } from "@/lib/domain/status";
 import { formatDateTime, localHourMinute, minutesBetween } from "@/lib/util/time";
 import { newId } from "@/lib/util/random";
-import { getRobot, getSite } from "@/lib/db/repo";
+import { getRobot, getSite, getUser } from "@/lib/db/repo";
+import { canAccessSite } from "@/lib/auth/authz";
 import { emailConfig, renderEmail, sendEmail } from "./email";
 import { kakaoConfig, sendKakaoToUser } from "./kakao";
 
@@ -83,17 +84,27 @@ export async function notifyIncident(
   let message: Message | null = null;
   for (const r of setting.recipients) {
     const base = { id: newId("ntf"), at: now, channel: r.channel, recipient: r.address };
+    // 억제 사유에도 통보 종류를 앞에 붙인다(확대 통보 '이미 처리' 판단이 억제 기록까지 보도록)
+    const suppress = (why: string) => logs.push({ ...base, status: "SUPPRESSED", reason: `${KIND_LABEL[kind]} — 억제: ${why}` });
     if (SEVERITY_ORDER[incident.severity] < SEVERITY_ORDER[r.minSeverity]) {
-      logs.push({ ...base, status: "SUPPRESSED", reason: `장애 등급 ${incident.severity} < 수신 기준 ${r.minSeverity}` });
+      suppress(`장애 등급 ${incident.severity} < 수신 기준 ${r.minSeverity}`);
       continue;
     }
     if (!withinHours(now, r.hoursFrom, r.hoursTo, tz)) {
-      logs.push({ ...base, status: "SUPPRESSED", reason: `수신 시간대(${r.hoursFrom}~${r.hoursTo}) 외` });
+      suppress(`수신 시간대(${r.hoursFrom}~${r.hoursTo}) 외`);
       continue;
     }
     if (kind === "OCCURRED" && recentSameIncidentNotifiedAt && minutesBetween(recentSameIncidentNotifiedAt, now) < setting.dedupeMinutes) {
-      logs.push({ ...base, status: "SUPPRESSED", reason: `${setting.dedupeMinutes}분 내 동일 장애 중복 억제` });
+      suppress(`${setting.dedupeMinutes}분 내 동일 장애 중복 억제`);
       continue;
+    }
+    // 카카오톡(사용자 본인) 수신자는 보낼 때마다 활성·사업장 접근을 다시 확인한다(비활성화·권한 회수 뒤에도 계속 받는 일 방지)
+    if (r.channel === "KAKAO" && r.address.startsWith(KAKAO_USER_PREFIX)) {
+      const u = await getUser(r.address.slice(KAKAO_USER_PREFIX.length));
+      if (!u || !u.active || !(await canAccessSite(u, incident.siteId))) {
+        suppress("수신자 비활성 또는 이 사업장 권한 없음");
+        continue;
+      }
     }
     message ??= await incidentMessage(incident, kind, tz, now);
     const res = await deliver(r, message);

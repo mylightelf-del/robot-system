@@ -250,20 +250,23 @@ async function upsertIncidentFromError(robot: Robot, e: { code: string; level: s
     actions: e.historical ? [{ id: newId("act"), at: nowIso(), userId: "system", note: "제조사 장애 로그 이력에서 적재(조치·복구 기록 없음)", internal: false }] : [],
     notifications: [],
   };
-  let logs = inc.notifications;
-  if (e.notify && site && (severity === "HIGH" || severity === "CRITICAL")) {
-    const setting = await getNotificationSetting(robot.siteId, db);
-    logs = await notifyIncident(setting, inc, null, nowIso(), site.timezone, "OCCURRED");
-  }
+  // 먼저 장애를 저장하고(실패하면 알림도 보내지 않음 → 다음 동기화에서 중복 알림이 나가지 않는다), 저장된 뒤에 알린다
+  let inserted = false;
   await db.transaction(async (tx) => {
     const { actions, notifications: _n, ...row } = inc;
-    await tx.insert(schema.incidents).values({ ...row, rawPayload: e.payload }).onConflictDoNothing();
+    inserted = (await tx.insert(schema.incidents).values({ ...row, rawPayload: e.payload }).onConflictDoNothing().returning({ id: schema.incidents.id })).length > 0;
+    if (!inserted) return;
     if (actions.length) await tx.insert(schema.incidentActions).values(actions.map((a) => ({ ...a, incidentId: inc.id }))).onConflictDoNothing();
-    if (logs.length) await tx.insert(schema.notificationLogs).values(logs.map((l) => ({ ...l, incidentId: inc.id })));
     if (e.touchStatus && (severity === "HIGH" || severity === "CRITICAL")) {
       await tx.update(schema.robotStatus).set({ common: "ERROR", raw: `ERROR:${e.code}`, lastReceivedAt: nowIso(), dataAt: e.occurredAt }).where(eq(schema.robotStatus.robotId, robot.id));
     }
   });
+  if (!inserted) return false;
+  if (e.notify && site && (severity === "HIGH" || severity === "CRITICAL")) {
+    const setting = await getNotificationSetting(robot.siteId, db);
+    const logs = await notifyIncident(setting, inc, null, nowIso(), site.timezone, "OCCURRED");
+    if (logs.length) await db.insert(schema.notificationLogs).values(logs.map((l) => ({ ...l, incidentId: inc.id })));
+  }
   return true;
 }
 
@@ -293,6 +296,7 @@ export async function syncPuduCatalog(api: PuduApi = createPuduApi()): Promise<S
         }
       }
       const cronPage = await api.listCron(sn);
+      const seenSchedules = new Set<string>();
       for (const c of cronPage.list ?? []) {
         for (const t of c.task_list ?? []) {
           const taskId = `task-pudu-${sn}-${t.task_id}`;
@@ -301,9 +305,14 @@ export async function syncPuduCatalog(api: PuduApi = createPuduApi()): Promise<S
           if (!exists) await upsertTask({ task_id: t.task_id, version: t.task_version, name: t.name, mode: t.clean_mode ?? t.mode });
           const s: Schedule = { id: `sch-pudu-${sn}-${c.cron_id}-${t.task_id}`, taskId, daysOfWeek: (c.weeks ?? []).map((w) => w % 7), time: `${String(c.hour).padStart(2, "0")}:${String(c.minute).padStart(2, "0")}`, enabled: c.cron_status === "open", executor: "VENDOR" };
           await db.insert(schema.schedules).values(s).onConflictDoUpdate({ target: schema.schedules.id, set: { daysOfWeek: s.daysOfWeek, time: s.time, enabled: s.enabled } });
+          seenSchedules.add(s.id);
           crons += 1;
         }
       }
+      // PUDU 에서 지운 예약은 우리 쪽에서도 끈다(지우지 않고 사용 중지 — 이력 보존). 이 로봇의 제조사 예약만 대상.
+      const ours = await db.select({ id: schema.schedules.id }).from(schema.schedules).where(and(sql`${schema.schedules.id} like ${`sch-pudu-${sn}-%`}`, eq(schema.schedules.enabled, true)));
+      const gone = ours.map((o) => o.id).filter((id) => !seenSchedules.has(id));
+      if (gone.length) await db.update(schema.schedules).set({ enabled: false }).where(inArray(schema.schedules.id, gone));
       const comp = await api.listComponents(sn);
       await db.delete(schema.maintenanceItems).where(and(eq(schema.maintenanceItems.robotId, robot.id), eq(schema.maintenanceItems.source, "API")));
       for (const c of comp.list ?? []) {
@@ -351,10 +360,17 @@ export async function syncPuduPlannedRuns(now: string = nowIso()): Promise<SyncR
         }
       }
       const settleBefore = new Date(new Date(now).getTime() - PLAN_SETTLE_HOURS * 3600_000).toISOString();
+      // 판정 대상: 예정 시각이 지난 PLANNED + 최근 48시간 안에 '미실행'으로 판정했던 회차(긴 작업은 보고서가 늦게 올라와 뒤늦게 맞춰질 수 있다)
+      const relinkSince = new Date(new Date(now).getTime() - 48 * 3600_000).toISOString();
       const pending = await db
         .select()
         .from(schema.plannedRuns)
-        .where(and(eq(schema.plannedRuns.robotId, robot.id), eq(schema.plannedRuns.status, "PLANNED"), sql`${schema.plannedRuns.plannedAt} < ${settleBefore}`));
+        .where(
+          and(
+            eq(schema.plannedRuns.robotId, robot.id),
+            sql`((${schema.plannedRuns.status} = 'PLANNED' and ${schema.plannedRuns.plannedAt} < ${settleBefore}) or (${schema.plannedRuns.status} = 'MISSED' and ${schema.plannedRuns.plannedAt} > ${relinkSince} and ${schema.plannedRuns.actualRunId} is null and ${schema.plannedRuns.reason} like '%자동 판정%'))`,
+          ),
+        );
       if (!pending.length) continue;
       const runs = await db.select().from(schema.actualRuns).where(eq(schema.actualRuns.robotId, robot.id));
       const linked = new Set((await db.select({ id: schema.plannedRuns.actualRunId }).from(schema.plannedRuns).where(eq(schema.plannedRuns.robotId, robot.id))).map((r) => r.id).filter(Boolean));
@@ -367,7 +383,7 @@ export async function syncPuduPlannedRuns(now: string = nowIso()): Promise<SyncR
           linked.add(hit.id);
           await db.update(schema.plannedRuns).set({ status: "DONE", actualRunId: hit.id }).where(eq(schema.plannedRuns.id, p.id));
           done += 1;
-        } else {
+        } else if (p.status === "PLANNED") {
           await db.update(schema.plannedRuns).set({ status: "MISSED", reason: `예정 시각 ±${PLAN_MATCH_MINUTES}분 안에 실적 없음(자동 판정)` }).where(eq(schema.plannedRuns.id, p.id));
           missed += 1;
         }

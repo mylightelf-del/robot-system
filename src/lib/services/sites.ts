@@ -266,10 +266,12 @@ export async function importPuduMap(user: User, floorId: string, mapName: string
 }
 
 /**
- * 로봇이 지금 쓰는 지도로 층 지도 맞추기: PUDU 로봇이 배치된 층마다 로봇들이 보고하는 지도 이름(상세 조회)을 모아
- * 가장 많이 쓰는 지도가 층의 현재 지도와 다르면 그 지도를 가져온다. 로봇마다 지도가 다르면 다수결로 고르고 결과에 알린다.
+ * 로봇이 지금 쓰는 지도로 층 지도 맞추기(이 시스템의 층 지도만 바꾼다 — 로봇 자체의 지도·층은 절대 바꾸지 않는다).
+ * 1) 미리 보기(apply 없음): PUDU 로봇이 배치된 층마다 로봇들이 보고하는 지도 이름(상세 조회)을 모아 다수 지도를 고르고, 층의 현재 지도와 비교만 한다.
+ * 2) 적용: 관리자가 고른 층(floorIds)만 그 지도를 가져온다. 로봇마다 지도가 다르면 결과에 알린다.
  */
-export async function alignFloorMapsToRobots(user: User): Promise<{ site: string; floor: string; map: string | null; result: string }[]> {
+export type AlignRow = { floorId: string; site: string; floor: string; current: string | null; map: string | null; status: "MATCH" | "DIFFERENT" | "NO_INFO" | "IMPORTED" | "FAILED"; result: string };
+export async function alignFloorMapsToRobots(user: User, opts: { apply?: boolean; floorIds?: string[] } = {}): Promise<AlignRow[]> {
   assertActive(user);
   assertAdmin(user);
   const db = getDb();
@@ -280,11 +282,14 @@ export async function alignFloorMapsToRobots(user: User): Promise<{ site: string
     .where(and(eq(schema.robots.vendor, "PUDU"), eq(schema.robots.active, true), sql`${schema.robots.vendorMeta}->>'source' = 'api'`));
   const byFloor = new Map<string, typeof robots>();
   for (const r of robots) byFloor.set(r.floorId, [...(byFloor.get(r.floorId) ?? []), r]);
-  const out: { site: string; floor: string; map: string | null; result: string }[] = [];
+  const out: AlignRow[] = [];
   for (const [floorId, rs] of byFloor) {
+    if (opts.apply && !opts.floorIds?.includes(floorId)) continue;
     const floor = await db.query.floors.findFirst({ where: eq(schema.floors.id, floorId) });
     if (!floor) continue;
     const site = await db.query.sites.findFirst({ where: eq(schema.sites.id, floor.siteId) });
+    const cur = await db.query.mapVersions.findFirst({ where: eq(schema.mapVersions.id, floor.currentMapVersionId) });
+    const current = cur?.vendor === "PUDU" ? (cur.vendorMapName ?? null) : null;
     const names: string[] = [];
     for (const r of rs) {
       try {
@@ -295,25 +300,28 @@ export async function alignFloorMapsToRobots(user: User): Promise<{ site: string
         /* 조회 실패 로봇은 건너뛴다 */
       }
     }
-    const row = { site: site?.name ?? floor.siteId, floor: floor.name };
+    const row = { floorId, site: site?.name ?? floor.siteId, floor: floor.name, current };
     if (!names.length) {
-      out.push({ ...row, map: null, result: "로봇이 지도 정보를 주지 않음(오프라인 등) — 건너뜀" });
+      out.push({ ...row, map: null, status: "NO_INFO", result: "로봇이 지도 정보를 주지 않음(오프라인 등)" });
       continue;
     }
     const counts = new Map<string, number>();
     names.forEach((n) => counts.set(n, (counts.get(n) ?? 0) + 1));
     const [best] = [...counts.entries()].sort((a, b) => b[1] - a[1]);
-    const note = counts.size > 1 ? ` (로봇마다 지도가 다름: ${[...counts.keys()].join(", ")} — 층을 나누는 것을 검토)` : "";
-    const cur = await db.query.mapVersions.findFirst({ where: eq(schema.mapVersions.id, floor.currentMapVersionId) });
-    if (cur?.vendor === "PUDU" && cur.vendorMapName === best[0]) {
-      out.push({ ...row, map: best[0], result: `이미 맞음${note}` });
+    const note = counts.size > 1 ? ` (로봇마다 지도가 다름: ${[...counts.keys()].join(", ")})` : "";
+    if (current === best[0]) {
+      out.push({ ...row, map: best[0], status: "MATCH", result: `이미 맞음${note}` });
+      continue;
+    }
+    if (!opts.apply) {
+      out.push({ ...row, map: best[0], status: "DIFFERENT", result: `층 지도와 다름 — 적용하면 이 지도를 가져온다${note}` });
       continue;
     }
     try {
       const r = await importPuduMap(user, floorId, best[0]);
-      out.push({ ...row, map: best[0], result: `가져옴 v${r.version} · 구역 ${r.zones}개 · 이미지 ${r.imageStored ? "보관" : `원격 참조(${r.imageError})`}${note}` });
+      out.push({ ...row, map: best[0], status: "IMPORTED", result: `가져옴 v${r.version} · 구역 ${r.zones}개 · 이미지 ${r.imageStored ? "보관" : `원격 참조(${r.imageError})`}${note}` });
     } catch (e) {
-      out.push({ ...row, map: best[0], result: `실패: ${(e as Error).message}` });
+      out.push({ ...row, map: best[0], status: "FAILED", result: `실패: ${(e as Error).message}` });
     }
   }
   return out;

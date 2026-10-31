@@ -240,11 +240,20 @@ export function RelocateForm({ robots, floors }: { robots: { id: string; name: s
           </option>
         ))}
       </select>
-      <button type="button" className={btn.secondary} disabled={pending || !floor} onClick={() => run(() => relocateRobotAction(robotId, floor!.siteId, floor!.id))}>
-        사업장 이동 처리
+      <button
+        type="button"
+        className={btn.secondary}
+        disabled={pending || !floor}
+        onClick={() => {
+          const reason = window.prompt("로봇 배치(층)를 바꿉니다. 로봇 자체의 지도는 바뀌지 않지만 이 시스템의 위치 표시·보고서 소속이 바뀝니다.\n사유를 입력하세요(감사 기록).", "");
+          if (reason === null) return;
+          run(() => relocateRobotAction(robotId, floor!.siteId, floor!.id, reason));
+        }}
+      >
+        배치 변경
       </button>
       <ResultLine result={result} />
-      <span className="text-xs text-gray-500">이동 후에도 과거 실적은 당시 사업장에 남고, 미래 예정 회차는 취소 처리됩니다.</span>
+      <span className="text-xs text-gray-500">로봇이 실제로 다른 층·현장으로 옮겨졌을 때만 쓰세요. 과거 실적은 당시 사업장에 남고, 미래 예정 회차는 취소됩니다. 실제 로봇은 사유가 필요합니다.</span>
     </div>
   );
 }
