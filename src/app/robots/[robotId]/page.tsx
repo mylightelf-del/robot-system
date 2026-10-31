@@ -78,6 +78,9 @@ export default async function RobotPage({ params }: { params: Promise<{ robotId:
           </Card>
 
           <Card title="원격 작업 지시" right={d.isSimulation ? <SimTag /> : null}>
+            {!d.site.remoteControlEnabled ? (
+              <p className="text-sm text-gray-600">이 사업장은 원격 제어가 꺼져 있습니다. {customer ? "필요하면 본사에 요청하세요." : "본사 관리자가 관리 설정 → 원격 제어(사업장별)에서 켤 수 있습니다."}</p>
+            ) : (
             <CommandPanel
               robotId={d.robot.id}
               vendor={d.robot.vendor}
@@ -91,6 +94,7 @@ export default async function RobotPage({ params }: { params: Promise<{ robotId:
               isSimulation={d.isSimulation}
               mapMismatch={d.mapMismatch}
             />
+            )}
             {!customer && d.commands.length > 0 && (
               <div className="mt-4 overflow-x-auto">
                 <div className="text-sm font-medium mb-1">명령 이력</div>

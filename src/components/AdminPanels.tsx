@@ -12,6 +12,7 @@ import {
   testRecipientAction,
   resetSampleAction,
   setSiteManagerCanConfirmAction,
+  setRemoteControlAction,
   setUserActiveAction,
   setUserPermissionsAction,
   updateThresholdsAction,
@@ -272,6 +273,52 @@ export function SettingsPanel({ siteManagerCanConfirm, allowSampleReset }: { sit
       ) : (
         <span className="text-xs text-gray-500">샘플 초기화는 이 환경에서 비활성(ALLOW_SAMPLE_RESET=false)</span>
       )}
+    </div>
+  );
+}
+
+/** 사업장별 원격 제어 켜기/끄기(본사 관리자). 끄면 누구도(본사 포함) 그 사업장 로봇에 원격 명령을 보낼 수 없다. */
+export function RemoteControlPanel({ sites }: { sites: { id: string; name: string; enabled: boolean; liveRobots: number }[] }) {
+  const { pending, result, run } = useAction();
+  return (
+    <div className="text-sm">
+      <table className="data">
+        <thead>
+          <tr>
+            <th>사업장</th>
+            <th>실제 로봇</th>
+            <th>원격 제어</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {sites.map((s) => (
+            <tr key={s.id}>
+              <td>{s.name}</td>
+              <td>{s.liveRobots}대</td>
+              <td>{s.enabled ? <span className="text-emerald-700 font-medium">켜짐</span> : <span className="text-gray-500">꺼짐</span>}</td>
+              <td>
+                <button
+                  type="button"
+                  className={s.enabled ? btn.small : `${btn.small} border-emerald-400 text-emerald-800`}
+                  disabled={pending}
+                  onClick={() => {
+                    const reason = window.prompt(
+                      s.enabled ? `'${s.name}' 원격 제어를 끕니다. 이 사업장 로봇에 아무도 원격 명령을 보낼 수 없습니다.\n사유(감사 기록):` : `'${s.name}' 원격 제어를 켭니다. 권한이 있는 사용자가 실제 로봇에 시작·중지·복귀 명령을 보낼 수 있습니다.\n사유(감사 기록):`,
+                      "",
+                    );
+                    if (reason === null) return;
+                    run(() => setRemoteControlAction(s.id, !s.enabled, reason));
+                  }}
+                >
+                  {s.enabled ? "끄기" : "켜기"}
+                </button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <ResultLine result={result} />
     </div>
   );
 }

@@ -175,6 +175,18 @@ export async function relocateRobot(user: User, robotId: string, toSiteId: strin
   });
 }
 
+/** 사업장 원격 제어 켜기/끄기(본사 관리자). 끄면 진행 중 명령은 그대로 두고 새 명령만 막는다. */
+export async function setRemoteControl(user: User, siteId: string, enabled: boolean, reason?: string): Promise<void> {
+  const db = getDb();
+  assertActive(user);
+  assertAdmin(user);
+  const site = await db.query.sites.findFirst({ where: eq(schema.sites.id, siteId) });
+  if (!site) throw new NotFoundError("사업장을 찾을 수 없습니다.");
+  if (site.remoteControlEnabled === enabled) return;
+  await db.update(schema.sites).set({ remoteControlEnabled: enabled }).where(eq(schema.sites.id, siteId));
+  await audit(user, { siteId, robotId: null, action: "SITE:REMOTE_CONTROL", params: { enabled }, result: "OK", detail: reason?.trim() || null, vendorTraceId: null }, db);
+}
+
 export async function setSiteManagerCanConfirm(user: User, value: boolean): Promise<void> {
   const db = getDb();
   assertAdmin(user);

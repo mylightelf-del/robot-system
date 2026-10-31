@@ -5,7 +5,7 @@ import { getAdminData } from "@/lib/services/admin";
 import { AppError } from "@/lib/util/errors";
 import { Card, PageTitle } from "@/components/ui";
 import { AccessDenied } from "@/components/AccessDenied";
-import { NewUserForm, RecipientsPanel, SettingsPanel, UserRow } from "@/components/AdminPanels";
+import { NewUserForm, RecipientsPanel, RemoteControlPanel, SettingsPanel, UserRow } from "@/components/AdminPanels";
 import { formatDateTime } from "@/lib/util/time";
 
 export default async function AdminPage() {
@@ -28,6 +28,11 @@ export default async function AdminPage() {
         <Card title="운영 설정">
           <SettingsPanel siteManagerCanConfirm={d.settings.siteManagerCanConfirmReports} allowSampleReset={d.allowSampleReset} />
           <p className="text-xs text-gray-500 mt-2">명령 만료 {d.settings.commandExpiryMinutes}분 · 접수 후 실행 확인 대기 {d.settings.commandAcceptedTimeoutSeconds}초 (운영 설정값, 하드코딩 아님)</p>
+        </Card>
+
+        <Card title="원격 제어 (사업장별)">
+          <RemoteControlPanel sites={d.sites.map((s) => ({ id: s.id, name: s.name, enabled: s.remoteControlEnabled, liveRobots: d.robots.filter((r) => r.siteId === s.id && r.vendorMeta?.source === "api").length }))} />
+          <p className="text-xs text-gray-500 mt-2">꺼진 사업장은 본사 관리자를 포함해 누구도 로봇에 원격 명령(시작·일시정지·재개·중지·복귀)을 보낼 수 없습니다. 켜도 사용자별 제어 권한은 그대로 적용됩니다. 켜고 끈 기록은 감사 기록에 남습니다.</p>
         </Card>
 
         <Card title="사용자 · 사업장 권한 · 제어 권한">

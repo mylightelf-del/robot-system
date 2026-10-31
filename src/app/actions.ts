@@ -243,6 +243,12 @@ export async function updateThresholdsAction(siteId: string, dedupeMinutes: numb
 export async function relocateRobotAction(robotId: string, toSiteId: string, toFloorId: string, reason?: string): Promise<ActionResult> {
   return run(async () => admin.relocateRobot(await getCurrentUser(), robotId, toSiteId, toFloorId, reason));
 }
+export async function setRemoteControlAction(siteId: string, enabled: boolean, reason?: string): Promise<ActionResult> {
+  return run(async () => {
+    await admin.setRemoteControl(await getCurrentUser(), siteId, enabled, reason);
+    return { message: enabled ? "원격 제어를 켰습니다." : "원격 제어를 껐습니다." };
+  });
+}
 export async function setSiteManagerCanConfirmAction(value: boolean): Promise<ActionResult> {
   return run(async () => admin.setSiteManagerCanConfirm(await getCurrentUser(), value));
 }

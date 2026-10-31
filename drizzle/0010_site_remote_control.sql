@@ -1,0 +1,1 @@
+ALTER TABLE "sites" ADD COLUMN "remote_control_enabled" boolean DEFAULT false NOT NULL;

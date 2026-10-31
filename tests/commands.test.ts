@@ -2,7 +2,8 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { eq } from "drizzle-orm";
 import { issueCommand, canRetry } from "@/lib/services/commands";
 import { simulationTick } from "@/worker/simulation";
-import { ConflictError, ValidationError } from "@/lib/util/errors";
+import { ConflictError, ForbiddenError, ValidationError } from "@/lib/util/errors";
+import { setRemoteControl } from "@/lib/services/admin";
 import { addMinutes } from "@/lib/util/time";
 import { getDb, resetAndSeed, schema, setRobotStatus, user } from "./helpers";
 
@@ -45,6 +46,20 @@ describe("명령 상태 · 충돌 · 응답 유실 (DB + 워커 시뮬레이션)
   it("제조사 거부는 FAILED", async () => {
     const cmd = await issueCommand(await user("u-hq"), { robotId: "PW-R-001", type: "PAUSE", simulation: "REJECTED" });
     expect(cmd.state).toBe("FAILED");
+  });
+
+  it("사업장 원격 제어가 꺼지면 본사 관리자도 명령을 보낼 수 없다(거부 감사 기록), 켜고 끄기는 본사 관리자만", async () => {
+    const hq = await user("u-hq");
+    await expect(setRemoteControl(await user("u-site-a"), "site-01", false)).rejects.toThrow();
+    await setRemoteControl(hq, "site-01", false, "명령 시험 전까지 중지");
+    await setRobotStatus("PW-R-001", { common: "IDLE" });
+    await expect(issueCommand(hq, { robotId: "PW-R-001", type: "GO_HOME" })).rejects.toThrow(ForbiddenError);
+    const denied = (await getDb().select().from(schema.auditLogs).where(eq(schema.auditLogs.action, "COMMAND:GO_HOME"))).filter((a) => a.result === "DENIED");
+    expect(denied.at(-1)?.detail).toBe("사업장 원격 제어 꺼짐");
+    const toggled = (await getDb().select().from(schema.auditLogs).where(eq(schema.auditLogs.action, "SITE:REMOTE_CONTROL"))).at(-1)!;
+    expect(toggled).toMatchObject({ detail: "명령 시험 전까지 중지", params: { enabled: false } });
+    await setRemoteControl(hq, "site-01", true);
+    expect((await issueCommand(hq, { robotId: "PW-R-001", type: "GO_HOME" })).state).not.toBe("FAILED");
   });
 
   it("같은 버튼 중복 클릭(동일 키)은 거부된다", async () => {

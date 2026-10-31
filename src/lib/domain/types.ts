@@ -50,6 +50,8 @@ export interface Site {
   address: string;
   /** 설치일(YYYY-MM-DD, 사업장 시간대). 보고서 일정의 기준(D0). 미등록이면 null. */
   installedOn: string | null;
+  /** 원격 제어 허용(사업장별). 기본 꺼짐. */
+  remoteControlEnabled: boolean;
   /** 샘플 데이터 표식. 실제 운영 데이터에는 false. */
   isSample: boolean;
 }

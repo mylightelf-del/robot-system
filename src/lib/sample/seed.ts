@@ -168,7 +168,7 @@ export function buildSampleStore(nowIso: string): StoreData {
   // ---- 사업장 · 층 · 지도 · 구역 · 로봇 ------------------------------------
   for (const spec of SITE_SPECS) {
     // 샘플 설치일: 전월 1일의 전날(전전월 말일) → 1개월차 월간 보고서 기간이 전월 1일~말일이 된다.
-    const site: Site = { id: spec.id, name: spec.name, timezone: TZ, address: spec.address, isSample: true, installedOn: addDays(`${prevMonth}-01`, -1) };
+    const site: Site = { id: spec.id, name: spec.name, timezone: TZ, address: spec.address, isSample: true, installedOn: addDays(`${prevMonth}-01`, -1), remoteControlEnabled: true }; // 샘플은 시연을 위해 원격 제어 켬
     data.sites.push(site);
 
     spec.floors.forEach((f) => {

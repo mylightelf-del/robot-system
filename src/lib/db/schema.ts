@@ -65,6 +65,8 @@ export const sites = pgTable("sites", {
   address: text().notNull().default(""),
   isSample: boolean().notNull().default(false),
   installedOn: text(),
+  /** 원격 제어 허용(사업장별, 본사 관리자가 켜고 끈다). 꺼져 있으면 누구도 이 사업장 로봇에 명령을 보낼 수 없다. 기본 꺼짐. */
+  remoteControlEnabled: boolean().notNull().default(false),
 });
 
 export const floors = pgTable("floors", {

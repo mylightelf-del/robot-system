@@ -6,7 +6,7 @@ import { accessibleSiteIds, assertActive, assertCommandAllowed, assertRobotAcces
 import { getDb, schema } from "@/lib/db/client";
 import { getFloor, getMapVersion, getRobot, getStatus, listSitesByIds, listUsers, listZonesByFloor, loadSettings, type DbLike } from "@/lib/db/repo";
 import { getAdapter } from "@/lib/vendors";
-import { ConflictError, NotFoundError, ValidationError } from "@/lib/util/errors";
+import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from "@/lib/util/errors";
 import { newId } from "@/lib/util/random";
 import { addMinutes, nowIso } from "@/lib/util/time";
 import { audit } from "./audit";
@@ -64,6 +64,12 @@ export async function issueCommand(user: User, input: IssueCommandInput): Promis
   const now = nowIso();
   const settings = await loadSettings(db);
 
+  // 0) 사업장 원격 제어 스위치(본사 관리자가 켜고 끈다) — 꺼져 있으면 역할과 무관하게 거부, 감사 기록
+  const site = await db.query.sites.findFirst({ where: eq(schema.sites.id, robot.siteId) });
+  if (!site?.remoteControlEnabled) {
+    await audit(user, { siteId: robot.siteId, robotId: robot.id, action: `COMMAND:${type}`, params: input.params ?? {}, result: "DENIED", detail: "사업장 원격 제어 꺼짐", vendorTraceId: null }, db);
+    throw new ForbiddenError("이 사업장은 원격 제어가 꺼져 있습니다. 본사 관리자가 관리 설정 → 원격 제어에서 켤 수 있습니다.");
+  }
   // 1) 권한(역할·사업장·명령별) — 거부도 감사 기록에 남긴다.
   try {
     await assertCommandAllowed(user, robot.siteId, type, db);
