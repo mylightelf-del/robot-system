@@ -77,6 +77,7 @@ function SummaryStats({ a, n }: { a: ReportAggregates; n: NumFn }) {
       <Cell label="세제 사용량">{n("summary.detergentMl", a.detergentMl, { unit: "mL" })}</Cell>
       <Cell label="장애 건수" hint={a.prev ? delta(a.incidents.length, a.prev.incidents, "건") : undefined}>{a.incidents.length}건</Cell>
       <Cell label="장애 평균 조치 시간" hint="기간 내 발생·복구 기준">{a.incidentMttrMin === undefined ? "-" : a.incidentMttrMin === null ? "해당 없음" : hm(a.incidentMttrMin)}</Cell>
+      <Cell label="평균 작업 수행률" hint="제조사 보고서 기준(증빙 있는 작업)">{a.avgCompletionPct === undefined || a.avgCompletionPct === null ? <span className="text-gray-400">-</span> : `${a.avgCompletionPct}%`}</Cell>
     </div>
   );
 }
@@ -98,7 +99,7 @@ function RunListTable({ a }: { a: ReportAggregates }) {
   if (list.length === 0) return <p className="text-sm text-gray-500 mb-4">이 기간에 수신된 작업이 없습니다.</p>;
   return (
     <table className="data mb-4">
-      <thead><tr><th>시작</th><th>로봇</th><th>층</th><th>구분</th><th>결과</th><th className="text-right">면적</th><th className="text-right">시간</th></tr></thead>
+      <thead><tr><th>시작</th><th>로봇</th><th>층</th><th>구분</th><th>결과</th><th className="text-right">수행률</th><th className="text-right">면적</th><th className="text-right">시간</th><th className="print:hidden">증빙</th></tr></thead>
       <tbody>
         {list.map((r, i) => (
           <tr key={i}>
@@ -107,8 +108,10 @@ function RunListTable({ a }: { a: ReportAggregates }) {
             <td>{r.floorName}</td>
             <td className="text-xs">{r.origin === "PLANNED" ? "계획" : r.origin === "REMOTE" ? "원격" : "즉시"}</td>
             <td>{r.result}</td>
+            <td className="text-right">{r.completionPct === null || r.completionPct === undefined ? <span className="text-gray-400">-</span> : `${r.completionPct}%`}</td>
             <td className="text-right">{r.areaM2.toLocaleString()}㎡</td>
             <td className="text-right">{r.durationMin}분</td>
+            <td className="print:hidden text-xs">{r.hasResultImage && r.runId ? <a href={`/api/runs/${encodeURIComponent(r.runId)}/image`} target="_blank" rel="noreferrer" className="text-navy underline">결과 지도</a> : <span className="text-gray-400">-</span>}</td>
           </tr>
         ))}
       </tbody>

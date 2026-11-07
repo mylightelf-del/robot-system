@@ -141,10 +141,12 @@ export default async function RobotPage({ params }: { params: Promise<{ robotId:
                     <th>시작</th>
                     <th>구분</th>
                     <th>결과</th>
+                    <th>수행률</th>
                     <th>면적</th>
                     <th>시간</th>
                     <th>물/세제</th>
                     <th>종료 사유</th>
+                    <th>증빙</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -153,10 +155,15 @@ export default async function RobotPage({ params }: { params: Promise<{ robotId:
                       <td className="whitespace-nowrap">{formatDateTime(r.startedAt, tz)}</td>
                       <td>{r.origin === "PLANNED" ? "계획" : r.origin === "REMOTE" ? "원격 지시" : "즉시 지시"}</td>
                       <td className={r.result === "COMPLETED" ? "text-emerald-700" : "text-amber-700"}>{RUN_RESULT_LABEL[r.result]}</td>
+                      <td>{typeof r.coverage?.percentage === "number" ? `${r.coverage.percentage}%` : <span className="text-gray-400">-</span>}</td>
                       <td>{r.areaM2.toLocaleString()}㎡</td>
                       <td>{r.durationMin}분</td>
                       <td className="text-xs">{r.waterL === null ? <span className="text-gray-400">미제공</span> : `${r.waterL}L / ${r.detergentMl ?? "-"}mL`}</td>
                       <td className="text-xs">{r.endReason}</td>
+                      <td className="text-xs whitespace-nowrap">
+                        {r.coverage?.resultImageUrl ? <a href={`/api/runs/${encodeURIComponent(r.id)}/image`} target="_blank" rel="noreferrer" className="text-navy underline">결과 지도</a> : <span className="text-gray-400">-</span>}
+                        {r.coverage?.areas?.length ? <span className="ml-1 text-gray-500" title={r.coverage.areas.map((a) => `${a.name}: ${a.cleanCount}회`).join(", ")}>구역 {r.coverage.areas.filter((a) => a.cleanCount > 0).length}/{r.coverage.areas.length}</span> : null}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -202,6 +209,10 @@ export default async function RobotPage({ params }: { params: Promise<{ robotId:
                       {m.source === "UNSUPPORTED" ? <span className="text-gray-400 text-xs">API 미제공(미확인)</span> : m.source === "MANUAL" ? <span className="text-xs">수기</span> : m.remainingPct === null ? "미수신" : `${m.remainingPct}%`}
                       {m.source === "API" && d.isSimulation && <span className="ml-1 text-[10px] text-amber-700">샘플</span>}
                       {m.source === "API" && !d.isSimulation && <span className="ml-1 text-[10px] text-blue-700">API</span>}
+                    </td>
+                    <td className="text-xs text-gray-600 whitespace-nowrap">
+                      {m.remainingPct !== null && m.remainingPct < 20 ? <span className="text-amber-700 font-medium">교체 필요 </span> : null}
+                      {m.expectedDate ? <span title={`하루 ${m.ratePctPerDay}%p 감소(최근 30일)`}>예상 {m.expectedDate} ({m.daysLeft}일)</span> : m.source === "API" ? <span className="text-gray-400">이력 수집 중</span> : null}
                     </td>
                   </tr>
                 ))}

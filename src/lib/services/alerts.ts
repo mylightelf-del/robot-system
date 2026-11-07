@@ -17,7 +17,7 @@ function base(): string {
   return (process.env.APP_BASE_URL || "").replace(/\/$/, "");
 }
 
-async function alreadyNotified(kind: "MISSED_RUN" | "NO_ACTIVITY", refIds: string[], since: string | null, db: DbLike): Promise<Set<string>> {
+async function alreadyNotified(kind: "MISSED_RUN" | "NO_ACTIVITY" | "CONSUMABLE", refIds: string[], since: string | null, db: DbLike): Promise<Set<string>> {
   if (refIds.length === 0) return new Set();
   const rows = await db
     .select({ refId: schema.notificationLogs.refId })
@@ -93,6 +93,55 @@ export async function notifyNoActivity(now: string = nowIso(), db: DbLike = getD
       await db.insert(schema.notificationLogs).values(logs.map((l) => ({ ...l, incidentId: null })));
       if (logs.some((l) => l.status === "SENT" || l.status === "MOCK_SENT")) sent += 1;
     }
+  }
+  return sent;
+}
+
+export const CONSUMABLE_REPEAT_DAYS = 7;
+
+/**
+ * 소모품·점검 통보(kind CONSUMABLE): 잔여 수명 LOW_CONSUMABLE_PCT 미만인 항목(7일에 한 번), 기한이 지난 점검 항목(한 번).
+ * 사용 중지 로봇·사업장 제외. 수신자가 이 종류를 받도록 설정돼 있어야 한다.
+ */
+export async function notifyConsumables(now: string = nowIso(), db: DbLike = getDb()): Promise<number> {
+  const { LOW_CONSUMABLE_PCT } = await import("./maintenance");
+  const robots = await db
+    .select({ r: schema.robots, site: schema.sites })
+    .from(schema.robots)
+    .innerJoin(schema.sites, eq(schema.sites.id, schema.robots.siteId))
+    .where(and(eq(schema.robots.active, true), isNull(schema.sites.retiredAt)));
+  if (robots.length === 0) return 0;
+  const robotIds = robots.map((x) => x.r.id);
+  const low = await db.select().from(schema.maintenanceItems).where(and(inArray(schema.maintenanceItems.robotId, robotIds), sql`${schema.maintenanceItems.remainingPct} is not null and ${schema.maintenanceItems.remainingPct} < ${LOW_CONSUMABLE_PCT}`));
+  const overdue = await db.select().from(schema.inspections).where(and(inArray(schema.inspections.robotId, robotIds), isNull(schema.inspections.doneAt), sql`${schema.inspections.dueAt} < ${now}`));
+  const refs = [...low.map((m) => `cons:${m.robotId}:${m.name}`), ...overdue.map((i) => `insp:${i.id}`)];
+  if (refs.length === 0) return 0;
+  const repeatSince = new Date(new Date(now).getTime() - CONSUMABLE_REPEAT_DAYS * 86400_000).toISOString();
+  const doneLow = await alreadyNotified("CONSUMABLE", low.map((m) => `cons:${m.robotId}:${m.name}`), repeatSince, db);
+  const doneInsp = await alreadyNotified("CONSUMABLE", overdue.map((i) => `insp:${i.id}`), null, db);
+  let sent = 0;
+  const send = async (robotId: string, refId: string, subject: string, title: string, lines: string[]) => {
+    const rb = robots.find((x) => x.r.id === robotId)!;
+    const setting = await getNotificationSetting(rb.site.id, db);
+    const logs = await notifyRecipients(setting, rb.site.id, now, rb.site.timezone, { kind: "CONSUMABLE", label: "소모품·점검", refId }, async () => ({ subject: subject.slice(0, 150), title, lines, url: `${base()}/robots/${encodeURIComponent(robotId)}` }));
+    if (logs.length === 0) {
+      await db.insert(schema.notificationLogs).values({ id: `ntf-${refId.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 80)}-${Date.now().toString(36)}`, at: now, channel: "EMAIL", recipient: "-", status: "SUPPRESSED", reason: "소모품·점검 — 억제: 수신자 없음", kind: "CONSUMABLE", refId, incidentId: null });
+      return;
+    }
+    await db.insert(schema.notificationLogs).values(logs.map((l) => ({ ...l, incidentId: null })));
+    if (logs.some((l) => l.status === "SENT" || l.status === "MOCK_SENT")) sent += 1;
+  };
+  for (const m of low) {
+    const ref = `cons:${m.robotId}:${m.name}`;
+    if (doneLow.has(ref)) continue;
+    const rb = robots.find((x) => x.r.id === m.robotId)!;
+    await send(m.robotId, ref, `[청소로봇 소모품] ${rb.site.name} ${rb.r.name} — ${m.name} ${Math.round(m.remainingPct ?? 0)}%`, `[소모품 교체 필요] ${rb.site.name} · ${rb.r.name}`, [`사업장: ${rb.site.name}`, `로봇: ${rb.r.name}`, `항목: ${m.name}`, `잔여: ${Math.round(m.remainingPct ?? 0)}% (기준 ${LOW_CONSUMABLE_PCT}% 미만)`, "안내: 교체 부품을 준비하고 교체 뒤 로봇에서 잔여 수명을 초기화하세요."]);
+  }
+  for (const i of overdue) {
+    const ref = `insp:${i.id}`;
+    if (doneInsp.has(ref)) continue;
+    const rb = robots.find((x) => x.r.id === i.robotId)!;
+    await send(i.robotId, ref, `[청소로봇 점검 기한] ${rb.site.name} ${rb.r.name} — ${i.item}`, `[점검 기한 지남] ${rb.site.name} · ${rb.r.name}`, [`사업장: ${rb.site.name}`, `로봇: ${rb.r.name}`, `점검 항목: ${i.item}`, `기한: ${formatDateTime(i.dueAt, rb.site.timezone)}`, "안내: 점검을 마치면 로봇 화면의 점검표에서 완료 처리하세요."]);
   }
   return sent;
 }

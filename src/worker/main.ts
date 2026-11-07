@@ -14,7 +14,7 @@ import { vendorModes } from "@/lib/vendors";
 import { purgeOldVendorEvents, writeHeartbeat } from "@/lib/ops/heartbeat";
 import { autoCreateScheduledDrafts } from "@/lib/services/reports";
 import { escalateOverdueIncidents } from "@/lib/services/incidents";
-import { notifyMissedRuns, notifyNoActivity } from "@/lib/services/alerts";
+import { notifyConsumables, notifyMissedRuns, notifyNoActivity } from "@/lib/services/alerts";
 import { keepKakaoLinksAlive } from "@/lib/notify/kakao";
 import { channelModes } from "@/lib/notify/notifier";
 
@@ -105,7 +105,8 @@ async function main() {
     loop("alerts", 10 * 60_000, async () => {
       const missed = await notifyMissedRuns();
       const idle = await notifyNoActivity();
-      if (missed || idle) log(`운영 알림: 미실행 ${missed}건 · 무실적 ${idle}건`);
+      const cons = await notifyConsumables();
+      if (missed || idle || cons) log(`운영 알림: 미실행 ${missed}건 · 무실적 ${idle}건 · 소모품/점검 ${cons}건`);
     }),
   );
   // 카카오톡 연결 유지(하루 1회): 만료가 가까운 리프레시 토큰 갱신

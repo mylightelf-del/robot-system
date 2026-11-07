@@ -1,4 +1,4 @@
-import type { ActualRun, CommandType, CommonStatus, RobotModel, RunResult, Severity } from "@/lib/domain/types";
+import type { ActualRun, CommandType, CommonStatus, RobotModel, RunCoverage, RunResult, Severity, Zone } from "@/lib/domain/types";
 import type { PuduCleanDetail, PuduCleanReportDetail, PuduCleanReportSummary, PuduErrorLog, PuduExecBody, PuduStatusV2 } from "./api";
 
 /**
@@ -111,17 +111,66 @@ export function mapReportStatus(status: number | undefined): { result: RunResult
   }
 }
 
-/** 청소 보고서 → 실적. 구역(zoneIds)은 PUDU 가 우리 구역 개념을 모르므로 비워 두고 floor_list 원문을 raw 에 보관한다. */
+/**
+ * 보고서 상세의 floor_list(JSON 문자열) → 청소 범위 증빙.
+ * 실기 확인(2026-11-07, CC1Pro·MT1): floor_list = [{ map_name, map_floor, map_version, area_array:[{area_id, area_name, clean_count, area}], area_list:[{area_id, result:{area,time,status}}],
+ * task_result_url(결과 지도 PNG, 공개 S3), rubbish_distribution_url(쓰레기 분포 히트맵), result:{area,time,status} }]. 요약(목록)에는 없다.
+ */
+export function parseCoverage(d: Pick<PuduCleanReportDetail, "floor_list" | "percentage">): RunCoverage | null {
+  if (!d.floor_list) return null;
+  let floors: unknown;
+  try {
+    floors = typeof d.floor_list === "string" ? JSON.parse(d.floor_list) : d.floor_list;
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(floors) || floors.length === 0) return null;
+  const areas: RunCoverage["areas"] = [];
+  let mapName: string | null = null;
+  let mapVersion: number | null = null;
+  let resultImageUrl: string | null = null;
+  let heatmapUrl: string | null = null;
+  for (const f of floors as Record<string, unknown>[]) {
+    if (!f || typeof f !== "object") continue;
+    mapName ??= typeof f.map_name === "string" ? f.map_name : null;
+    mapVersion ??= typeof f.map_version === "number" ? f.map_version : null;
+    resultImageUrl ??= typeof f.task_result_url === "string" && /^https?:\/\//.test(f.task_result_url) ? f.task_result_url : null;
+    heatmapUrl ??= typeof f.rubbish_distribution_url === "string" && /^https?:\/\//.test(f.rubbish_distribution_url) ? f.rubbish_distribution_url : null;
+    for (const a of (Array.isArray(f.area_array) ? f.area_array : []) as Record<string, unknown>[]) {
+      if (!a || typeof a.area_id !== "string") continue;
+      areas.push({ vendorId: a.area_id, name: typeof a.area_name === "string" ? a.area_name : a.area_id, cleanCount: typeof a.clean_count === "number" ? a.clean_count : 0, areaM2: typeof a.area === "number" ? Math.round(a.area * 10) / 10 : 0 });
+    }
+  }
+  const percentage = typeof d.percentage === "number" ? Math.max(0, Math.min(100, Math.round(d.percentage))) : null;
+  if (!areas.length && !resultImageUrl && percentage === null) return null;
+  return { percentage, mapName, mapVersion, resultImageUrl, heatmapUrl, areas };
+}
+
+/** 증빙의 청소한 구역(clean_count > 0)을 우리 구역 ID 로 맞춘다: 제조사 구역 ID 우선, 없으면 같은 층의 이름 일치. */
+export function matchZoneIds(coverage: RunCoverage | null, zones: Pick<Zone, "id" | "name" | "vendorZoneId">[]): string[] {
+  if (!coverage || zones.length === 0) return [];
+  const out: string[] = [];
+  for (const a of coverage.areas) {
+    if (a.cleanCount <= 0) continue;
+    const z = zones.find((x) => x.vendorZoneId && x.vendorZoneId === a.vendorId) ?? zones.find((x) => x.name.trim() === a.name.trim());
+    if (z && !out.includes(z.id)) out.push(z.id);
+  }
+  return out;
+}
+
+/** 청소 보고서 → 실적. 구역(zoneIds)은 증빙의 청소한 구역을 이 층의 구역에 맞춰 채운다(구역 목록이 없으면 비움). floor_list 원문은 raw 에 보관한다. */
 export function mapReportToRun(
   r: PuduCleanReportSummary | PuduCleanReportDetail,
   robot: { id: string; siteId: string; floorId: string },
   receivedAtIso: string,
   registeredTaskId: string | null,
+  zones: Pick<Zone, "id" | "name" | "vendorZoneId">[] = [],
 ): ActualRun {
   const { result, endReason } = mapReportStatus(r.status);
   const d = r as PuduCleanReportDetail;
   const startedAt = new Date(r.start_time * 1000).toISOString();
   const endedAt = new Date((r.end_time || r.start_time) * 1000).toISOString();
+  const coverage = parseCoverage(d);
   return {
     id: `run-pudu-${r.sn}-${r.report_id}`,
     vendorRunId: r.report_id,
@@ -129,7 +178,8 @@ export function mapReportToRun(
     siteId: robot.siteId,
     floorId: robot.floorId,
     taskId: registeredTaskId,
-    zoneIds: [],
+    zoneIds: matchZoneIds(coverage, zones),
+    coverage,
     startedAt,
     endedAt,
     result,
@@ -200,6 +250,33 @@ export const PUDU_ERROR_MESSAGES: Record<string, string> = {
   DockingPileFail: "충전 도킹에 실패했습니다.",
   MobileStationNotConnected: "워크스테이션 연결이 끊겼습니다.",
 };
+
+/**
+ * 담당자용 현장 조치 안내(일반 점검 순서). 제조사 매뉴얼·대리점 안내가 우선이며, 반복되면 대리점에 문의한다.
+ * field: 현장에서 할 수 있는 일 / vendor: 반복 시 대리점 문의가 필요한 종류.
+ */
+export const PUDU_ERROR_GUIDE: Record<string, { field: string[]; vendor: boolean }> = {
+  CleanWaterEmpty: { field: ["청수통을 채운다", "앱 또는 관제에서 작업을 재개한다"], vendor: false },
+  MobileStationCleanWaterEmpty: { field: ["워크스테이션 청수통을 채우고 급수 연결을 확인한다"], vendor: false },
+  CleanSewageFull: { field: ["오수통을 비우고 필터를 헹군다", "작업을 재개한다"], vendor: false },
+  FullOfSewage: { field: ["오수통을 비우고 필터를 헹군다", "작업을 재개한다"], vendor: false },
+  MobileStationSewageFull: { field: ["워크스테이션 오수통을 비우고 배수 연결을 확인한다"], vendor: false },
+  CleanAgentEmpty: { field: ["세제를 보충한다"], vendor: false },
+  TrashFull: { field: ["먼지통을 비우고 끼운다"], vendor: false },
+  LostLocalization: { field: ["로봇을 충전 스테이션(출발 지점)으로 옮긴다", "로봇 화면에서 위치 재인식(재위치)을 한다", "바뀐 배치물이 있으면 대리점에 지도 갱신을 요청한다"], vendor: true },
+  LowBatteryLevel: { field: ["충전 스테이션에 도킹해 충전한다", "충전기 전원·접점을 확인한다"], vendor: false },
+  EmergencyStop: { field: ["비상 정지 버튼을 돌려 해제한다", "주변 안전을 확인하고 작업을 재개한다"], vendor: false },
+  PlanFailOverTime: { field: ["경로의 장애물(카트·의자·매트)을 치운다", "작업을 다시 시작한다"], vendor: false },
+  ReplanError: { field: ["경로의 장애물을 치운다", "같은 자리에서 반복되면 대리점에 지도·금지 구역 조정을 요청한다"], vendor: true },
+  CanNotReach: { field: ["목표 지점 주변 장애물·문 닫힘을 확인한다"], vendor: true },
+  DockingPileFail: { field: ["충전기 앞 1m 를 비우고 충전기 위치·전원을 확인한다", "수동으로 도킹시킨다"], vendor: true },
+  CoverPlate: { field: ["덮개(커버 플레이트)가 제대로 닫혔는지 확인한다"], vendor: true },
+  MobileStationNotConnected: { field: ["워크스테이션 전원·통신 상태를 확인한다"], vendor: true },
+};
+
+export function actionGuideFor(errorType: string): { field: string[]; vendor: boolean } {
+  return PUDU_ERROR_GUIDE[errorType] ?? { field: ["로봇 화면의 오류 안내를 확인하고 재시작한다", "반복되면 대리점(제조사)에 문의한다"], vendor: true };
+}
 
 export function customerMessageFor(errorType: string): string {
   return PUDU_ERROR_MESSAGES[errorType] ?? "로봇에 이상이 발생하여 확인 중입니다.";

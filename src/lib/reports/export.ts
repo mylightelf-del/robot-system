@@ -90,7 +90,7 @@ function kpis(a: ReportAggregates, adjusted: Set<string>) {
   const p = a.prev;
   return [
     { label: "운영 대수", value: `${n0(a.robotCount)}대`, num: a.robotCount, unit: "대", note: "", adj: adj("robotCount") },
-    { label: "계획 완료율", value: a.completionRatePct === null ? "해당 없음" : `${a.completionRatePct}%`, num: a.completionRatePct, unit: "%", note: withDelta(`정상 완료 ${n0(a.plannedCompleted)} / 유효 계획 ${n0(a.validPlanned)}회`, p ? delta(a.completionRatePct, p.completionRatePct, "%") : ""), adj: adj("completionRatePct", "plannedCompleted", "validPlanned") },
+    { label: "계획 완료율", value: a.completionRatePct === null ? "해당 없음" : `${a.completionRatePct}%`, num: a.completionRatePct, unit: "%", note: withDelta(`정상 완료 ${n0(a.plannedCompleted)} / 유효 계획 ${n0(a.validPlanned)}회${a.avgCompletionPct !== null && a.avgCompletionPct !== undefined ? ` · 평균 수행률 ${a.avgCompletionPct}%` : ""}`, p ? delta(a.completionRatePct, p.completionRatePct, "%") : ""), adj: adj("completionRatePct", "plannedCompleted", "validPlanned") },
     { label: "총 작업", value: `${n0(a.totalRuns)}건`, num: a.totalRuns, unit: "건", note: withDelta(`즉시·원격 ${n0(a.adhocRuns)}건 포함`, p ? delta(a.totalRuns, p.totalRuns, "건") : ""), adj: adj("totalRuns", "adhocRuns") },
     { label: "누적 청소 면적", value: `${n0(a.cumulativeAreaM2)}㎡`, num: a.cumulativeAreaM2, unit: "㎡", note: withDelta("반복 구역 포함", p ? delta(a.cumulativeAreaM2, p.cumulativeAreaM2, "㎡") : ""), adj: adj("cumulativeAreaM2") },
     { label: "총 작업 시간", value: hm(a.totalDurationMin), num: a.totalDurationMin, unit: "분", note: withDelta(`${n0(a.totalDurationMin)}분`, p ? delta(a.totalDurationMin, p.totalDurationMin, "분") : ""), adj: adj("totalDurationMin") },
@@ -327,7 +327,7 @@ export async function buildPptx(input: ExportInput): Promise<Buffer> {
       }
       const listY = log.length ? y2 + 0.45 + 0.32 * (log.length + 1) + 0.2 : y2;
       s.addText(`작업 목록 (${a.runList?.length ?? 0}건)`, { x: M, y: listY, w: leftW, h: 0.3, fontFace: FONT, fontSize: 11, bold: true, color: NAVY });
-      if (a.runList?.length) table(s, ["시작", "로봇", "층", "구분", "결과", "면적(㎡)", "시간(분)"], a.runList.map((x) => [formatTime(x.startedAt), x.robotName, x.floorName, originLabel(x.origin), x.result, x.areaM2, x.durationMin]), { x: M, y: listY + 0.32, w: leftW, colW: [0.8, 1.6, 1.5, 0.7, 1.1, 1.1, 1.1], fontSize: 9, rowH: 0.26 });
+      if (a.runList?.length) table(s, ["시작", "로봇", "층", "구분", "결과", "수행률", "면적(㎡)", "시간(분)"], a.runList.map((x) => [formatTime(x.startedAt), x.robotName, x.floorName, originLabel(x.origin), x.result, x.completionPct === null || x.completionPct === undefined ? "-" : `${x.completionPct}%`, x.areaM2, x.durationMin]), { x: M, y: listY + 0.32, w: leftW, colW: [0.8, 1.5, 1.3, 0.7, 1.0, 0.8, 0.9, 0.9], fontSize: 9, rowH: 0.26 });
       else s.addText("이 날 수신된 작업이 없습니다.", { x: M, y: listY + 0.35, w: leftW, h: 0.3, fontFace: FONT, fontSize: 10, color: GRAY });
       const rx = M + leftW + 0.25;
       const rw = W - M - rx;
@@ -534,6 +534,7 @@ export async function buildXlsx(input: ExportInput): Promise<Buffer> {
       ["물 사용량", a.waterL ?? "미제공", "L", "", ["waterL"]],
       ["세제 사용량", a.detergentMl ?? "미제공", "mL", "", ["detergentMl"]],
       ["생산성", a.productivityM2PerHour ?? (a.productivityM2PerHour === null ? "계산 불가" : "-"), "㎡/h", withDelta("면적 ÷ 작업 시간", a.prev ? delta(a.productivityM2PerHour, a.prev.productivityM2PerHour, "㎡/h") : ""), []],
+      ["평균 작업 수행률", a.avgCompletionPct ?? "-", "%", "제조사 보고서 기준(증빙 있는 작업)", []],
       ["미실행 / 취소 / 제외", `${a.missed} / ${a.cancelled} / ${a.excluded}`, "회", "", ["missed", "cancelled", "excluded"]],
       ["장애", a.incidents.length, "건", withDelta("", a.prev ? delta(a.incidents.length, a.prev.incidents, "건") : ""), []],
       ["장애 평균 조치 시간", a.incidentMttrMin ?? (a.incidentMttrMin === null ? "해당 없음" : "-"), "분", a.incidentMttrMin ? hm(a.incidentMttrMin) : "기간 내 발생·복구 기준", []],
@@ -620,7 +621,7 @@ export async function buildXlsx(input: ExportInput): Promise<Buffer> {
       );
     }
     if (a.runList?.length)
-      styledSheet(wb, "작업 목록", [{ header: "시작", key: "t", width: 18 }, { header: "로봇", key: "robot", width: 16 }, { header: "층", key: "floor", width: 14 }, { header: "구분", key: "origin", width: 8 }, { header: "결과", key: "result", width: 10 }, { header: "면적(㎡)", key: "area", width: 11, num: "int" }, { header: "시간(분)", key: "dur", width: 10, num: "int" }], a.runList.map((x) => ({ t: formatDateTime(x.startedAt), robot: x.robotName, floor: x.floorName, origin: originLabel(x.origin), result: x.result, area: x.areaM2, dur: x.durationMin })));
+      styledSheet(wb, "작업 목록", [{ header: "시작", key: "t", width: 18 }, { header: "로봇", key: "robot", width: 16 }, { header: "층", key: "floor", width: 14 }, { header: "구분", key: "origin", width: 8 }, { header: "결과", key: "result", width: 10 }, { header: "수행률(%)", key: "pct", width: 10, num: "int" }, { header: "면적(㎡)", key: "area", width: 11, num: "int" }, { header: "시간(분)", key: "dur", width: 10, num: "int" }], a.runList.map((x) => ({ t: formatDateTime(x.startedAt), robot: x.robotName, floor: x.floorName, origin: originLabel(x.origin), result: x.result, pct: x.completionPct ?? null, area: x.areaM2, dur: x.durationMin })));
     styledSheet(wb, "층별", [{ header: "층", key: "floorName", width: 16 }, { header: "작업(건)", key: "runs", width: 10, num: "int" }, { header: "누적 면적(㎡)", key: "areaM2", width: 14, num: "int" }, { header: "작업 시간(분)", key: "durationMin", width: 14, num: "int" }], a.byFloor);
     if (a.byZone.length) styledSheet(wb, "구역별", [{ header: "층", key: "floorName", width: 14 }, { header: "구역", key: "zoneName", width: 24 }, { header: "작업(건)", key: "runs", width: 10, num: "int" }, { header: "배분 면적(㎡, 근사)", key: "areaM2", width: 18, num: "int" }], a.byZone);
     styledSheet(wb, "로봇별", [{ header: "로봇", key: "name", width: 16 }, { header: "모델", key: "model", width: 18 }, { header: "작업(건)", key: "runs", width: 10, num: "int" }, { header: "정상 완료(건)", key: "completed", width: 13, num: "int" }, { header: "누적 면적(㎡)", key: "areaM2", width: 14, num: "int" }], a.byRobot);

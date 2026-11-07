@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, inArray, isNotNull, isNull, ne } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNotNull, isNull, ne, sql } from "drizzle-orm";
 import type { Incident, IncidentAction, Severity, User } from "@/lib/domain/types";
 import { accessibleSiteIds, assertActive, assertAdmin, assertSiteAccess, canHandleIncidents, isCustomer } from "@/lib/auth/authz";
 import { getDb, schema } from "@/lib/db/client";
@@ -9,6 +9,8 @@ import { newId } from "@/lib/util/random";
 import { nowIso } from "@/lib/util/time";
 import { audit } from "./audit";
 import { isLiveRobot } from "@/lib/vendors";
+import { actionGuideFor } from "@/lib/vendors/pudu/mapping";
+import { sniffImageType } from "./sites";
 
 /** 고객 화면용 장애 뷰: 오류 원문·내부 메모·통신 로그를 제거한다. */
 export interface IncidentView {
@@ -421,4 +423,162 @@ export async function escalationMinutesBySite(siteIds: string[]): Promise<Record
   if (siteIds.length === 0) return {};
   const rows = await getDb().select().from(schema.notificationSettings).where(inArray(schema.notificationSettings.siteId, siteIds));
   return Object.fromEntries(rows.map((r) => [r.siteId, r.escalateAfterMinutes]));
+}
+
+/** 담당자용 현장 조치 안내(코드별 일반 점검 순서). 고객에게는 주지 않는다. */
+export function incidentGuide(code: string): { field: string[]; vendor: boolean } {
+  return actionGuideFor(code);
+}
+
+export interface IncidentStats {
+  days: number;
+  total: number;
+  resolved: number;
+  mttrMin: number | null;
+  byCode: { code: string; message: string; count: number; robots: number; mttrMin: number | null; vendorHint: boolean }[];
+  byRobot: { robotId: string; robotName: string; siteName: string; count: number; lastAt: string; topCode: string }[];
+  /** 같은 로봇·같은 코드가 7일 안에 다시 난 횟수(반복 장애). */
+  recurrences: { robotId: string; robotName: string; code: string; count: number; avgGapHours: number | null }[];
+}
+
+/** 반복 장애 분석(담당자): 최근 N일 발생 기준, 삭제(숨김) 제외. */
+export async function incidentStats(user: User, opts: { siteId?: string; days?: number } = {}): Promise<IncidentStats> {
+  assertActive(user);
+  if (isCustomer(user)) throw new ForbiddenError("반복 장애 분석은 현장/본사 담당자만 볼 수 있습니다.");
+  const db = getDb();
+  const days = Math.min(365, Math.max(7, opts.days ?? 90));
+  const siteIds = await accessibleSiteIds(user, db);
+  if (opts.siteId) await assertSiteAccess(user, opts.siteId, db);
+  const ids = opts.siteId ? [opts.siteId] : siteIds;
+  const empty: IncidentStats = { days, total: 0, resolved: 0, mttrMin: null, byCode: [], byRobot: [], recurrences: [] };
+  if (ids.length === 0) return empty;
+  const since = new Date(Date.now() - days * 86400_000).toISOString();
+  const rows = await db
+    .select({ id: schema.incidents.id, robotId: schema.incidents.robotId, siteId: schema.incidents.siteId, code: schema.incidents.code, customerMessage: schema.incidents.customerMessage, occurredAt: schema.incidents.occurredAt, resolvedAt: schema.incidents.resolvedAt, occurrences: schema.incidents.occurrences })
+    .from(schema.incidents)
+    .where(and(inArray(schema.incidents.siteId, ids), gte(schema.incidents.occurredAt, since), isNull(schema.incidents.dismissedAt)))
+    .orderBy(schema.incidents.occurredAt);
+  if (rows.length === 0) return empty;
+  const robots = new Map((await db.select({ id: schema.robots.id, name: schema.robots.name, siteId: schema.robots.siteId }).from(schema.robots).where(inArray(schema.robots.id, Array.from(new Set(rows.map((r) => r.robotId)))))).map((r) => [r.id, r]));
+  const sites = new Map((await listSitesByIds(ids, db)).map((s) => [s.id, s.name]));
+  const mttr = (list: typeof rows) => {
+    const done = list.filter((r) => r.resolvedAt);
+    return done.length ? Math.round(done.reduce((s, r) => s + (new Date(r.resolvedAt!).getTime() - new Date(r.occurredAt).getTime()) / 60000, 0) / done.length) : null;
+  };
+  const byCodeMap = new Map<string, typeof rows>();
+  for (const r of rows) byCodeMap.set(r.code, [...(byCodeMap.get(r.code) ?? []), r]);
+  const byCode = Array.from(byCodeMap.entries())
+    .map(([code, list]) => ({ code, message: list[list.length - 1].customerMessage, count: list.reduce((s, r) => s + (r.occurrences ?? 1), 0), robots: new Set(list.map((r) => r.robotId)).size, mttrMin: mttr(list), vendorHint: actionGuideFor(code).vendor }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 15);
+  const byRobotMap = new Map<string, typeof rows>();
+  for (const r of rows) byRobotMap.set(r.robotId, [...(byRobotMap.get(r.robotId) ?? []), r]);
+  const byRobot = Array.from(byRobotMap.entries())
+    .map(([robotId, list]) => {
+      const codeCount = new Map<string, number>();
+      for (const r of list) codeCount.set(r.code, (codeCount.get(r.code) ?? 0) + (r.occurrences ?? 1));
+      const topCode = Array.from(codeCount.entries()).sort((a, b) => b[1] - a[1])[0]?.[0] ?? "";
+      return { robotId, robotName: robots.get(robotId)?.name ?? robotId, siteName: sites.get(robots.get(robotId)?.siteId ?? "") ?? "", count: list.reduce((s, r) => s + (r.occurrences ?? 1), 0), lastAt: list[list.length - 1].occurredAt, topCode };
+    })
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 15);
+  const recurrences: IncidentStats["recurrences"] = [];
+  for (const [robotId, list] of byRobotMap) {
+    const byC = new Map<string, typeof rows>();
+    for (const r of list) byC.set(r.code, [...(byC.get(r.code) ?? []), r]);
+    for (const [code, cl] of byC) {
+      const times = cl.map((r) => new Date(r.occurredAt).getTime()).sort((a, b) => a - b);
+      let repeats = 0;
+      const gaps: number[] = [];
+      for (let i = 1; i < times.length; i++) {
+        const gap = (times[i] - times[i - 1]) / 3600_000;
+        if (gap <= 7 * 24) {
+          repeats += 1;
+          gaps.push(gap);
+        }
+      }
+      const bundled = cl.reduce((s, r) => s + ((r.occurrences ?? 1) - 1), 0); // 같은 장애로 묶인 반복
+      if (repeats + bundled > 0) recurrences.push({ robotId, robotName: robots.get(robotId)?.name ?? robotId, code, count: repeats + bundled + 1, avgGapHours: gaps.length ? Math.round(gaps.reduce((a, b) => a + b, 0) / gaps.length) : null });
+    }
+  }
+  recurrences.sort((a, b) => b.count - a.count);
+  return { days, total: rows.reduce((s, r) => s + (r.occurrences ?? 1), 0), resolved: rows.filter((r) => r.resolvedAt).length, mttrMin: mttr(rows), byCode, byRobot, recurrences: recurrences.slice(0, 15) };
+}
+
+// ---- 장애 조치 사진
+export const INCIDENT_PHOTO_MAX_BYTES = 8 * 1024 * 1024;
+const INCIDENT_PHOTO_MAX = 20;
+const PHOTO_TYPES = ["image/jpeg", "image/png", "image/webp"];
+
+export interface IncidentPhotoMeta {
+  id: string;
+  incidentId: string;
+  caption: string;
+  contentType: string;
+  internal: boolean;
+  createdAt: string;
+  createdBy: string;
+}
+
+/** 조치 사진 올리기(담당자). 복구된 장애에도 올릴 수 있다(사후 증빙). internal 이면 고객에게 보이지 않는다. */
+export async function addIncidentPhoto(user: User, incidentId: string, input: { caption: string; internal: boolean; data: Buffer }): Promise<IncidentPhotoMeta> {
+  const db = getDb();
+  assertActive(user);
+  if (!canHandleIncidents(user)) throw new ForbiddenError("조치 사진은 현장/본사 담당자만 올릴 수 있습니다.");
+  const inc = await getIncident(incidentId, db);
+  if (!inc) throw new NotFoundError("장애를 찾을 수 없습니다.");
+  await assertSiteAccess(user, inc.siteId, db);
+  if (input.data.length === 0) throw new ValidationError("빈 파일입니다.");
+  if (input.data.length > INCIDENT_PHOTO_MAX_BYTES) throw new ValidationError("사진은 8MB 이하만 올릴 수 있습니다.");
+  const contentType = sniffImageType(input.data);
+  if (!contentType || !PHOTO_TYPES.includes(contentType)) throw new ValidationError("JPEG·PNG·WebP 사진만 올릴 수 있습니다.");
+  const [cnt] = await db.select({ n: sql<number>`count(*)::int` }).from(schema.incidentPhotos).where(eq(schema.incidentPhotos.incidentId, incidentId));
+  if ((cnt?.n ?? 0) >= INCIDENT_PHOTO_MAX) throw new ValidationError(`사진은 장애당 ${INCIDENT_PHOTO_MAX}장까지입니다.`);
+  const row = { id: newId("iph"), incidentId, caption: input.caption.trim().slice(0, 80), contentType, data: input.data, internal: input.internal, createdAt: nowIso(), createdBy: user.id };
+  await db.insert(schema.incidentPhotos).values(row);
+  await audit(user, { siteId: inc.siteId, robotId: inc.robotId, action: "INCIDENT:PHOTO_ADD", params: { incidentId, photoId: row.id, bytes: input.data.length, internal: input.internal }, result: "OK", detail: row.caption || null, vendorTraceId: null }, db);
+  const { data: _d, ...meta } = row;
+  return meta;
+}
+
+export async function deleteIncidentPhoto(user: User, photoId: string): Promise<void> {
+  const db = getDb();
+  assertActive(user);
+  if (!canHandleIncidents(user)) throw new ForbiddenError("조치 사진은 현장/본사 담당자만 지울 수 있습니다.");
+  const ph = await db.query.incidentPhotos.findFirst({ where: eq(schema.incidentPhotos.id, photoId), columns: { data: false } });
+  if (!ph) throw new NotFoundError("사진을 찾을 수 없습니다.");
+  const inc = await getIncident(ph.incidentId, db);
+  if (!inc) throw new NotFoundError("장애를 찾을 수 없습니다.");
+  await assertSiteAccess(user, inc.siteId, db);
+  await db.delete(schema.incidentPhotos).where(eq(schema.incidentPhotos.id, photoId));
+  await audit(user, { siteId: inc.siteId, robotId: inc.robotId, action: "INCIDENT:PHOTO_DELETE", params: { incidentId: inc.id, photoId }, result: "OK", detail: ph.caption || null, vendorTraceId: null }, db);
+}
+
+/** 사진 데이터(권한: 장애의 사업장 접근, 고객은 비내부 사진만). */
+export async function getIncidentPhotoData(user: User, photoId: string): Promise<{ contentType: string; data: Buffer }> {
+  const db = getDb();
+  assertActive(user);
+  const ph = await db.query.incidentPhotos.findFirst({ where: eq(schema.incidentPhotos.id, photoId) });
+  if (!ph) throw new NotFoundError("사진을 찾을 수 없습니다.");
+  const inc = await getIncident(ph.incidentId, db);
+  if (!inc) throw new NotFoundError("사진을 찾을 수 없습니다.");
+  try {
+    await assertSiteAccess(user, inc.siteId, db);
+  } catch {
+    throw new NotFoundError("사진을 찾을 수 없습니다.");
+  }
+  if (ph.internal && isCustomer(user)) throw new NotFoundError("사진을 찾을 수 없습니다.");
+  return { contentType: ph.contentType, data: ph.data };
+}
+
+/** 장애 목록에 붙일 사진 메타(고객은 비내부만). */
+export async function incidentPhotosFor(user: User, incidentIds: string[], db: DbLike = getDb()): Promise<Map<string, IncidentPhotoMeta[]>> {
+  const out = new Map<string, IncidentPhotoMeta[]>();
+  if (incidentIds.length === 0) return out;
+  const rows = await db.select({ id: schema.incidentPhotos.id, incidentId: schema.incidentPhotos.incidentId, caption: schema.incidentPhotos.caption, contentType: schema.incidentPhotos.contentType, internal: schema.incidentPhotos.internal, createdAt: schema.incidentPhotos.createdAt, createdBy: schema.incidentPhotos.createdBy }).from(schema.incidentPhotos).where(inArray(schema.incidentPhotos.incidentId, incidentIds)).orderBy(schema.incidentPhotos.createdAt);
+  for (const r of rows) {
+    if (r.internal && isCustomer(user)) continue;
+    out.set(r.incidentId, [...(out.get(r.incidentId) ?? []), r]);
+  }
+  return out;
 }

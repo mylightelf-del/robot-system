@@ -256,7 +256,7 @@ export async function importPuduMap(user: User, floorId: string, mapName: string
     });
     // 구역은 층 단위로 관리하므로 기존(샘플/이전 지도) 구역을 새 지도의 구역으로 교체한다. 등록 작업의 zoneIds 는 비워 둔다(PUDU 작업은 제조사 작업 ID 기준).
     await tx.delete(schema.zones).where(eq(schema.zones.floorId, floorId));
-    if (zoneRows.length) await tx.insert(schema.zones).values(zoneRows.map(({ vendorElementId: _v, ...z }) => z));
+    if (zoneRows.length) await tx.insert(schema.zones).values(zoneRows.map(({ vendorElementId, ...z }) => ({ ...z, vendorZoneId: vendorElementId ?? null })));
     await tx.update(schema.floors).set({ currentMapVersionId: mapVersionId }).where(eq(schema.floors.id, floorId));
     await audit(user, { siteId: floor.siteId, robotId: null, action: "FLOOR:IMPORT_VENDOR_MAP", params: { floorId, vendor, mapName, version, zones: zoneRows.length, width: detail.width, height: detail.height, resolution: res, origin }, result: "OK", detail: null, vendorTraceId: null }, tx);
   });

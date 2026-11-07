@@ -34,6 +34,8 @@ SCRIPT=$(cat <<EOS
 set -e
 mkdir -p /opt/robot-system && cd /opt/robot-system
 curl -fsSL -o /tmp/release.tar.gz '$T_URL'
+# 코드 폴더는 번들로 통째로 바꾼다(덮어쓰기만 하면 이전 배포의 지운 파일이 남아 빌드가 깨질 수 있다). .env·backups·data 는 건드리지 않는다.
+rm -rf /opt/robot-system/src /opt/robot-system/tests /opt/robot-system/drizzle /opt/robot-system/scripts /opt/robot-system/public
 tar xzf /tmp/release.tar.gz -C /opt/robot-system && rm -f /tmp/release.tar.gz
 $ENV_LINE
 chown -R ubuntu:ubuntu /opt/robot-system

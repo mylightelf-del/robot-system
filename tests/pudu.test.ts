@@ -423,6 +423,75 @@ describe("PUDU 클라이언트·어댑터·워커 (모의 서버)", () => {
     expect(incs.find((i) => i.code === "CleanWaterEmpty")?.customerMessage).toContain("청수");
   });
 
+  it("실기 재현(2026-11-08): 상태 콜백 뒤에도 상세 폴링이 상태를 보정하고, BUSY 콜백은 대기로 남기지 않는다", async () => {
+    const id = await registerMockRobot();
+    state.taskCode = 0; // 대기
+    state.runState = "IDLE";
+    await syncPuduStatus(new PuduAdapter(api));
+    expect((await db().query.robotStatus.findFirst({ where: eq(schema.robotStatus.robotId, id) }))!.common).toBe("IDLE");
+    // 로봇이 청소를 시작했는데 콜백은 run_state=BUSY 만 알려 준다(작업 코드 없음) → 대기가 아니라 작업 중으로
+    const now = Math.floor(Date.now() / 1000) + 5;
+    await ingestPuduCallback({ callback_type: "notifyRobotStatus", data: { sn: MOCK_SN, mac: "B4", battery: 70, run_state: "BUSY", is_charging: -1, timestamp: now, notify_timestamp: now * 1000 } }, "busy-1");
+    await processPuduEvents();
+    let st = (await db().query.robotStatus.findFirst({ where: eq(schema.robotStatus.robotId, id) }))!;
+    expect(st.common).toBe("CLEANING");
+    // 콜백이 dataAt 을 앞당겨 놓아도 상세 폴링(작업 코드 302·진행률)은 거부되지 않고 반영된다
+    state.taskCode = 302;
+    state.runState = "BUSY";
+    const r = await syncPuduStatus(new PuduAdapter(api));
+    expect(r.counts?.updated).toBe(1);
+    st = (await db().query.robotStatus.findFirst({ where: eq(schema.robotStatus.robotId, id) }))!;
+    expect(st.common).toBe("CLEANING");
+    expect(st.raw).toContain("302");
+    expect(st.progressPct).toBe(42);
+    // 폴링끼리는 여전히 역순 방어: 같은 폴링 데이터보다 과거면 덮지 않는다(기존 동작 유지)
+    const prevDataAt = st.dataAt!;
+    await db().update(schema.robotStatus).set({ dataAt: new Date(new Date(prevDataAt).getTime() + 3600_000).toISOString() }).where(eq(schema.robotStatus.robotId, id));
+    expect((await syncPuduStatus(new PuduAdapter(api))).counts?.updated).toBe(0);
+    // 오류 상태인 로봇에 IDLE 콜백이 와도 오류를 지우지 않는다(상세 폴링이 판단)
+    await db().update(schema.robotStatus).set({ common: "ERROR", dataAt: nowIso(), rawPayload: { source: "poll" } }).where(eq(schema.robotStatus.robotId, id));
+    await ingestPuduCallback({ callback_type: "notifyRobotStatus", data: { sn: MOCK_SN, mac: "B4", battery: 70, run_state: "IDLE", is_charging: -1, timestamp: now + 100, notify_timestamp: (now + 100) * 1000 } }, "idle-1");
+    await processPuduEvents();
+    expect((await db().query.robotStatus.findFirst({ where: eq(schema.robotStatus.robotId, id) }))!.common).toBe("ERROR");
+  });
+
+  it("실기 재현(2026-11-08): 작업 중이면 미실행 판정 보류, 같은 시각 중복 예약은 제외, 14일 안의 미실행은 늦은 실적과 다시 맞춤", async () => {
+    const id = await registerMockRobot();
+    await db().insert(schema.registeredTasks).values([
+      { id: "task-dup-a", siteId: "site-01", robotId: id, name: "주차면 A", zoneIds: [], mode: "SCRUB", vendorTaskRef: "a@1" },
+      { id: "task-dup-b", siteId: "site-01", robotId: id, name: "주차면 B", zoneIds: [], mode: "SCRUB", vendorTaskRef: "b@1" },
+    ]);
+    await db().insert(schema.schedules).values([
+      { id: "sch-dup-a", taskId: "task-dup-a", daysOfWeek: [0, 1, 2, 3, 4, 5, 6], time: "21:00", enabled: true, executor: "VENDOR" },
+      { id: "sch-dup-b", taskId: "task-dup-b", daysOfWeek: [0, 1, 2, 3, 4, 5, 6], time: "21:00", enabled: true, executor: "VENDOR" },
+    ]);
+    const d0 = localDateKey(nowIso());
+    const at = (day: string, hhmm: string) => localToUtcIso(day, hhmm);
+    await syncPuduPlannedRuns(at(d0, "20:00"));
+    // 21:00 예약이 4시간째 돌고 있다(상태 작업 중, 15분 안 갱신) → 00:30 판정 시각에도 미실행으로 바꾸지 않는다
+    await db().update(schema.robotStatus).set({ common: "CLEANING", lastReceivedAt: at(addDays(d0, 1), "00:25"), dataAt: nowIso() }).where(eq(schema.robotStatus.robotId, id));
+    const d1 = addDays(d0, 1);
+    const judge = await syncPuduPlannedRuns(at(d1, "00:30"));
+    expect(judge.counts?.missed).toBe(0);
+    let plans = await db().select().from(schema.plannedRuns).where(and(eq(schema.plannedRuns.robotId, id), eq(schema.plannedRuns.plannedAt, at(d0, "21:00"))));
+    expect(plans.map((p) => p.status)).toEqual(["PLANNED", "PLANNED"]);
+    // 보고서가 올라오면(한 건) 한 회차는 수행, 같은 시각의 다른 예약은 중복으로 제외
+    await db().update(schema.robotStatus).set({ common: "CHARGING" }).where(eq(schema.robotStatus.robotId, id));
+    const startedAt = at(d0, "21:00");
+    await db().insert(schema.actualRuns).values({ id: "run-dup-1", vendor: "PUDU", vendorRobotId: MOCK_SN, vendorRunId: "vr-dup-1", robotId: id, siteId: "site-01", floorId: "site-01-f1", taskId: null, zoneIds: [], startedAt, endedAt: addMinutes(startedAt, 250), result: "COMPLETED", endReason: null, areaM2: 3600, durationMin: 250, waterL: null, detergentMl: null, origin: "PLANNED", receivedAt: addMinutes(startedAt, 255) });
+    await syncPuduPlannedRuns(at(d1, "01:20"));
+    plans = await db().select().from(schema.plannedRuns).where(and(eq(schema.plannedRuns.robotId, id), eq(schema.plannedRuns.plannedAt, at(d0, "21:00"))));
+    expect(plans.map((p) => p.status).sort()).toEqual(["DONE", "EXCLUDED"]);
+    expect(plans.find((p) => p.status === "EXCLUDED")?.reason).toContain("중복");
+    // 5일 전에 '미실행'으로 남은 회차 + 그 시각 실적이 뒤늦게 적재됨 → 14일 안이므로 다시 맞춘다
+    const d5 = addDays(d0, -5);
+    const plannedOld = at(d5, "21:00");
+    await db().insert(schema.plannedRuns).values({ id: "plan-old-missed", scheduleId: "sch-dup-a", taskId: "task-dup-a", robotId: id, siteId: "site-01", plannedAt: plannedOld, status: "MISSED", reason: "예정 시각 ±90분 안에 실적 없음(자동 판정)", actualRunId: null, changeHistory: [] });
+    await db().insert(schema.actualRuns).values({ id: "run-old-1", vendor: "PUDU", vendorRobotId: MOCK_SN, vendorRunId: "vr-old-1", robotId: id, siteId: "site-01", floorId: "site-01-f1", taskId: null, zoneIds: [], startedAt: plannedOld, endedAt: addMinutes(plannedOld, 200), result: "COMPLETED", endReason: null, areaM2: 3000, durationMin: 200, waterL: null, detergentMl: null, origin: "PLANNED", receivedAt: nowIso() });
+    await syncPuduPlannedRuns(at(d1, "01:30"));
+    expect((await db().query.plannedRuns.findFirst({ where: eq(schema.plannedRuns.id, "plan-old-missed") }))!).toMatchObject({ status: "DONE", actualRunId: "run-old-1" });
+  });
+
   it("콜백 endpoint: 세션 없이 접근 가능(프록시 예외)하고 CallbackCode 로만 인증한다", async () => {
     // 프록시: /api/webhooks/* 는 로그인 리다이렉트 대상이 아니다(제조사 서버는 세션 쿠키가 없다)
     const hook = proxy(new NextRequest("http://localhost/api/webhooks/pudu", { method: "POST" }));

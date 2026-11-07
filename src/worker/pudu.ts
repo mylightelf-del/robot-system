@@ -1,7 +1,9 @@
 import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import type { Incident, Robot, Schedule } from "@/lib/domain/types";
 import { getDb, schema } from "@/lib/db/client";
-import { getNotificationSetting, getSite, getStatus, siteAt } from "@/lib/db/repo";
+import { getNotificationSetting, getSite, getStatus, listZonesByFloor, siteAt } from "@/lib/db/repo";
+import { storeRunImage } from "@/lib/services/coverage";
+import { snapshotMaintenance } from "@/lib/services/maintenance";
 import { notifyIncident } from "@/lib/notify/notifier";
 import { newId } from "@/lib/util/random";
 import { addMinutes, localDateKey, localToUtcIso, nowIso } from "@/lib/util/time";
@@ -80,8 +82,11 @@ export async function pollRobotStatus(robot: Robot, adapter: PuduAdapter = new P
   const st = await adapter.fetchStatus(robot);
   if (!st) return false;
   const prev = await getStatus(robot.id, db);
-  // 역순 방어: 데이터 발생 시각이 기존보다 과거면 상태 본문은 덮지 않고 수신 시각만 갱신
-  if (prev?.dataAt && st.dataAt && st.dataAt < prev.dataAt) {
+  // 마지막 기록이 콜백이면(raw 가 "callback …") 폴링끼리의 역순 비교를 하지 않는다
+  const prevFromPoll = !!prev && !prev.raw.startsWith("callback");
+  // 역순 방어: 같은 폴링끼리만 비교한다. 콜백(notifyRobotStatus 등)은 작업 코드가 없어 상세 폴링을 막으면 안 된다
+  // (실기 2026-11-08: 콜백이 dataAt 을 앞당겨 폴링이 전부 거부되면서 청소 중인 로봇이 '대기'로 남았다).
+  if (prevFromPoll && prev?.dataAt && st.dataAt && st.dataAt < prev.dataAt) {
     await db.update(schema.robotStatus).set({ lastReceivedAt: st.lastReceivedAt }).where(eq(schema.robotStatus.robotId, robot.id));
     return false;
   }
@@ -157,18 +162,20 @@ export async function syncPuduReports(api: PuduApi = createPuduApi(), windowHour
         const robotTasks = taskRef ? await db.select().from(schema.registeredTasks).where(eq(schema.registeredTasks.robotId, robot.id)) : [];
         const matched = robotTasks.find((t) => t.vendorTaskRef?.startsWith(`${taskRef}@`))?.id ?? null;
         const siteId = (await siteAt(robot.id, new Date(r.start_time * 1000).toISOString(), db)) ?? robot.siteId;
-        const run = mapReportToRun(detail, { id: robot.id, siteId, floorId: robot.floorId }, now, matched);
+        const run = mapReportToRun(detail, { id: robot.id, siteId, floorId: robot.floorId }, now, matched, await listZonesByFloor(robot.floorId, db));
         const res = await db
           .insert(schema.actualRuns)
           .values({ ...run, vendor: "PUDU", vendorRobotId: robot.vendorRobotId, rawPayload: detail })
           .onConflictDoNothing({ target: [schema.actualRuns.vendor, schema.actualRuns.vendorRobotId, schema.actualRuns.vendorRunId] })
           .returning({ id: schema.actualRuns.id });
         inserted += res.length;
+        // 청소 범위 증빙 이미지(결과 지도)는 새 실적일 때 바로 받아 보관한다(실패해도 적재는 유지, 화면 조회 때 다시 시도)
+        if (res.length && run.coverage?.resultImageUrl) await storeRunImage(run.id, "RESULT", db).catch(() => undefined);
         // 예정 회차 연결: 같은 로봇의 PLANNED 회차 중 시작 시각 ±90분 이내 첫 건
         if (res.length) {
           const planned = await db.select().from(schema.plannedRuns).where(and(eq(schema.plannedRuns.robotId, robot.id), eq(schema.plannedRuns.status, "PLANNED")));
           const hit = planned.find((p) => Math.abs(new Date(p.plannedAt).getTime() - new Date(run.startedAt).getTime()) <= 90 * 60_000);
-          if (hit) await db.update(schema.plannedRuns).set({ status: "DONE", actualRunId: run.id }).where(eq(schema.plannedRuns.id, hit.id));
+          if (hit) await db.update(schema.plannedRuns).set({ status: "DONE", actualRunId: run.id, reason: null }).where(eq(schema.plannedRuns.id, hit.id));
         }
       }
       if (list.length < 20) break;
@@ -315,10 +322,16 @@ export async function syncPuduCatalog(api: PuduApi = createPuduApi()): Promise<S
       if (gone.length) await db.update(schema.schedules).set({ enabled: false }).where(inArray(schema.schedules.id, gone));
       const comp = await api.listComponents(sn);
       await db.delete(schema.maintenanceItems).where(and(eq(schema.maintenanceItems.robotId, robot.id), eq(schema.maintenanceItems.source, "API")));
+      const snap: { key: string; name: string; remainingPct: number | null }[] = [];
       for (const c of comp.list ?? []) {
-        await db.insert(schema.maintenanceItems).values({ id: `mnt-pudu-${sn}-${c.type}`, robotId: robot.id, name: `${c.name || c.type} 잔여 수명`, remainingPct: c.life_time > 0 ? Math.max(0, Math.round((1 - c.cost_time / c.life_time) * 100)) : null, source: "API" }).onConflictDoNothing();
+        const remainingPct = c.life_time > 0 ? Math.max(0, Math.round((1 - c.cost_time / c.life_time) * 100)) : null;
+        const name = `${c.name || c.type} 잔여 수명`;
+        await db.insert(schema.maintenanceItems).values({ id: `mnt-pudu-${sn}-${c.type}`, robotId: robot.id, name, remainingPct, source: "API" }).onConflictDoNothing();
+        snap.push({ key: String(c.type).replace(/[^A-Za-z0-9_-]/g, "_"), name, remainingPct });
         components += 1;
       }
+      // 소모품 일별 이력(교체 예상일 계산용)
+      await snapshotMaintenance(robot.id, snap, (await getSite(robot.siteId, db))?.timezone ?? "Asia/Seoul", db);
     }
     return { detail: `작업 ${tasks} · 예약 ${crons} · 소모품 ${components}`, counts: { tasks, crons, components } };
   });
@@ -328,6 +341,8 @@ export async function syncPuduCatalog(api: PuduApi = createPuduApi()): Promise<S
 export const PLAN_MATCH_MINUTES = 90;
 /** 예정 시각이 이만큼 지나야 수행/미실행을 판정한다(작업 시간·보고서 업로드 지연 여유). */
 export const PLAN_SETTLE_HOURS = 3;
+/** '미실행'으로 판정한 회차를 실적과 다시 맞춰 보는 기간(일). 실기: 48시간으로는 이력 적재·배포 공백 뒤의 회차가 영영 미실행으로 남았다. */
+export const PLAN_RELINK_DAYS = 14;
 
 /**
  * PUDU 예약(제조사가 실행) → 계획 회차. 보고서의 계획 완료율 분모가 된다.
@@ -360,8 +375,11 @@ export async function syncPuduPlannedRuns(now: string = nowIso()): Promise<SyncR
         }
       }
       const settleBefore = new Date(new Date(now).getTime() - PLAN_SETTLE_HOURS * 3600_000).toISOString();
-      // 판정 대상: 예정 시각이 지난 PLANNED + 최근 48시간 안에 '미실행'으로 판정했던 회차(긴 작업은 보고서가 늦게 올라와 뒤늦게 맞춰질 수 있다)
-      const relinkSince = new Date(new Date(now).getTime() - 48 * 3600_000).toISOString();
+      // 판정 대상: 예정 시각이 지난 PLANNED + 최근 PLAN_RELINK_DAYS 일 안에 '미실행'으로 판정했던 회차(긴 작업·늦은 보고서·이력 적재 뒤에 뒤늦게 맞춰질 수 있다)
+      const relinkSince = new Date(new Date(now).getTime() - PLAN_RELINK_DAYS * 86400_000).toISOString();
+      // 로봇이 지금 작업 중이면(상태가 15분 안에 갱신) 미실행 판정을 미룬다 — 21:00 예약이 4시간 넘게 돌면 보고서가 아직 없다
+      const cur = await getStatus(robot.id, db);
+      const working = !!cur && (cur.common === "CLEANING" || cur.common === "PAUSED") && !!cur.lastReceivedAt && new Date(now).getTime() - new Date(cur.lastReceivedAt).getTime() < 15 * 60_000;
       const pending = await db
         .select()
         .from(schema.plannedRuns)
@@ -381,9 +399,18 @@ export async function syncPuduPlannedRuns(now: string = nowIso()): Promise<SyncR
           .sort((a, b) => Math.abs(new Date(a.startedAt).getTime() - t) - Math.abs(new Date(b.startedAt).getTime() - t))[0];
         if (hit) {
           linked.add(hit.id);
-          await db.update(schema.plannedRuns).set({ status: "DONE", actualRunId: hit.id }).where(eq(schema.plannedRuns.id, p.id));
+          await db.update(schema.plannedRuns).set({ status: "DONE", actualRunId: hit.id, reason: null }).where(eq(schema.plannedRuns.id, p.id));
           done += 1;
-        } else if (p.status === "PLANNED") {
+          continue;
+        }
+        // 같은 시각의 다른 예약(PUDU 에 같은 시간 예약이 둘)이 이미 수행됐으면 이 회차는 중복 → 제외(완료율 분모에서 뺌)
+        const sibling = pending.find((q) => q.id !== p.id && q.plannedAt === p.plannedAt && q.status === "DONE") ?? (await db.query.plannedRuns.findFirst({ where: and(eq(schema.plannedRuns.robotId, robot.id), eq(schema.plannedRuns.plannedAt, p.plannedAt), eq(schema.plannedRuns.status, "DONE")) }));
+        if (sibling) {
+          await db.update(schema.plannedRuns).set({ status: "EXCLUDED", reason: "같은 시각의 다른 예약으로 수행(중복 예약)", actualRunId: null }).where(eq(schema.plannedRuns.id, p.id));
+          continue;
+        }
+        if (p.status === "PLANNED") {
+          if (working) continue; // 작업 중 — 보고서가 오면 다음 주기에 맞춘다
           await db.update(schema.plannedRuns).set({ status: "MISSED", reason: `예정 시각 ±${PLAN_MATCH_MINUTES}분 안에 실적 없음(자동 판정)` }).where(eq(schema.plannedRuns.id, p.id));
           missed += 1;
         }
@@ -436,7 +463,14 @@ async function applyEvent(cb: PuduCallback, occurredAt: string): Promise<void> {
       const battery = typeof cb.data.battery === "number" ? cb.data.battery : prev?.batteryPct ?? null;
       const runState = String(cb.data.run_state ?? "");
       const isCharging = cb.data.is_charging === 1;
-      const common = runState === "OFFLINE" ? "OFFLINE" : isCharging ? "CHARGING" : prev?.common === "OFFLINE" ? "IDLE" : (prev?.common ?? "IDLE");
+      // run_state 만으로는 청소/복귀를 가르지 못한다(상세 코드는 폴링이 60초 안에 보정). BUSY 인데 대기로 남는 일은 막는다.
+      const keepBusy = prev?.common === "CLEANING" || prev?.common === "PAUSED" || prev?.common === "RETURNING" || prev?.common === "ERROR";
+      const common =
+        runState === "OFFLINE" ? "OFFLINE"
+        : isCharging ? "CHARGING"
+        : runState === "BUSY" ? (keepBusy ? prev!.common : "CLEANING")
+        : runState === "IDLE" ? (prev?.common === "ERROR" ? "ERROR" : "IDLE")
+        : prev?.common === "OFFLINE" ? "IDLE" : (prev?.common ?? "IDLE");
       await db.update(schema.robotStatus).set({ batteryPct: battery, common, online: runState !== "OFFLINE", raw: `callback notifyRobotStatus run_state=${runState} charging=${cb.data.is_charging}`, ...touch }).where(eq(schema.robotStatus.robotId, robot.id));
       return;
     }

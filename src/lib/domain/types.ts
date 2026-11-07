@@ -101,6 +101,21 @@ export interface Zone {
   name: string;
   polygon: [number, number][]; // 지도 좌표계(px)
   areaM2: number;
+  /** 제조사 지도의 구역 ID(실적의 구역별 수행과 맞추는 키). */
+  vendorZoneId?: string | null;
+}
+
+/** 청소 범위 증빙(제조사 보고서 파싱). 구역별 청소 횟수와 결과 지도 이미지 URL. */
+export interface RunCoverage {
+  /** 작업 수행률(%). 제조사가 주지 않으면 null. */
+  percentage: number | null;
+  mapName: string | null;
+  mapVersion: number | null;
+  /** 제조사가 만든 결과 지도(청소 궤적·면적) 이미지 URL. 서버가 받아 보관한다. */
+  resultImageUrl: string | null;
+  heatmapUrl: string | null;
+  /** 작업에 포함된 구역과 청소 횟수(0 = 이번 작업에서 안 함). */
+  areas: { vendorId: string; name: string; cleanCount: number; areaM2: number }[];
 }
 
 export interface Robot {
@@ -224,6 +239,8 @@ export interface ActualRun {
   origin: RunOrigin;
   /** 서버 수신 시각. 늦게 수신한 실적을 구분한다. */
   receivedAt: string;
+  /** 청소 범위 증빙. 제조사 보고서에 없으면 null/undefined. */
+  coverage?: RunCoverage | null;
 }
 
 export interface Command {
@@ -326,6 +343,10 @@ export interface MaintenanceItem {
   name: string;
   remainingPct: number | null;
   source: "API" | "MANUAL" | "UNSUPPORTED";
+  /** 예측(최근 이력의 감소 속도, 직선 가정). 이력이 모자라면 null. */
+  ratePctPerDay?: number | null;
+  daysLeft?: number | null;
+  expectedDate?: string | null;
 }
 
 export type ReportStatus = "DRAFT" | "REVIEW" | "CONFIRMED" | "PUBLISHED";
@@ -367,7 +388,7 @@ export interface ReportAggregates {
   /** 일자별 실적(주간·월간). */
   byDay?: { date: string; runs: number; completed: number; areaM2: number; durationMin: number }[];
   /** 작업 목록(일간·설치 보고서, 최대 200건). 고객 공개 필드만. */
-  runList?: { startedAt: string; robotName: string; floorName: string; origin: "PLANNED" | "ADHOC" | "REMOTE"; result: string; areaM2: number; durationMin: number }[];
+  runList?: { runId?: string; startedAt: string; robotName: string; floorName: string; origin: "PLANNED" | "ADHOC" | "REMOTE"; result: string; areaM2: number; durationMin: number; completionPct?: number | null; hasResultImage?: boolean }[];
   /** 설치 현황(설치 완료보고서). 집계 시점의 구성 스냅샷. */
   installation?: {
     installedOn: string;
@@ -386,6 +407,8 @@ export interface ReportAggregates {
   productivityM2PerHour?: number | null;
   /** 기간 안에 발생해 복구된 장애의 평균 조치 시간(분). 없으면 null. */
   incidentMttrMin?: number | null;
+  /** 제조사 보고서의 작업 수행률 평균(%). 증빙이 있는 실적만. 없으면 null. */
+  avgCompletionPct?: number | null;
   /** 직전 같은 길이 기간의 요약(추이 비교용). 설치 보고서에는 없다. */
   prev?: { periodStart: string; periodEnd: string; totalRuns: number; cumulativeAreaM2: number; totalDurationMin: number; completionRatePct: number | null; incidents: number; productivityM2PerHour: number | null };
   /** 이 집계에 포함된 실적 중 가장 늦은 수신 시각. 이후 수신분은 "늦은 실적"으로 별도 계산한다. */
@@ -464,9 +487,9 @@ export interface User {
 }
 
 /** 통보 종류: 장애 발생·복구 / 미조치 확대 / 예정 작업 미실행 / 장기간 무실적 / 보고서 발행 */
-export type NotifyKind = "INCIDENT" | "ESCALATION" | "MISSED_RUN" | "NO_ACTIVITY" | "REPORT";
-export const NOTIFY_KINDS: NotifyKind[] = ["INCIDENT", "ESCALATION", "MISSED_RUN", "NO_ACTIVITY", "REPORT"];
-export const NOTIFY_KIND_LABEL: Record<NotifyKind, string> = { INCIDENT: "장애 발생·복구", ESCALATION: "미조치 확대 통보", MISSED_RUN: "예정 작업 미실행", NO_ACTIVITY: "장기간 무실적", REPORT: "보고서 발행" };
+export type NotifyKind = "INCIDENT" | "ESCALATION" | "MISSED_RUN" | "NO_ACTIVITY" | "REPORT" | "CONSUMABLE";
+export const NOTIFY_KINDS: NotifyKind[] = ["INCIDENT", "ESCALATION", "MISSED_RUN", "NO_ACTIVITY", "REPORT", "CONSUMABLE"];
+export const NOTIFY_KIND_LABEL: Record<NotifyKind, string> = { INCIDENT: "장애 발생·복구", ESCALATION: "미조치 확대 통보", MISSED_RUN: "예정 작업 미실행", NO_ACTIVITY: "장기간 무실적", REPORT: "보고서 발행", CONSUMABLE: "소모품·점검" };
 
 export interface NotificationRecipient {
   id: string;

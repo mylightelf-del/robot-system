@@ -101,8 +101,11 @@ export function computeAggregates(data: AggregateInput, siteId: string, period: 
       ? [...runs]
           .sort((a, b) => a.startedAt.localeCompare(b.startedAt))
           .slice(0, RUN_LIST_MAX)
-          .map((r) => ({ startedAt: r.startedAt, robotName: robotName(r.robotId), floorName: floorName(r.floorId), origin: r.origin, result: RUN_RESULT_LABEL[r.result], areaM2: Math.round(r.areaM2), durationMin: Math.round(r.durationMin) }))
+          .map((r) => ({ runId: r.id, startedAt: r.startedAt, robotName: robotName(r.robotId), floorName: floorName(r.floorId), origin: r.origin, result: RUN_RESULT_LABEL[r.result], areaM2: Math.round(r.areaM2), durationMin: Math.round(r.durationMin), completionPct: r.coverage?.percentage ?? null, hasResultImage: !!r.coverage?.resultImageUrl }))
       : undefined;
+  // 수행률(제조사 보고서의 percentage) 평균 — 증빙이 있는 실적만
+  const covRuns = runs.filter((r) => typeof r.coverage?.percentage === "number");
+  const avgCompletionPct = covRuns.length ? Math.round((covRuns.reduce((s, r) => s + (r.coverage!.percentage ?? 0), 0) / covRuns.length) * 10) / 10 : null;
 
   const incidents = data.incidents
     .filter((i) => i.siteId === siteId && inPeriod(i.occurredAt) && i.occurredAt <= asOf)
@@ -139,7 +142,7 @@ export function computeAggregates(data: AggregateInput, siteId: string, period: 
   if (vendorsInPeriod.includes("PUDU")) unsupportedMetrics.push("PUDU 모델 물(L)·세제(mL) 사용량: API 제공 여부 미검증 — 미제공으로 표시");
   if (waterRuns.length === 0) unsupportedMetrics.push("물 사용량(L): 이 기간 제공 데이터 없음");
   if (detRuns.length === 0) unsupportedMetrics.push("세제 사용량(mL): 이 기간 제공 데이터 없음");
-  if (runs.length > 0 && !hasZoneInfo) unsupportedMetrics.push("구역별 실적: 제조사 실적에 구역 정보가 없어 표시하지 않음(층별·로봇별로 집계)");
+  if (runs.length > 0 && !hasZoneInfo) unsupportedMetrics.push("구역별 실적: 이 기간 실적에 구역 정보가 없어 표시하지 않음(층별·로봇별로 집계). 제조사 지도를 가져온 층의 실적에는 구역별 수행이 들어간다.");
   unsupportedMetrics.push("고유 청소 면적: 제공하지 않음(누적 면적은 반복 구역 포함)");
   unsupportedMetrics.push("청결 품질·인건비 절감액: 청소 면적만으로 단정하지 않음");
 
@@ -187,6 +190,7 @@ export function computeAggregates(data: AggregateInput, siteId: string, period: 
     includesRunsReceivedUntil: latestReceived || asOf,
     productivityM2PerHour,
     incidentMttrMin,
+    avgCompletionPct,
     ...(prev ? { prev } : {}),
   };
 }

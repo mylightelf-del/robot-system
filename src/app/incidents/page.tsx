@@ -1,7 +1,8 @@
 import Link from "next/link";
 import { listUsers } from "@/lib/db/repo";
 import { getCurrentUser } from "@/lib/auth/session";
-import { escalationMinutesBySite, listAssignableUsers, listIncidents, SIMULATABLE_CODES } from "@/lib/services/incidents";
+import { escalationMinutesBySite, incidentGuide, incidentPhotosFor, incidentStats, listAssignableUsers, listIncidents, SIMULATABLE_CODES } from "@/lib/services/incidents";
+import { IncidentPhotos } from "@/components/IncidentPhotos";
 import { listRobots, listSites } from "@/lib/services/robots";
 import { canAdmin, canHandleIncidents, isCustomer } from "@/lib/auth/authz";
 import { AppError } from "@/lib/util/errors";
@@ -31,6 +32,9 @@ export default async function IncidentsPage({ searchParams }: { searchParams: Pr
   const escalation = await escalationMinutesBySite(sites.map((s) => s.id));
   const now = nowIso();
   const escalate = (siteId: string) => escalation[siteId] ?? 60;
+  const photos = await incidentPhotosFor(user, rows.map((r) => r.id));
+  const stats = handler && !dismissedView ? await incidentStats(user, { siteId: site || undefined, days: 90 }) : null;
+  const fmtMin = (m: number) => formatDurationMin(m);
 
   return (
     <>
@@ -56,6 +60,68 @@ export default async function IncidentsPage({ searchParams }: { searchParams: Pr
         <div className="mb-4">
           <Card title="장애 발생 시뮬레이션" right={<SimTag />}>
             <SimulateIncidentForm robots={robots.map((r) => ({ id: r.robot.id, name: r.robot.name, siteName: r.site.name }))} codes={SIMULATABLE_CODES} />
+          </Card>
+        </div>
+      )}
+
+      {stats && stats.total > 0 && (
+        <div className="mb-4">
+          <Card title={`반복 장애 분석 (최근 ${stats.days}일 · ${stats.total}건, 복구 ${stats.resolved}건${stats.mttrMin !== null ? ` · 평균 조치 ${fmtMin(stats.mttrMin)}` : ""})`}>
+            <div className="grid lg:grid-cols-3 gap-4 text-sm">
+              <div className="overflow-x-auto">
+                <div className="text-xs font-medium mb-1">코드별 Top</div>
+                <table className="data">
+                  <thead><tr><th>코드</th><th className="text-right">건</th><th className="text-right">로봇</th><th className="text-right">평균 조치</th></tr></thead>
+                  <tbody>
+                    {stats.byCode.map((c) => (
+                      <tr key={c.code}>
+                        <td><span className="font-mono text-xs">{c.code}</span><div className="text-xs text-gray-500">{c.message}{c.vendorHint ? " · 반복 시 대리점" : ""}</div></td>
+                        <td className="text-right">{c.count}</td>
+                        <td className="text-right">{c.robots}</td>
+                        <td className="text-right whitespace-nowrap">{c.mttrMin === null ? "-" : fmtMin(c.mttrMin)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="overflow-x-auto">
+                <div className="text-xs font-medium mb-1">로봇별 Top</div>
+                <table className="data">
+                  <thead><tr><th>로봇</th><th className="text-right">건</th><th>주요 코드</th><th>최근</th></tr></thead>
+                  <tbody>
+                    {stats.byRobot.map((r) => (
+                      <tr key={r.robotId}>
+                        <td><Link href={`/robots/${r.robotId}`} className="text-navy hover:underline">{r.robotName}</Link><div className="text-xs text-gray-500">{r.siteName}</div></td>
+                        <td className="text-right">{r.count}</td>
+                        <td className="font-mono text-xs">{r.topCode}</td>
+                        <td className="text-xs whitespace-nowrap">{relativeFromNow(r.lastAt, now)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="overflow-x-auto">
+                <div className="text-xs font-medium mb-1">같은 로봇·같은 코드 반복(7일 안)</div>
+                {stats.recurrences.length === 0 ? (
+                  <div className="text-xs text-gray-500">반복 장애가 없습니다.</div>
+                ) : (
+                  <table className="data">
+                    <thead><tr><th>로봇</th><th>코드</th><th className="text-right">횟수</th><th className="text-right">평균 간격</th></tr></thead>
+                    <tbody>
+                      {stats.recurrences.map((r) => (
+                        <tr key={`${r.robotId}-${r.code}`}>
+                          <td><Link href={`/robots/${r.robotId}`} className="text-navy hover:underline">{r.robotName}</Link></td>
+                          <td className="font-mono text-xs">{r.code}</td>
+                          <td className="text-right">{r.count}</td>
+                          <td className="text-right whitespace-nowrap">{r.avgGapHours === null ? "묶음" : r.avgGapHours >= 24 ? `${Math.round(r.avgGapHours / 24)}일` : `${r.avgGapHours}시간`}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+                <p className="text-xs text-gray-500 mt-1">반복 장애는 현장 조치로 해결되지 않는 원인(지도·배치·부품)일 수 있습니다. 대리점에 코드와 횟수를 알려 점검을 요청하세요.</p>
+              </div>
+            </div>
           </Card>
         </div>
       )}
@@ -95,6 +161,15 @@ export default async function IncidentsPage({ searchParams }: { searchParams: Pr
                     </div>
                     <div className="text-sm text-gray-800">{i.message}</div>
                     {i.rawMessage && <div className="text-xs text-gray-500 font-mono mt-0.5">원문: {i.rawMessage}</div>}
+                    {handler && i.status !== "RESOLVED" && !dismissedView && (() => {
+                      const g = incidentGuide(i.code);
+                      return (
+                        <div className="mt-1 text-xs bg-sky-50 border border-sky-100 rounded px-2 py-1 text-sky-900 no-print">
+                          <span className="font-medium">현장 조치 안내:</span> {g.field.join(" → ")}
+                          {g.vendor ? <span className="text-gray-600"> · 반복되면 대리점 문의</span> : null}
+                        </div>
+                      );
+                    })()}
                     {i.assigneeName && <div className="text-xs text-gray-600 mt-0.5">담당: {i.assigneeName}</div>}
                     {i.actions.length > 0 && (
                       <ul className="mt-1 text-xs text-gray-700 space-y-0.5">
@@ -106,6 +181,7 @@ export default async function IncidentsPage({ searchParams }: { searchParams: Pr
                         ))}
                       </ul>
                     )}
+                    <IncidentPhotos incidentId={i.id} photos={(photos.get(i.id) ?? []).map((p) => ({ id: p.id, caption: p.caption, internal: p.internal, createdAt: p.createdAt }))} canEdit={handler && !dismissedView} />
                     {i.resolvedAt && <div className="text-xs text-emerald-700 mt-0.5">복구 {formatDateTime(i.resolvedAt)} (소요 {formatDurationMin(i.minutesOpen)})</div>}
                     {i.dismissedAt && <div className="text-xs text-gray-600 mt-0.5">삭제 {formatDateTime(i.dismissedAt)} — 사유: {i.dismissReason}</div>}
                     {!customer && i.notifications.length > 0 && (

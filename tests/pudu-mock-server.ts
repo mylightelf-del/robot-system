@@ -155,7 +155,9 @@ export function startMockPudu(state: MockState = defaultState()): Promise<{ url:
         }
         case "/data-board/v1/log/clean_task/query": {
           const r = state.reports.find((x) => x.report_id === url.searchParams.get("report_id"));
-          return r ? ok({ ...r, task_id: "897176785820073984", task_version: "1694070080109", cost_water: 2500, cost_battery: 30, break_count: 0, timed_report_id: r.report_id === "894770283318874112" ? "timed-1" : undefined }, "ok") : send(200, { message: "NOT_FOUND" });
+          // 실기 형태의 floor_list(JSON 문자열): 구역별 청소 횟수, 결과 지도 URL(이 모의 서버의 이미지), 수행률
+          const floorList = JSON.stringify([{ map_name: "1#1#lobby", map_floor: "1", map_version: 3, area_array: [{ area_id: "a1", area_name: "로비 중앙", clean_count: 1, area: 50 }, { area_id: "a2", area_name: "엘리베이터 홀", clean_count: 0, area: 20 }], area_list: [{ area_id: "a1", result: { area: 50, time: 600, status: 4 } }], task_result_url: `${state.imageBase ?? "http://127.0.0.1:9"}/maps/lobby.png`, rubbish_distribution_url: "", result: { area: 50, time: 600, status: 4 } }]);
+          return r ? ok({ ...r, task_id: "897176785820073984", task_version: "1694070080109", cost_water: 2500, cost_battery: 30, break_count: 0, percentage: r.status === 4 ? 92 : 40, floor_list: floorList, timed_report_id: r.report_id === "894770283318874112" ? "timed-1" : undefined }, "ok") : send(200, { message: "NOT_FOUND" });
         }
         case "/data-board/v1/log/error/query_list": {
           const shop = url.searchParams.get("shop_id");
