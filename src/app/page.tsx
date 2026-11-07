@@ -20,9 +20,10 @@ function weekDelta(cur: number | null, prev: number | null, unit: string): strin
 }
 
 function TodoBlock({ title, count, href, tone, children }: { title: string; count: number; href: string; tone: "bad" | "warn"; children: React.ReactNode }) {
-  const cls = count === 0 ? "text-gray-400" : tone === "bad" ? "text-red-700" : "text-amber-700";
+  const cls = count === 0 ? "text-slate-300" : tone === "bad" ? "text-red-600" : "text-amber-600";
+  const edge = count === 0 ? "border-l-slate-200" : tone === "bad" ? "border-l-red-400" : "border-l-amber-400";
   return (
-    <div className="border rounded p-2 min-w-0">
+    <div className={`border border-l-4 rounded-xl p-2.5 min-w-0 bg-slate-50/60 ${edge}`}>
       <div className="flex items-center justify-between gap-2">
         <span className="font-medium">{title}</span>
         <Link href={href} className={`text-lg font-bold ${cls} hover:underline`}>{count}</Link>

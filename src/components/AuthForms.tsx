@@ -4,7 +4,7 @@ import { useActionState } from "react";
 import { acceptInviteAction, changePasswordAction, loginAction, type ActionResult } from "@/app/actions";
 import { btn } from "./ActionButton";
 
-const input = "w-full border rounded px-3 py-2 text-sm";
+const input = "w-full border rounded-lg px-3 py-2 text-sm";
 
 export function LoginForm({ next }: { next: string }) {
   const [state, action, pending] = useActionState<ActionResult | null, FormData>(loginAction, null);

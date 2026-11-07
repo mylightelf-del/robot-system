@@ -17,15 +17,15 @@ const ITEMS: { href: string; label: string; staffOnly?: boolean; adminOnly?: boo
 export function AppNav({ role, isCustomer }: { role: Role; isCustomer: boolean }) {
   const pathname = usePathname();
   return (
-    <nav className="bg-navy-light/60 border-t border-white/10">
-      <div className="max-w-7xl mx-auto px-2 flex overflow-x-auto text-sm">
+    <nav className="border-t border-white/10">
+      <div className="max-w-7xl mx-auto px-2 sm:px-3 flex gap-0.5 overflow-x-auto text-sm py-1.5 [scrollbar-width:none]">
         {ITEMS.filter((i) => !(i.adminOnly && role !== "HQ_ADMIN")).map((i) => {
           const active = i.href === "/" ? pathname === "/" : pathname.startsWith(i.href);
           return (
             <Link
               key={i.href}
               href={i.href}
-              className={`px-3 py-2 whitespace-nowrap border-b-2 ${active ? "border-white text-white font-semibold" : "border-transparent text-white/80 hover:text-white"}`}
+              className={`px-3 py-1.5 rounded-full whitespace-nowrap transition ${active ? "bg-white/15 text-white font-semibold shadow-inner" : "text-white/75 hover:text-white hover:bg-white/10"}`}
             >
               {i.label}
               {isCustomer && i.href === "/tasks" ? <span className="ml-1 text-[10px] opacity-70">조회</span> : null}

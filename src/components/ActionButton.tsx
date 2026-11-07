@@ -18,17 +18,17 @@ export function useAction() {
 export function ResultLine({ result }: { result: ActionResult | null }) {
   if (!result) return null;
   return result.ok ? (
-    <div className="text-xs text-emerald-700 mt-1">{result.message ?? "처리되었습니다."}</div>
+    <div className="text-xs text-emerald-700 mt-1 inline-flex items-center gap-1"><span aria-hidden>✓</span>{result.message ?? "처리되었습니다."}</div>
   ) : (
-    <div className="text-xs text-red-700 mt-1">⚠ {result.error}</div>
+    <div className="text-xs text-red-700 mt-1 inline-flex items-center gap-1"><span aria-hidden>⚠</span>{result.error}</div>
   );
 }
 
 export const btn = {
-  primary: "inline-flex items-center justify-center rounded bg-navy text-white px-3 py-1.5 text-sm font-medium hover:bg-navy-light disabled:opacity-50 disabled:cursor-not-allowed",
-  secondary: "inline-flex items-center justify-center rounded border border-gray-300 bg-white text-gray-800 px-3 py-1.5 text-sm hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed",
-  danger: "inline-flex items-center justify-center rounded border border-red-300 bg-red-50 text-red-800 px-3 py-1.5 text-sm hover:bg-red-100 disabled:opacity-50 disabled:cursor-not-allowed",
-  small: "inline-flex items-center justify-center rounded border border-gray-300 bg-white text-gray-800 px-2 py-1 text-xs hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed",
+  primary: "inline-flex items-center justify-center gap-1 rounded-lg bg-navy text-white px-3.5 py-1.5 text-sm font-medium shadow-sm hover:bg-navy-light active:translate-y-px transition disabled:opacity-50 disabled:cursor-not-allowed",
+  secondary: "inline-flex items-center justify-center gap-1 rounded-lg border border-gray-200 bg-white text-slate-800 px-3.5 py-1.5 text-sm font-medium shadow-sm hover:bg-slate-50 hover:border-gray-300 active:translate-y-px transition disabled:opacity-50 disabled:cursor-not-allowed",
+  danger: "inline-flex items-center justify-center gap-1 rounded-lg border border-red-200 bg-red-50 text-red-700 px-3.5 py-1.5 text-sm font-medium hover:bg-red-100 active:translate-y-px transition disabled:opacity-50 disabled:cursor-not-allowed",
+  small: "inline-flex items-center justify-center gap-1 rounded-md border border-gray-200 bg-white text-slate-700 px-2 py-1 text-xs font-medium hover:bg-slate-50 hover:border-gray-300 active:translate-y-px transition disabled:opacity-50 disabled:cursor-not-allowed",
 };
 
 /**
