@@ -40,3 +40,12 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 ops-*.json
+
+# Expo 산출물
+android/
+ios/
+.expo/
+*.apk
+*.aab
+
+mobile/dist/

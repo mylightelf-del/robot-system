@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "800695851944",
+    "project_id": "widebot-57671",
+    "storage_bucket": "widebot-57671.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:800695851944:android:7197b29c696a8d973bdb9d",
+        "android_client_info": {
+          "package_name": "kr.widebot.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCUPBB3RThIlh0Jn9FbtgIbyLwyKPTFGl0"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
