@@ -45,6 +45,16 @@ export function checkEnv(env: NodeJS.ProcessEnv): Finding[] {
     if (k.length !== 32) push("error", "TOKEN_ENCRYPTION_KEY", "카카오 연동에는 TOKEN_ENCRYPTION_KEY(32바이트 base64)가 필요합니다(토큰 암호화). 예: openssl rand -base64 32");
     if (!env.KAKAO_CLIENT_SECRET) push("warn", "KAKAO_CLIENT_SECRET", "KAKAO_CLIENT_SECRET 이 없습니다. 카카오 앱의 클라이언트 시크릿이 켜져 있으면(기본) 토큰 발급이 실패합니다.");
   }
+  // 앱 푸시(FCM): 서비스 계정 키가 없으면 모의. 있으면 JSON 형식만 검사한다(값은 출력하지 않는다).
+  if (env.FCM_SERVICE_ACCOUNT_JSON || env.FCM_SERVICE_ACCOUNT_FILE) {
+    try {
+      const raw = env.FCM_SERVICE_ACCOUNT_JSON || readFileSync(env.FCM_SERVICE_ACCOUNT_FILE!, "utf8");
+      const j = JSON.parse(raw.trim().startsWith("{") ? raw : Buffer.from(raw, "base64").toString("utf8"));
+      if (!j.project_id || !j.client_email || !j.private_key) push("error", "FCM_SERVICE_ACCOUNT", "FCM 서비스 계정 키에 project_id/client_email/private_key 가 없습니다.");
+    } catch {
+      push("error", "FCM_SERVICE_ACCOUNT", "FCM 서비스 계정 키를 읽거나 JSON 으로 해석할 수 없습니다(FCM_SERVICE_ACCOUNT_JSON 또는 FCM_SERVICE_ACCOUNT_FILE).");
+    }
+  } else if (prod) push("warn", "FCM", "앱 푸시가 모의 발송입니다(FCM_SERVICE_ACCOUNT_JSON 또는 FCM_SERVICE_ACCOUNT_FILE 로 켜면 실제 발송).");
   if (prod && env.ALLOW_SAMPLE_RESET === "true") push("error", "ALLOW_SAMPLE_RESET", "운영에서 샘플 초기화가 켜져 있습니다(ALLOW_SAMPLE_RESET=false).");
   if (prod && env.SAMPLE_USER_PASSWORD) push("warn", "SAMPLE_USER_PASSWORD", "운영 .env 에 샘플 사용자 비밀번호가 있습니다. 샘플 적재를 하지 않는다면 지우세요.");
   if (prod && (env.VENDOR_MODE || "sample") === "sample") push("warn", "VENDOR_MODE", "운영인데 VENDOR_MODE=sample 입니다(모든 로봇이 시뮬레이션). 실제 연동이면 live 로.");

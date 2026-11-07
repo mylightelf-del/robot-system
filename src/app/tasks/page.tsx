@@ -180,7 +180,10 @@ export default async function TasksPage({ searchParams }: { searchParams: Promis
                   {commands.map((c) => (
                     <tr key={c.id}>
                       <td className="whitespace-nowrap">{formatDateTime(c.requestedAt)}</td>
-                      <td>{c.userName}</td>
+                      <td>
+                        {c.userName}
+                        {c.origin?.channel === "app" && <span className="ml-1 rounded bg-blue-50 px-1 text-xs text-blue-800" title={c.origin.device}>앱{c.origin.device ? ` · ${c.origin.device}` : ""}</span>}
+                      </td>
                       <td>
                         <Link href={`/robots/${c.robotId}`} className="text-navy hover:underline">{c.robotName}</Link>
                         <div className="text-xs text-gray-500">{c.siteName}</div>

@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { kakaoCandidates, notifyStatus } from "@/lib/services/notify";
+import { kakaoCandidates, notifyStatus, pushCandidates } from "@/lib/services/notify";
 import { getCurrentUser } from "@/lib/auth/session";
 import { getAdminData } from "@/lib/services/admin";
 import { AppError } from "@/lib/util/errors";
@@ -18,6 +18,7 @@ export default async function AdminPage() {
   }
   const notify = notifyStatus();
   const kakaoUsers = await kakaoCandidates();
+  const pushUsers = await pushCandidates();
   // 사용 중지된 사업장은 운영 설정(원격 제어·알림 수신)에서 뺀다. 고급 설정에서만 다룬다.
   const activeSites = d.sites.filter((s) => !s.retiredAt);
   const sites = activeSites.map((s) => ({ id: s.id, name: s.name }));
@@ -75,7 +76,7 @@ export default async function AdminPage() {
             {d.notificationSettings.filter((n) => activeSites.some((s) => s.id === n.siteId)).map((n) => (
               <div key={n.siteId} className="border rounded p-3">
                 <div className="font-medium text-sm mb-1">{d.sites.find((s) => s.id === n.siteId)?.name}</div>
-                <RecipientsPanel siteId={n.siteId} recipients={n.recipients} dedupeMinutes={n.dedupeMinutes} escalateAfterMinutes={n.escalateAfterMinutes} noActivityHours={n.noActivityHours} kakaoUsers={kakaoUsers} />
+                <RecipientsPanel siteId={n.siteId} recipients={n.recipients} dedupeMinutes={n.dedupeMinutes} escalateAfterMinutes={n.escalateAfterMinutes} noActivityHours={n.noActivityHours} kakaoUsers={kakaoUsers} pushUsers={pushUsers} />
               </div>
             ))}
           </div>

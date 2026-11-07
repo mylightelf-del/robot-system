@@ -6,7 +6,8 @@ import { NextResponse, type NextRequest } from "next/server";
  */
 // /api/webhooks/* 는 제조사 서버가 호출한다(세션 없음). 각 라우트가 자체 비밀값(예: PUDU CallbackCode)으로 검증한다.
 // /sw.js·/manifest.webmanifest·/icons/ 는 홈 화면 추가(PWA)용 정적 파일 — 로그인 전에도 받을 수 있어야 한다(리디렉션되면 서비스 워커 등록 실패).
-const PUBLIC_PREFIXES = ["/login", "/invite", "/_next", "/favicon.ico", "/api/health", "/api/webhooks/", "/sw.js", "/manifest.webmanifest", "/icons/"];
+// /api/ 전체: 각 라우트가 세션(쿠키 또는 앱의 Bearer 토큰)을 스스로 검사해 401 을 돌려준다. 앱은 쿠키가 없으므로 여기서 로그인 화면으로 보내면 안 된다.
+const PUBLIC_PREFIXES = ["/login", "/invite", "/_next", "/favicon.ico", "/api/", "/sw.js", "/manifest.webmanifest", "/icons/"];
 
 export function proxy(request: NextRequest) {
   const { pathname, search } = request.nextUrl;

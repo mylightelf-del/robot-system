@@ -137,6 +137,18 @@ export async function listIncidents(user: User, opts: { siteId?: string; include
   return incidents.map((i) => sanitizeIncident(i, user, ctx.get(i.id)!));
 }
 
+/** 장애 한 건(앱 상세 화면). 사업장 범위를 검사하고 고객에게는 원시 오류·내부 메모를 걸러 돌려준다. 삭제(숨김)한 알림은 담당자만 본다. */
+export async function getIncidentView(user: User, incidentId: string): Promise<IncidentView> {
+  assertActive(user);
+  const db = getDb();
+  const inc = await getIncident(incidentId, db);
+  if (!inc) throw new NotFoundError("장애를 찾을 수 없습니다.");
+  await assertSiteAccess(user, inc.siteId, db);
+  if (inc.dismissedAt && isCustomer(user)) throw new NotFoundError("장애를 찾을 수 없습니다.");
+  const ctx = await nameContexts([inc], db);
+  return sanitizeIncident(inc, user, ctx.get(inc.id)!);
+}
+
 async function loadForHandling(user: User, incidentId: string, db: DbLike): Promise<Incident> {
   assertActive(user);
   if (!canHandleIncidents(user)) throw new ForbiddenError("장애 조치는 현장/본사 담당자만 할 수 있습니다.");

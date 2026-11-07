@@ -1,13 +1,12 @@
 "use server";
 
-import { isCustomer } from "@/lib/auth/authz";
 import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import type { CleanMode, CommandType, NotifyKind, ReportComments, ReportContent, Role, Severity } from "@/lib/domain/types";
-import { cookieOptions, createSession, getCurrentUser, getOptionalUser, SESSION_COOKIE } from "@/lib/auth/session";
+import type { CleanMode, CommandType, NotifyChannel, NotifyKind, ReportComments, ReportContent, Role, Severity } from "@/lib/domain/types";
+import { cookieOptions, createSession, getCurrentAuth, getCurrentUser, getOptionalUser, SESSION_COOKIE } from "@/lib/auth/session";
 import { AppError, errorMessage, ForbiddenError } from "@/lib/util/errors";
-import { issueCommand, type IssueCommandInput } from "@/lib/services/commands";
+import { describeCommandResult, issueCommand, type IssueCommandInput } from "@/lib/services/commands";
 import * as incidents from "@/lib/services/incidents";
 import * as tasks from "@/lib/services/tasks";
 import * as reports from "@/lib/services/reports";
@@ -42,18 +41,18 @@ export async function loginAction(_prev: ActionResult | null, formData: FormData
   const password = String(formData.get("password") ?? "");
   const next = String(formData.get("next") ?? "/");
   const ua = (await headers()).get("user-agent") ?? "";
-  const res = await auth.login(email, password, ua);
+  const res = await auth.login(email, password, ua, { kind: "web" });
   if (!res.ok) return { ok: false, error: res.error };
   const jar = await cookies();
-  jar.set(SESSION_COOKIE, res.sessionId, cookieOptions());
+  jar.set(SESSION_COOKIE, res.token, cookieOptions());
   redirect(next.startsWith("/") && !next.startsWith("//") ? next : "/");
 }
 
 export async function logoutAction(): Promise<void> {
   const jar = await cookies();
-  const sid = jar.get(SESSION_COOKIE)?.value;
+  const token = jar.get(SESSION_COOKIE)?.value;
   const user = await getOptionalUser();
-  await auth.logout(sid, user ? { id: user.id, name: user.name } : null);
+  await auth.logout(token, user ? { id: user.id, name: user.name } : null, "web");
   jar.set(SESSION_COOKIE, "", { ...cookieOptions(), maxAge: 0 });
   redirect("/login");
 }
@@ -86,19 +85,18 @@ export async function resetSampleAction(): Promise<ActionResult> {
     await seedDatabase(buildSampleStore(nowIso()), process.env.SAMPLE_USER_PASSWORD ?? "sample1234!");
     // 세션 테이블도 비워졌으므로, 샘플에 같은 ID 가 있으면 현재 관리자의 세션을 다시 만든다.
     const ua = (await headers()).get("user-agent") ?? "";
-    const sid = await createSession(user.id, ua);
-    (await cookies()).set(SESSION_COOKIE, sid, cookieOptions());
+    const created = await createSession(user.id, ua, { kind: "web" });
+    (await cookies()).set(SESSION_COOKIE, created.token, cookieOptions());
     return { message: "샘플 데이터를 초기화했습니다. 다른 사용자는 다시 로그인해야 합니다." };
   });
 }
 
 export async function issueCommandAction(input: IssueCommandInput): Promise<ActionResult> {
   return run(async () => {
-    const user = await getCurrentUser();
-    const cmd = await issueCommand(user, input);
-    // 고객에게는 제조사 원문 오류를 보여 주지 않는다(상태 요약만)
-    const customerMsg: Record<string, string> = { ACCEPTED: "접수됨 — 로봇 실행 확인 중", EXECUTING: "실행 중", SUCCEEDED: "완료", FAILED: "로봇이 명령을 수행하지 못했습니다. 담당자에게 문의하세요.", UNKNOWN: "결과를 확인하지 못했습니다. 잠시 뒤 로봇 상태를 확인하세요.", REQUESTED: "요청됨" };
-    return { message: isCustomer(user) ? (customerMsg[cmd.state] ?? cmd.state) : `${cmd.state}: ${cmd.message ?? ""}`, id: cmd.id };
+    const { user, session } = await getCurrentAuth();
+    // 입구·기기는 서버의 세션에서 정한다(클라이언트가 보낸 값은 쓰지 않는다)
+    const cmd = await issueCommand(user, { ...input, origin: { channel: session.kind, device: session.deviceName, sessionId: session.id } });
+    return { message: describeCommandResult(user, cmd), id: cmd.id };
   });
 }
 
@@ -231,13 +229,13 @@ export async function reissueInviteAction(targetId: string): Promise<ActionResul
     return { message: "초대 링크를 재발급했습니다(기존 세션 종료).", link };
   });
 }
-export async function addRecipientAction(siteId: string, input: { channel: "EMAIL" | "KAKAO"; address: string; minSeverity: Severity; hoursFrom: string; hoursTo: string; kinds?: NotifyKind[] }): Promise<ActionResult> {
+export async function addRecipientAction(siteId: string, input: { channel: NotifyChannel; address: string; minSeverity: Severity; hoursFrom: string; hoursTo: string; kinds?: NotifyKind[] }): Promise<ActionResult> {
   return run(async () => admin.addRecipient(await getCurrentUser(), siteId, input));
 }
 export async function updateRecipientAction(siteId: string, recipientId: string, patch: { kinds?: NotifyKind[]; minSeverity?: Severity; hoursFrom?: string; hoursTo?: string }): Promise<ActionResult> {
   return run(async () => admin.updateRecipient(await getCurrentUser(), siteId, recipientId, patch));
 }
-export async function subscribeMeAction(siteId: string, channel: "EMAIL" | "KAKAO", kinds?: NotifyKind[]): Promise<ActionResult> {
+export async function subscribeMeAction(siteId: string, channel: NotifyChannel, kinds?: NotifyKind[]): Promise<ActionResult> {
   return run(async () => {
     await notifySvc.subscribeMe(await getCurrentUser(), siteId, channel, kinds);
     return { message: "이 사업장의 알림을 받습니다." };
@@ -341,7 +339,7 @@ export async function alignFloorMapsAction(apply = false, floorIds: string[] = [
 }
 // ---- 알림(이메일·카카오톡) ----
 const sendResultMessage = (r: { status: string; reason: string }) => (r.status === "SENT" ? `보냈습니다 — ${r.reason}` : r.status === "MOCK_SENT" ? `모의 발송으로 기록했습니다 — ${r.reason}` : `실패 — ${r.reason}`);
-export async function testSelfNotifyAction(channel: "EMAIL" | "KAKAO"): Promise<ActionResult> {
+export async function testSelfNotifyAction(channel: NotifyChannel): Promise<ActionResult> {
   try {
     const r = await notifySvc.testSelf(await getCurrentUser(), channel);
     return r.status === "FAILED" ? { ok: false, error: sendResultMessage(r) } : { ok: true, message: sendResultMessage(r) };
@@ -356,6 +354,13 @@ export async function testRecipientAction(siteId: string, recipientId: string): 
   } catch (e) {
     return { ok: false, error: errorMessage(e) };
   }
+}
+/** 내 계정 → 로그인된 기기 → 끊기(그 세션만. 앱이면 푸시 기기도 함께). */
+export async function revokeMySessionAction(sessionId: string): Promise<ActionResult> {
+  return run(async () => {
+    await auth.revokeMySession(await getCurrentUser(), sessionId);
+    return { message: "해당 기기의 로그인을 끊었습니다." };
+  });
 }
 export async function unlinkKakaoAction(): Promise<ActionResult> {
   return run(async () => {

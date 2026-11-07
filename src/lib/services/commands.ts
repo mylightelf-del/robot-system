@@ -1,6 +1,6 @@
 import { isLiveRobot } from "@/lib/vendors";
 import { and, desc, eq, gt, inArray, notInArray } from "drizzle-orm";
-import type { Command, CommandType, User } from "@/lib/domain/types";
+import type { Command, CommandOrigin, CommandType, User } from "@/lib/domain/types";
 import { ALLOWED_BY_STATUS } from "@/lib/domain/commands";
 import { accessibleSiteIds, assertActive, assertCommandAllowed, assertRobotAccess, assertSiteAccess, isCustomer } from "@/lib/auth/authz";
 import { getDb, schema } from "@/lib/db/client";
@@ -17,8 +17,10 @@ export interface IssueCommandInput {
   params?: Record<string, unknown>;
   /** 샘플 시뮬레이션 시나리오. 실제 어댑터에서는 무시된다. */
   simulation?: "NORMAL" | "LOST_RESPONSE" | "REJECTED";
-  /** 같은 버튼 중복 클릭 방지용 클라이언트 키(선택). */
+  /** 같은 버튼 중복 클릭 방지용 클라이언트 키(선택. 앱 API 는 필수). */
   idempotencyKey?: string;
+  /** 어느 입구(웹/앱)·기기에서 낸 명령인지. 명령 행과 감사 기록에 남는다. */
+  origin?: CommandOrigin;
 }
 
 const PENDING: Command["state"][] = ["REQUESTED", "ACCEPTED", "EXECUTING"];
@@ -63,22 +65,25 @@ export async function issueCommand(user: User, input: IssueCommandInput): Promis
   const type = input.type;
   const now = nowIso();
   const settings = await loadSettings(db);
+  const origin: CommandOrigin = input.origin ?? { channel: "web", device: "", sessionId: null };
+  /** 감사 기록 파라미터: 명령 파라미터 + 입구(웹/앱)·기기. */
+  const auditParams = (p: Record<string, unknown>) => ({ ...p, origin });
 
   // 0) 사용 중지된 로봇 · 사업장 원격 제어 스위치(본사 관리자가 켜고 끈다) — 역할과 무관하게 거부, 감사 기록
   if (!robot.active) {
-    await audit(user, { siteId: robot.siteId, robotId: robot.id, action: `COMMAND:${type}`, params: input.params ?? {}, result: "DENIED", detail: "사용 중지된 로봇", vendorTraceId: null }, db);
+    await audit(user, { siteId: robot.siteId, robotId: robot.id, action: `COMMAND:${type}`, params: auditParams(input.params ?? {}), result: "DENIED", detail: "사용 중지된 로봇", vendorTraceId: null }, db);
     throw new ForbiddenError("사용 중지된 로봇입니다. 고급 설정에서 다시 사용 처리한 뒤 명령할 수 있습니다.");
   }
   const site = await db.query.sites.findFirst({ where: eq(schema.sites.id, robot.siteId) });
   if (!site?.remoteControlEnabled) {
-    await audit(user, { siteId: robot.siteId, robotId: robot.id, action: `COMMAND:${type}`, params: input.params ?? {}, result: "DENIED", detail: "사업장 원격 제어 꺼짐", vendorTraceId: null }, db);
+    await audit(user, { siteId: robot.siteId, robotId: robot.id, action: `COMMAND:${type}`, params: auditParams(input.params ?? {}), result: "DENIED", detail: "사업장 원격 제어 꺼짐", vendorTraceId: null }, db);
     throw new ForbiddenError("이 사업장은 원격 제어가 꺼져 있습니다. 본사 관리자가 관리 설정 → 원격 제어에서 켤 수 있습니다.");
   }
   // 1) 권한(역할·사업장·명령별) — 거부도 감사 기록에 남긴다.
   try {
     await assertCommandAllowed(user, robot.siteId, type, db);
   } catch (e) {
-    await audit(user, { siteId: robot.siteId, robotId: robot.id, action: `COMMAND:${type}`, params: input.params ?? {}, result: "DENIED", detail: (e as Error).message, vendorTraceId: null }, db);
+    await audit(user, { siteId: robot.siteId, robotId: robot.id, action: `COMMAND:${type}`, params: auditParams(input.params ?? {}), result: "DENIED", detail: (e as Error).message, vendorTraceId: null }, db);
     throw e;
   }
 
@@ -147,6 +152,7 @@ export async function issueCommand(user: User, input: IssueCommandInput): Promis
     message: null,
     vendorTraceId: null,
     simulation: adapter.isSimulation ? (input.simulation ?? "NORMAL") : null,
+    origin,
   };
   try {
     await db.insert(schema.commands).values({ ...cmd, idempotencyKey: input.idempotencyKey ?? null });
@@ -180,8 +186,14 @@ export async function issueCommand(user: User, input: IssueCommandInput): Promis
     result = "ERROR";
   }
   await db.update(schema.commands).set({ state: cmd.state, stateChangedAt: cmd.stateChangedAt, message: cmd.message, vendorTraceId: cmd.vendorTraceId }).where(eq(schema.commands.id, cmd.id));
-  await audit(user, { siteId: robot.siteId, robotId: robot.id, action: `COMMAND:${type}`, params, result, detail: cmd.message, vendorTraceId: cmd.vendorTraceId }, db);
+  await audit(user, { siteId: robot.siteId, robotId: robot.id, action: `COMMAND:${type}`, params: auditParams(params), result, detail: cmd.message, vendorTraceId: cmd.vendorTraceId }, db);
   return cmd;
+}
+
+/** 명령 결과를 사용자에게 보여 줄 문구. 고객에게는 제조사 원문 오류를 보여 주지 않는다(상태 요약만). 웹 액션·앱 API 공통. */
+export function describeCommandResult(user: Pick<User, "role">, cmd: Pick<Command, "state" | "message">): string {
+  const customerMsg: Record<string, string> = { ACCEPTED: "접수됨 — 로봇 실행 확인 중", EXECUTING: "실행 중", COMPLETED: "완료", FAILED: "로봇이 명령을 수행하지 못했습니다. 담당자에게 문의하세요.", UNKNOWN: "결과를 확인하지 못했습니다. 잠시 뒤 로봇 상태를 확인하세요.", REQUESTED: "요청됨" };
+  return isCustomer(user) ? (customerMsg[cmd.state] ?? cmd.state) : `${cmd.state}: ${cmd.message ?? ""}`;
 }
 
 /** 결과 불명 명령의 재시도 판단: 만료되었으면 재전송하지 않고 새 명령으로만 가능. */

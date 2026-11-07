@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { NOTIFY_KIND_LABEL, NOTIFY_KINDS, type CommandType, type NotifyKind, type Role, type Severity, type User } from "@/lib/domain/types";
+import { NOTIFY_CHANNEL_LABEL, NOTIFY_KIND_LABEL, NOTIFY_KINDS, type CommandType, type NotifyChannel, type NotifyKind, type Role, type Severity, type User } from "@/lib/domain/types";
 import { COMMAND_LABEL, ROLE_LABEL } from "@/lib/domain/status";
 import {
   addRecipientAction,
@@ -172,9 +172,9 @@ function RecipientKindsEditor({ siteId, recipient }: { siteId: string; recipient
   );
 }
 
-export function RecipientsPanel({ siteId, recipients, dedupeMinutes, escalateAfterMinutes, noActivityHours, kakaoUsers }: { siteId: string; recipients: { id: string; channel: "EMAIL" | "KAKAO"; address: string; minSeverity: Severity; hoursFrom: string; hoursTo: string; kinds: NotifyKind[] }[]; dedupeMinutes: number; escalateAfterMinutes: number; noActivityHours: number; kakaoUsers: { id: string; name: string; linked: boolean }[] }) {
+export function RecipientsPanel({ siteId, recipients, dedupeMinutes, escalateAfterMinutes, noActivityHours, kakaoUsers, pushUsers = [] }: { siteId: string; recipients: { id: string; channel: NotifyChannel; address: string; minSeverity: Severity; hoursFrom: string; hoursTo: string; kinds: NotifyKind[] }[]; dedupeMinutes: number; escalateAfterMinutes: number; noActivityHours: number; kakaoUsers: { id: string; name: string; linked: boolean }[]; pushUsers?: { id: string; name: string; hasDevice: boolean }[] }) {
   const { pending, result, run } = useAction();
-  const [channel, setChannel] = useState<"EMAIL" | "KAKAO">("EMAIL");
+  const [channel, setChannel] = useState<NotifyChannel>("EMAIL");
   const [address, setAddress] = useState("");
   const [kakaoUser, setKakaoUser] = useState(kakaoUsers[0]?.id ?? "");
   const [sev, setSev] = useState<Severity>("HIGH");
@@ -186,6 +186,10 @@ export function RecipientsPanel({ siteId, recipients, dedupeMinutes, escalateAft
   const [idleHours, setIdleHours] = useState(noActivityHours);
   const label = (r: { channel: string; address: string }) => {
     if (r.channel === "EMAIL") return r.address;
+    if (r.channel === "PUSH") {
+      const u = pushUsers.find((k) => k.id === r.address.slice(5));
+      return u ? `${u.name}${u.hasDevice ? "" : " (앱 기기 없음 — 본인이 앱에서 로그인·알림 허용)"}` : `${r.address} (사용자 없음)`;
+    }
     if (!r.address.startsWith("user:")) return `${r.address} (전화번호 알림톡 — 모의)`;
     const u = kakaoUsers.find((k) => k.id === r.address.slice(5));
     return u ? `${u.name}${u.linked ? "" : " (카카오톡 미연결 — 본인이 내 계정에서 연결)"}` : `${r.address} (사용자 없음)`;
@@ -196,7 +200,7 @@ export function RecipientsPanel({ siteId, recipients, dedupeMinutes, escalateAft
         {recipients.length === 0 && <li className="text-gray-500">수신자가 없습니다. 아래에서 추가하세요.</li>}
         {recipients.map((r) => (
           <li key={r.id} className="flex items-center gap-2 flex-wrap">
-            <span className="rounded bg-gray-100 px-1">{r.channel === "EMAIL" ? "이메일" : "카카오톡"}</span>
+            <span className="rounded bg-gray-100 px-1">{NOTIFY_CHANNEL_LABEL[r.channel]}</span>
             <span>{label(r)}</span>
             <span className="text-gray-500">등급 ≥ {r.minSeverity} · {r.hoursFrom}~{r.hoursTo} · {kindsSummary(r.kinds)}</span>
             <RecipientKindsEditor siteId={siteId} recipient={r} />
@@ -210,12 +214,21 @@ export function RecipientsPanel({ siteId, recipients, dedupeMinutes, escalateAft
         ))}
       </ul>
       <div className="flex flex-wrap gap-1 items-center">
-        <select className="border rounded px-1 py-0.5" value={channel} onChange={(e) => setChannel(e.target.value as "EMAIL" | "KAKAO")}>
+        <select className="border rounded px-1 py-0.5" value={channel} onChange={(e) => setChannel(e.target.value as NotifyChannel)}>
           <option value="EMAIL">이메일</option>
           <option value="KAKAO">카카오톡(사용자 본인)</option>
+          <option value="PUSH">앱 푸시(사용자 본인)</option>
         </select>
         {channel === "EMAIL" ? (
           <input className="border rounded px-1 py-0.5 w-48" placeholder="이메일 주소" value={address} onChange={(e) => setAddress(e.target.value)} />
+        ) : channel === "PUSH" ? (
+          <select className="border rounded px-1 py-0.5" value={kakaoUser} onChange={(e) => setKakaoUser(e.target.value)}>
+            {pushUsers.map((u) => (
+              <option key={u.id} value={u.id}>
+                {u.name}{u.hasDevice ? "" : " (앱 기기 없음)"}
+              </option>
+            ))}
+          </select>
         ) : (
           <select className="border rounded px-1 py-0.5" value={kakaoUser} onChange={(e) => setKakaoUser(e.target.value)}>
             {kakaoUsers.map((u) => (

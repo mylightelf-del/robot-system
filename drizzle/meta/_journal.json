@@ -92,6 +92,13 @@
       "when": 1794047505560,
       "tag": "0012_notify_kinds",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1794054674011,
+      "tag": "0013_app_sessions_push",
+      "breakpoints": true
     }
   ]
 }

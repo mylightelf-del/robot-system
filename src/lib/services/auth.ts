@@ -1,6 +1,7 @@
 import { and, eq, gt } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db/client";
-import { createSession, destroySession, destroyUserSessions } from "@/lib/auth/session";
+import { createSession, destroySession, destroySessionByToken, destroyUserSessions, listUserSessions, type SessionInfo } from "@/lib/auth/session";
+import type { SessionKind, User } from "@/lib/domain/types";
 import { hashPassword, validatePasswordPolicy, verifyPassword } from "@/lib/auth/password";
 import { addMinutes, nowIso } from "@/lib/util/time";
 import { ValidationError } from "@/lib/util/errors";
@@ -13,13 +14,21 @@ function lockMinutes(): number {
   return Number(process.env.LOGIN_LOCK_MINUTES ?? 15);
 }
 
-export type LoginResult = { ok: true; sessionId: string } | { ok: false; error: string };
+/** token 은 사용자에게 주는 원문(쿠키·앱 저장), sessionId 는 DB 의 해시 id(기기 목록·감사용). */
+export type LoginResult = { ok: true; token: string; sessionId: string; expiresAt: string } | { ok: false; error: string };
+
+export interface LoginOptions {
+  /** web(기본) 또는 app. 앱 세션은 만료가 길다. */
+  kind?: SessionKind;
+  /** 앱이 보낸 기기 이름(예: "Galaxy S24"). 없으면 User-Agent 요약. */
+  deviceName?: string;
+}
 
 /**
  * 로그인. 실패 사유(없는 계정/틀린 비밀번호/비활성)를 구분해 노출하지 않는다.
- * 연속 실패 시 잠금, 성공·실패·잠금은 감사 기록에 남긴다.
+ * 연속 실패 시 잠금, 성공·실패·잠금은 감사 기록에 남긴다(입구 web/app 과 기기 포함).
  */
-export async function login(emailRaw: string, password: string, userAgent: string): Promise<LoginResult> {
+export async function login(emailRaw: string, password: string, userAgent: string, opts: LoginOptions = {}): Promise<LoginResult> {
   const db = getDb();
   const email = emailRaw.trim().toLowerCase();
   const generic = { ok: false as const, error: "이메일 또는 비밀번호가 올바르지 않습니다." };
@@ -47,14 +56,35 @@ export async function login(emailRaw: string, password: string, userAgent: strin
     return generic;
   }
   await db.update(schema.users).set({ failedLogins: 0, lockedUntil: null, lastLoginAt: now }).where(eq(schema.users.id, u.id));
-  const sessionId = await createSession(u.id, userAgent);
-  await audit({ id: u.id, name: u.name }, { siteId: null, robotId: null, action: "AUTH:LOGIN", params: {}, result: "OK", detail: null, vendorTraceId: null }, db);
-  return { ok: true, sessionId };
+  const kind = opts.kind ?? "web";
+  const created = await createSession(u.id, userAgent, { kind, deviceName: opts.deviceName });
+  await audit({ id: u.id, name: u.name }, { siteId: null, robotId: null, action: "AUTH:LOGIN", params: { channel: kind, sessionId: created.id }, result: "OK", detail: kind === "app" ? `앱 · ${opts.deviceName?.trim() || "기기 이름 없음"}` : null, vendorTraceId: null }, db);
+  return { ok: true, token: created.token, sessionId: created.id, expiresAt: created.expiresAt };
 }
 
-export async function logout(sessionId: string | undefined, user: { id: string; name: string } | null): Promise<void> {
-  if (sessionId) await destroySession(sessionId);
-  if (user) await audit(user, { siteId: null, robotId: null, action: "AUTH:LOGOUT", params: {}, result: "OK", detail: null, vendorTraceId: null });
+/** 로그아웃: 토큰 원문으로 그 세션만 지운다(앱 푸시 기기도 함께). */
+export async function logout(token: string | undefined, user: { id: string; name: string } | null, kind: SessionKind = "web"): Promise<void> {
+  if (token) await destroySessionByToken(token);
+  if (user) await audit(user, { siteId: null, robotId: null, action: "AUTH:LOGOUT", params: { channel: kind }, result: "OK", detail: null, vendorTraceId: null });
+}
+
+export type SessionRow = SessionInfo & { current: boolean; pushDevices: number };
+
+/** 내 계정의 '로그인된 기기' — 웹·앱 세션 전부. 토큰 원문은 없다. */
+export async function listMySessions(user: User, currentSessionId: string | null): Promise<SessionRow[]> {
+  const db = getDb();
+  const rows = await listUserSessions(user.id);
+  const devices = await db.select({ sessionId: schema.pushDevices.sessionId }).from(schema.pushDevices).where(eq(schema.pushDevices.userId, user.id));
+  return rows.map((s) => ({ ...s, current: s.id === currentSessionId, pushDevices: devices.filter((d) => d.sessionId === s.id).length }));
+}
+
+/** 내 기기 끊기(그 세션만). 다른 사람의 세션은 지울 수 없다. */
+export async function revokeMySession(user: User, sessionId: string): Promise<void> {
+  const db = getDb();
+  const s = await db.query.sessions.findFirst({ where: and(eq(schema.sessions.id, sessionId), eq(schema.sessions.userId, user.id)) });
+  if (!s) throw new ValidationError("해당 기기(세션)를 찾을 수 없습니다.");
+  await destroySession(sessionId);
+  await audit(user, { siteId: null, robotId: null, action: "AUTH:REVOKE_SESSION", params: { sessionId, channel: s.kind, device: s.deviceName }, result: "OK", detail: null, vendorTraceId: null }, db);
 }
 
 export async function getInviteInfo(token: string): Promise<{ name: string; email: string } | null> {

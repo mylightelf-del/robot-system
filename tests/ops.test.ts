@@ -18,9 +18,13 @@ describe("배포 전 점검·운영 보조", () => {
     expect(codes).toEqual(expect.arrayContaining(["DATABASE_URL", "APP_BASE_URL", "ALLOW_SAMPLE_RESET", "PUDU_CLUSTER", "PUDU_SHOP_IDS"]));
     expect(summarize(bad).errors).toBeGreaterThanOrEqual(5);
 
-    const good = checkEnv({ DATABASE_URL: "postgres://x", APP_ENV: "production", APP_BASE_URL: "https://robot.example.com", ALLOW_SAMPLE_RESET: "false", VENDOR_MODE: "live", PUDU_API_APP_KEY: "k", PUDU_API_APP_SECRET: "s", PUDU_API_CLUSTER: "sea", PUDU_SHOP_IDS: "602550006,641450007", PUDU_CALLBACK_CODE: "abcdefghijklmnopqrstuvwxyz012345", DOMAIN: "robot.example.com", ACME_EMAIL: "ops@example.com", MAIL_MODE: "live", MAIL_FROM: "관제 <noreply@robot.example.com>", SES_ACCESS_KEY_ID: "a", SES_SECRET_ACCESS_KEY: "b" } as unknown as NodeJS.ProcessEnv);
+    const good = checkEnv({ DATABASE_URL: "postgres://x", APP_ENV: "production", APP_BASE_URL: "https://robot.example.com", ALLOW_SAMPLE_RESET: "false", VENDOR_MODE: "live", PUDU_API_APP_KEY: "k", PUDU_API_APP_SECRET: "s", PUDU_API_CLUSTER: "sea", PUDU_SHOP_IDS: "602550006,641450007", PUDU_CALLBACK_CODE: "abcdefghijklmnopqrstuvwxyz012345", DOMAIN: "robot.example.com", ACME_EMAIL: "ops@example.com", MAIL_MODE: "live", MAIL_FROM: "관제 <noreply@robot.example.com>", SES_ACCESS_KEY_ID: "a", SES_SECRET_ACCESS_KEY: "b", FCM_SERVICE_ACCOUNT_JSON: JSON.stringify({ project_id: "p", client_email: "e", private_key: "k" }) } as unknown as NodeJS.ProcessEnv);
     expect(summarize(good).errors).toBe(0);
     expect(good.find((f) => f.code === "ENV")?.level).toBe("ok");
+    // 앱 푸시(FCM): 운영에서 키 없음 = 주의, 키가 JSON 이 아니거나 필수 필드가 없으면 오류
+    expect(checkEnv({ DATABASE_URL: "postgres://x", APP_ENV: "production", APP_BASE_URL: "https://robot.example.com" } as unknown as NodeJS.ProcessEnv).find((f) => f.code === "FCM")?.level).toBe("warn");
+    expect(checkEnv({ DATABASE_URL: "postgres://x", FCM_SERVICE_ACCOUNT_JSON: "not-json" } as unknown as NodeJS.ProcessEnv).find((f) => f.code === "FCM_SERVICE_ACCOUNT")?.level).toBe("error");
+    expect(checkEnv({ DATABASE_URL: "postgres://x", FCM_SERVICE_ACCOUNT_JSON: JSON.stringify({ project_id: "p" }) } as unknown as NodeJS.ProcessEnv).find((f) => f.code === "FCM_SERVICE_ACCOUNT")?.level).toBe("error");
     // 알림: live 인데 키 없음 = 오류, 카카오 키만 있고 암호화 키 없음 = 오류, 운영에서 이메일 모의 = 주의
     const notif = checkEnv({ DATABASE_URL: "postgres://x", APP_ENV: "production", APP_BASE_URL: "https://robot.example.com", MAIL_MODE: "live", KAKAO_REST_API_KEY: "k" } as unknown as NodeJS.ProcessEnv);
     expect(notif.filter((f) => f.level === "error").map((f) => f.code)).toEqual(expect.arrayContaining(["MAIL_FROM", "SES_KEY", "TOKEN_ENCRYPTION_KEY"]));

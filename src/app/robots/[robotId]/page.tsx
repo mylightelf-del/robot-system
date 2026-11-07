@@ -116,7 +116,10 @@ export default async function RobotPage({ params }: { params: Promise<{ robotId:
                       return (
                         <tr key={c.id}>
                           <td className="whitespace-nowrap">{formatDateTime(c.requestedAt, tz)}</td>
-                          <td>{COMMAND_LABEL[c.type]}</td>
+                          <td>
+                            {COMMAND_LABEL[c.type]}
+                            {c.origin?.channel === "app" && <span className="ml-1 rounded bg-blue-50 px-1 text-xs text-blue-800" title={c.origin.device}>앱</span>}
+                          </td>
                           <td><CommandStateBadge state={c.state} /></td>
                           <td className="text-xs">{c.message}</td>
                           <td className="font-mono text-xs">{c.vendorTraceId ?? "-"}</td>

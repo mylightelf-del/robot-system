@@ -1,22 +1,23 @@
-import { and, eq, inArray, or } from "drizzle-orm";
-import { NOTIFY_KINDS, type NotificationRecipient, type NotifyKind, type User } from "@/lib/domain/types";
+import { and, desc, eq, gt, inArray, isNull, or } from "drizzle-orm";
+import { NOTIFY_KINDS, type NotificationRecipient, type NotifyChannel, type NotifyKind, type User } from "@/lib/domain/types";
 import { accessibleSiteIds, assertActive, assertAdmin, assertSiteAccess } from "@/lib/auth/authz";
 import { getDb, schema } from "@/lib/db/client";
 import { listSitesByIds } from "@/lib/db/repo";
 import { channelModes, KAKAO_USER_PREFIX, sendTestMessage } from "@/lib/notify/notifier";
 import { kakaoConfig, kakaoLinkStatus, unlinkKakao } from "@/lib/notify/kakao";
 import { emailConfig } from "@/lib/notify/email";
+import { hasActiveDevice, listMyDevices, pushConfig } from "@/lib/notify/push";
 import { NotFoundError, ValidationError } from "@/lib/util/errors";
 import { audit } from "./audit";
 
 /** 알림 채널 상태(화면 표시용, 비밀값 없음). */
 export function notifyStatus() {
   const e = emailConfig();
-  return { modes: channelModes(), emailFrom: e?.from ?? null, kakaoConfigured: !!kakaoConfig() };
+  return { modes: channelModes(), emailFrom: e?.from ?? null, kakaoConfigured: !!kakaoConfig(), pushConfigured: !!pushConfig() };
 }
 
-/** 내 이메일·내 카카오톡으로 시험 발송(누구나 자기 자신에게만). */
-export async function testSelf(user: User, channel: "EMAIL" | "KAKAO") {
+/** 내 이메일·내 카카오톡·내 앱(푸시)으로 시험 발송(누구나 자기 자신에게만). */
+export async function testSelf(user: User, channel: NotifyChannel) {
   assertActive(user);
   const r = channel === "EMAIL" ? { channel, address: user.email } : { channel, address: `${KAKAO_USER_PREFIX}${user.id}` };
   const res = await sendTestMessage(r, user.name);
@@ -61,7 +62,29 @@ export async function assertKakaoAddress(address: string) {
   if (!u || !u.active) throw new ValidationError("카카오톡 수신자는 활성 사용자여야 합니다.");
 }
 
-/** 내 구독: 내 이메일 또는 내 카카오톡(user:나)이 수신자로 등록된 사업장(접근 가능한 사업장만). */
+/** 푸시 수신 주소 검증: "user:<활성 사용자 ID>" 만. 기기 등록 여부는 발송 때 판단한다(미등록이면 기록에 '기기 없음'). */
+export async function assertPushAddress(address: string) {
+  if (!address.startsWith(KAKAO_USER_PREFIX)) throw new ValidationError("푸시 수신자는 사용자(user:ID)만 가능합니다.");
+  const id = address.slice(KAKAO_USER_PREFIX.length);
+  const u = await getDb().query.users.findFirst({ where: eq(schema.users.id, id) });
+  if (!u || !u.active) throw new ValidationError("푸시 수신자는 활성 사용자여야 합니다.");
+}
+
+/** 푸시 수신자로 고를 수 있는 사용자(활성) + 앱 기기 등록 여부. */
+export async function pushCandidates(): Promise<{ id: string; name: string; hasDevice: boolean }[]> {
+  const db = getDb();
+  const users = await db.select({ id: schema.users.id, name: schema.users.name, active: schema.users.active }).from(schema.users);
+  const withDevice = new Set((await db.select({ id: schema.pushDevices.userId }).from(schema.pushDevices).where(isNull(schema.pushDevices.disabledAt))).map((d) => d.id));
+  return users.filter((u) => u.active).map((u) => ({ id: u.id, name: u.name, hasDevice: withDevice.has(u.id) }));
+}
+
+/** 내 앱 기기(푸시) 현황 — 내 계정 화면용. 토큰은 돌려주지 않는다. */
+export async function myPushStatus(user: User) {
+  const devices = await listMyDevices(user);
+  return { configured: !!pushConfig(), devices, active: devices.filter((d) => !d.disabledAt).length };
+}
+
+/** 내 구독: 내 이메일 또는 내 카카오톡·앱(user:나)이 수신자로 등록된 사업장(접근 가능한 사업장만). */
 export async function mySubscriptions(user: User): Promise<(NotificationRecipient & { siteId: string; siteName: string })[]> {
   assertActive(user);
   const db = getDb();
@@ -70,10 +93,27 @@ export async function mySubscriptions(user: User): Promise<(NotificationRecipien
   const rows = await db
     .select()
     .from(schema.notificationRecipients)
-    .where(and(inArray(schema.notificationRecipients.siteId, siteIds), or(and(eq(schema.notificationRecipients.channel, "EMAIL"), eq(schema.notificationRecipients.address, user.email)), and(eq(schema.notificationRecipients.channel, "KAKAO"), eq(schema.notificationRecipients.address, `${KAKAO_USER_PREFIX}${user.id}`)))))
+    .where(and(inArray(schema.notificationRecipients.siteId, siteIds), or(and(eq(schema.notificationRecipients.channel, "EMAIL"), eq(schema.notificationRecipients.address, user.email)), and(inArray(schema.notificationRecipients.channel, ["KAKAO", "PUSH"]), eq(schema.notificationRecipients.address, `${KAKAO_USER_PREFIX}${user.id}`)))))
     .orderBy(schema.notificationRecipients.siteId, schema.notificationRecipients.channel);
   const names = new Map((await listSitesByIds(siteIds, db)).map((s) => [s.id, s.name]));
   return rows.map((r) => ({ ...r, siteName: names.get(r.siteId) ?? r.siteId }));
+}
+
+/**
+ * 내 알림함(앱): 내 이메일·내 사용자 ID(카카오톡·푸시)로 보낸 발송 기록. 억제된 것은 빼고 실제/모의 발송·실패만.
+ * since(ISO) 이후만, 최신순, 최대 limit. 장애 통보는 incidentId 로 상세에 연결한다.
+ */
+export async function myNotifications(user: User, opts: { since?: string; limit?: number } = {}) {
+  assertActive(user);
+  const db = getDb();
+  const mine = or(eq(schema.notificationLogs.recipient, user.email), eq(schema.notificationLogs.recipient, `${KAKAO_USER_PREFIX}${user.id}`));
+  const rows = await db
+    .select()
+    .from(schema.notificationLogs)
+    .where(and(mine, inArray(schema.notificationLogs.status, ["SENT", "MOCK_SENT", "FAILED"]), opts.since ? gt(schema.notificationLogs.at, opts.since) : undefined))
+    .orderBy(desc(schema.notificationLogs.at))
+    .limit(Math.min(Math.max(opts.limit ?? 50, 1), 200));
+  return rows.map((r) => ({ id: r.id, at: r.at, channel: r.channel, status: r.status, kind: r.kind, refId: r.refId, incidentId: r.incidentId, summary: r.reason.split(" — ")[0] }));
 }
 
 function normalizeKinds(kinds: NotifyKind[] | undefined): NotifyKind[] {
@@ -82,8 +122,8 @@ function normalizeKinds(kinds: NotifyKind[] | undefined): NotifyKind[] {
   return NOTIFY_KINDS.filter((k) => set.has(k));
 }
 
-/** 내가 접근할 수 있는 사업장의 알림을 내 이메일/카카오톡으로 받기(스스로 등록). 사업장당 채널별 한 번. */
-export async function subscribeMe(user: User, siteId: string, channel: "EMAIL" | "KAKAO", kinds?: NotifyKind[]): Promise<void> {
+/** 내가 접근할 수 있는 사업장의 알림을 내 이메일/카카오톡/앱 푸시로 받기(스스로 등록). 사업장당 채널별 한 번. */
+export async function subscribeMe(user: User, siteId: string, channel: NotifyChannel, kinds?: NotifyKind[]): Promise<void> {
   assertActive(user);
   const db = getDb();
   await assertSiteAccess(user, siteId, db);
@@ -91,6 +131,7 @@ export async function subscribeMe(user: User, siteId: string, channel: "EMAIL" |
   const exists = await db.query.notificationRecipients.findFirst({ where: and(eq(schema.notificationRecipients.siteId, siteId), eq(schema.notificationRecipients.channel, channel), eq(schema.notificationRecipients.address, address)) });
   if (exists) throw new ValidationError("이미 이 사업장의 수신자로 등록되어 있습니다.");
   if (channel === "KAKAO" && !(await kakaoLinkStatus(user.id)).linked) throw new ValidationError("먼저 카카오톡을 연결하세요.");
+  if (channel === "PUSH" && !(await hasActiveDevice(user.id))) throw new ValidationError("먼저 앱에서 로그인하고 알림을 허용하세요(등록된 앱 기기가 없습니다).");
   const k = normalizeKinds(kinds);
   await db.insert(schema.notificationRecipients).values({ id: `rcp-${Math.random().toString(36).slice(2, 10)}`, siteId, channel, address, minSeverity: "MEDIUM", hoursFrom: "00:00", hoursTo: "23:59", kinds: k });
   await audit(user, { siteId, robotId: null, action: "NOTIFY:SUBSCRIBE_SELF", params: { channel, kinds: k }, result: "OK", detail: null, vendorTraceId: null }, db);

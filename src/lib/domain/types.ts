@@ -241,6 +241,18 @@ export interface Command {
   vendorTraceId: string | null;
   /** 샘플 어댑터 시나리오(시뮬레이션 전용). */
   simulation: "NORMAL" | "LOST_RESPONSE" | "REJECTED" | null;
+  /** 어느 입구(웹/앱)·어느 기기에서 낸 명령인지. 감사 기록에도 같은 값이 남는다. 이전 기록은 null. */
+  origin?: CommandOrigin | null;
+}
+
+/** 명령·로그인 입구. web = 브라우저(쿠키 세션), app = 모바일 앱(Bearer 토큰). */
+export type SessionKind = "web" | "app";
+export interface CommandOrigin {
+  channel: SessionKind;
+  /** 기기 이름(앱이 보낸 값 또는 User-Agent 요약). */
+  device: string;
+  /** 세션 ID(토큰 해시). 기기 목록과 대조용. */
+  sessionId: string | null;
 }
 
 export type Severity = "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
@@ -255,10 +267,14 @@ export interface IncidentAction {
   internal: boolean;
 }
 
+/** 알림 채널. PUSH 는 앱에 로그인한 기기로 보내는 푸시(주소는 카카오와 같은 "user:<사용자 ID>"). */
+export type NotifyChannel = "EMAIL" | "KAKAO" | "PUSH";
+export const NOTIFY_CHANNEL_LABEL: Record<NotifyChannel, string> = { EMAIL: "이메일", KAKAO: "카카오톡", PUSH: "앱 푸시" };
+
 export interface NotificationLog {
   id: string;
   at: string;
-  channel: "EMAIL" | "KAKAO";
+  channel: NotifyChannel;
   recipient: string;
   /** SENT: 실제 발송(공급사 접수), MOCK_SENT: 모의(설정 전), SUPPRESSED: 설정으로 억제, FAILED: 발송 실패 */
   status: "SENT" | "MOCK_SENT" | "SUPPRESSED" | "FAILED";
@@ -454,7 +470,7 @@ export const NOTIFY_KIND_LABEL: Record<NotifyKind, string> = { INCIDENT: "장애
 
 export interface NotificationRecipient {
   id: string;
-  channel: "EMAIL" | "KAKAO";
+  channel: NotifyChannel;
   address: string;
   minSeverity: Severity;
   hoursFrom: string; // "HH:mm"

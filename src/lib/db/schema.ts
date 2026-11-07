@@ -11,6 +11,7 @@ import { boolean, customType, doublePrecision, index, integer, jsonb, pgTable, p
 import type { ReportKind } from "@/lib/reports/schedule";
 import type {
   CleanMode,
+  CommandOrigin,
   CommandState,
   CommandType,
   CommonStatus,
@@ -30,7 +31,9 @@ import type {
   RunResult,
   ScheduleExecutor,
   Severity,
+  NotifyChannel,
   NotifyKind,
+  SessionKind,
   Vendor,
 } from "@/lib/domain/types";
 
@@ -281,6 +284,8 @@ export const commands = pgTable(
     vendorTraceId: text(),
     simulation: text().$type<"NORMAL" | "LOST_RESPONSE" | "REJECTED" | null>(),
     idempotencyKey: text(),
+    /** 어느 입구(웹/앱)·기기에서 낸 명령인지. */
+    origin: jsonb().$type<CommandOrigin>(),
   },
   (t) => [uniqueIndex("commands_idempotency_key").on(t.idempotencyKey), index("commands_robot_idx").on(t.robotId, t.requestedAt), index("commands_robot_state_idx").on(t.robotId, t.state)],
 );
@@ -335,7 +340,7 @@ export const notificationLogs = pgTable("notification_logs", {
   /** 장애 통보일 때만. 그 밖의 통보(미실행·무실적·보고서)는 null 이고 kind·refId 로 구분한다. */
   incidentId: text().references(() => incidents.id),
   at: isoTimestamp().notNull(),
-  channel: text().$type<"EMAIL" | "KAKAO">().notNull(),
+  channel: text().$type<NotifyChannel>().notNull(),
   recipient: text().notNull(),
   status: text().$type<"SENT" | "MOCK_SENT" | "SUPPRESSED" | "FAILED">().notNull(),
   reason: text().notNull().default(""),
@@ -481,8 +486,38 @@ export const sessions = pgTable(
     expiresAt: isoTimestamp().notNull(),
     lastSeenAt: isoTimestamp().notNull(),
     userAgent: text().notNull().default(""),
+    /** web = 브라우저 쿠키, app = 모바일 앱 Bearer 토큰(만료가 더 길다). */
+    kind: text().$type<SessionKind>().notNull().default("web"),
+    /** 기기 이름(앱이 보낸 값 또는 User-Agent 요약). 내 계정의 '로그인된 기기' 에 표시. */
+    deviceName: text().notNull().default(""),
   },
   (t) => [index("sessions_user_idx").on(t.userId), index("sessions_expires_idx").on(t.expiresAt)],
+);
+
+/**
+ * 앱 푸시 기기(FCM 등록 토큰). 앱 세션에 묶여 있어 로그아웃·기기 끊기·사용자 비활성화 시 함께 지워진다.
+ * FCM 이 "등록 해제됨" 을 돌려주면 disabledAt 을 찍고 더 보내지 않는다(앱 삭제 뒤 정리).
+ */
+export const pushDevices = pgTable(
+  "push_devices",
+  {
+    id: text().primaryKey(),
+    userId: text()
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    sessionId: text()
+      .notNull()
+      .references(() => sessions.id, { onDelete: "cascade" }),
+    token: text().notNull(),
+    platform: text().$type<"android" | "ios">().notNull(),
+    appVersion: text().notNull().default(""),
+    deviceName: text().notNull().default(""),
+    createdAt: isoTimestamp().notNull(),
+    lastSeenAt: isoTimestamp().notNull(),
+    disabledAt: isoTimestamp(),
+    lastError: text(),
+  },
+  (t) => [uniqueIndex("push_devices_token_key").on(t.token), index("push_devices_user_idx").on(t.userId)],
 );
 
 /**
@@ -518,7 +553,7 @@ export const notificationRecipients = pgTable("notification_recipients", {
   siteId: text()
     .notNull()
     .references(() => sites.id),
-  channel: text().$type<"EMAIL" | "KAKAO">().notNull(),
+  channel: text().$type<NotifyChannel>().notNull(),
   address: text().notNull(),
   minSeverity: text().$type<Severity>().notNull(),
   hoursFrom: text().notNull().default("00:00"),

@@ -6,16 +6,18 @@ import { getRobot, getSite, getUser } from "@/lib/db/repo";
 import { canAccessSite } from "@/lib/auth/authz";
 import { emailConfig, renderEmail, sendEmail, type EmailAttachment } from "./email";
 import { kakaoConfig, sendKakaoToUser } from "./kakao";
+import { pushConfig, sendPushToUser } from "./push";
 
 /**
  * 알림 발송 모듈(교체 가능).
  * - 이메일: AWS SES(MAIL_MODE=live + 설정) → 실제 발송, 아니면 모의. 첨부(보고서 파일)는 이메일에만 붙는다.
  * - 카카오톡: 수신 주소가 "user:<사용자 ID>" 이고 카카오 연동이 설정되면 그 사용자 본인에게 '나에게 보내기'. 전화번호 수신(알림톡)은 발송대행사 선정 전이라 모의.
+ * - 앱 푸시(PUSH): 주소는 카카오와 같은 "user:<사용자 ID>". 그 사용자가 앱에 로그인한 기기(push_devices)로 FCM 발송. 설정 전에는 모의.
  * - 수신자는 통보 종류(kinds)·등급·시간대로 거른다. 발송 결과는 notification_logs 에 SENT / MOCK_SENT / SUPPRESSED / FAILED 로 남는다.
  */
 export type ChannelMode = "live" | "mock";
-export function channelModes(): { EMAIL: ChannelMode; KAKAO: ChannelMode } {
-  return { EMAIL: emailConfig() ? "live" : "mock", KAKAO: kakaoConfig() ? "live" : "mock" };
+export function channelModes(): { EMAIL: ChannelMode; KAKAO: ChannelMode; PUSH: ChannelMode } {
+  return { EMAIL: emailConfig() ? "live" : "mock", KAKAO: kakaoConfig() ? "live" : "mock", PUSH: pushConfig() ? "live" : "mock" };
 }
 
 export const KAKAO_USER_PREFIX = "user:";
@@ -25,8 +27,10 @@ export interface Message {
   title: string; // 본문 머리말
   lines: string[]; // "항목: 값"
   url: string; // 관제 화면 링크
-  /** 이메일 첨부(보고서 PPT·Excel 등). 카카오톡에는 붙지 않고 링크만 간다. */
+  /** 이메일 첨부(보고서 PPT·Excel 등). 카카오톡·푸시에는 붙지 않고 링크만 간다. */
   attachments?: EmailAttachment[];
+  /** 푸시 딥링크용(통보 종류·대상 ID·사업장). notifyRecipients 가 채운다. */
+  meta?: { kind: NotifyKind; refId: string | null; siteId: string };
 }
 
 /** 수신자 한 명에게 실제/모의 발송. */
@@ -36,6 +40,14 @@ export async function deliver(r: Pick<NotificationRecipient, "channel" | "addres
     if (modes.EMAIL === "mock") return { status: "MOCK_SENT", reason: "모의 발송(이메일 설정 전 — 실제 전송 없음)" };
     const { text, html } = renderEmail(m.title, m.lines, m.url);
     const res = await sendEmail(r.address, m.subject, text, html, m.attachments);
+    return { status: res.ok ? "SENT" : "FAILED", reason: res.reason };
+  }
+  if (r.channel === "PUSH") {
+    if (!r.address.startsWith(KAKAO_USER_PREFIX)) return { status: "FAILED", reason: "푸시 수신자 주소는 user:<사용자 ID> 여야 합니다." };
+    if (modes.PUSH === "mock") return { status: "MOCK_SENT", reason: "모의 발송(FCM 설정 전 — 실제 전송 없음)" };
+    // 알림창에는 제목과 첫 두 줄만. 상세는 앱이 열려서 서버에서 받는다.
+    const data: Record<string, string> = { url: m.url, kind: m.meta?.kind ?? "", refId: m.meta?.refId ?? "", siteId: m.meta?.siteId ?? "" };
+    const res = await sendPushToUser(r.address.slice(KAKAO_USER_PREFIX.length), { title: m.title, body: m.lines.slice(0, 2).join(" · "), data });
     return { status: res.ok ? "SENT" : "FAILED", reason: res.reason };
   }
   if (!r.address.startsWith(KAKAO_USER_PREFIX)) return { status: "MOCK_SENT", reason: "모의 발송(전화번호 알림톡 — 발송대행사 선정 전)" };
@@ -100,8 +112,8 @@ export async function notifyRecipients(setting: NotificationSetting | undefined,
       suppress(extra);
       continue;
     }
-    // 카카오톡(사용자 본인) 수신자는 보낼 때마다 활성·사업장 접근을 다시 확인한다(비활성화·권한 회수 뒤에도 계속 받는 일 방지)
-    if (r.channel === "KAKAO" && r.address.startsWith(KAKAO_USER_PREFIX)) {
+    // 카카오톡·푸시(사용자 본인) 수신자는 보낼 때마다 활성·사업장 접근을 다시 확인한다(비활성화·권한 회수 뒤에도 계속 받는 일 방지)
+    if ((r.channel === "KAKAO" || r.channel === "PUSH") && r.address.startsWith(KAKAO_USER_PREFIX)) {
       const u = await getUser(r.address.slice(KAKAO_USER_PREFIX.length));
       if (!u || !u.active || !(await canAccessSite(u, siteId))) {
         suppress("수신자 비활성 또는 이 사업장 권한 없음");
@@ -109,7 +121,7 @@ export async function notifyRecipients(setting: NotificationSetting | undefined,
       }
     }
     message ??= await buildMessage();
-    const res = await deliver(r, message);
+    const res = await deliver(r, { ...message, meta: { kind: opts.kind, refId: opts.refId ?? null, siteId } });
     logs.push({ ...base, status: res.status, reason: `${opts.label} — ${res.reason}` });
   }
   return logs;

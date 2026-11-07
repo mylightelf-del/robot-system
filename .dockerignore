@@ -7,3 +7,6 @@ docs/screenshots
 .env.*
 !.env.example
 *.log
+
+# 모바일 앱(Expo)은 서버 이미지에 넣지 않는다
+mobile
