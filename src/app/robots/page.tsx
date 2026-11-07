@@ -9,8 +9,11 @@ import { formatDateTime, nowIso, relativeFromNow } from "@/lib/util/time";
 import { MODEL_LABEL, VENDOR_LABEL } from "@/lib/domain/commands";
 import { SiteFilter } from "@/components/SiteFilter";
 
-export default async function RobotsPage({ searchParams }: { searchParams: Promise<{ site?: string }> }) {
-  const { site } = await searchParams;
+const STATUS_FILTER_LABEL: Record<string, string> = { CLEANING: "청소 중", PAUSED: "일시정지", RETURNING: "복귀 중", CHARGING: "충전", IDLE: "대기", ERROR: "오류", OFFLINE: "통신 끊김", UNKNOWN: "상태 불명" };
+
+export default async function RobotsPage({ searchParams }: { searchParams: Promise<{ site?: string; status?: string }> }) {
+  const { site, status } = await searchParams;
+  const statusFilter = (status ?? "").split(",").map((x) => x.trim()).filter((x) => x in STATUS_FILTER_LABEL);
   const user = await getCurrentUser();
   let rows;
   let sites;
@@ -20,10 +23,15 @@ export default async function RobotsPage({ searchParams }: { searchParams: Promi
   } catch (e) {
     return <AccessDenied reason={e instanceof AppError ? e.message : "접근할 수 없습니다."} />;
   }
+  if (statusFilter.length) rows = rows.filter((r) => statusFilter.includes(r.status.common));
   const now = nowIso();
   return (
     <>
-      <PageTitle title="로봇 목록" subtitle={`${rows.length}대`} right={<SiteFilter sites={sites} current={site ?? ""} basePath="/robots" />} />
+      <PageTitle
+        title="로봇 목록"
+        subtitle={statusFilter.length ? <>{statusFilter.map((k) => STATUS_FILTER_LABEL[k]).join("·")} {rows.length}대 · <Link href={`/robots${site ? `?site=${site}` : ""}`} className="underline">전체 보기</Link></> : `${rows.length}대`}
+        right={<SiteFilter sites={sites} current={site ?? ""} basePath="/robots" extra={status ? `status=${status}` : ""} />}
+      />
       <Card>
         {rows.length === 0 ? (
           <Empty>표시할 로봇이 없습니다.</Empty>

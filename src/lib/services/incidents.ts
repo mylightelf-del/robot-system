@@ -9,7 +9,8 @@ import { newId } from "@/lib/util/random";
 import { nowIso } from "@/lib/util/time";
 import { audit } from "./audit";
 import { isLiveRobot } from "@/lib/vendors";
-import { actionGuideFor } from "@/lib/vendors/pudu/mapping";
+import { actionGuideFor, customerMessageFor, PUDU_ERROR_MESSAGES } from "@/lib/vendors/pudu/mapping";
+import { SEVERITIES } from "./admin";
 import { sniffImageType } from "./sites";
 
 /** 고객 화면용 장애 뷰: 오류 원문·내부 메모·통신 로그를 제거한다. */
@@ -581,4 +582,71 @@ export async function incidentPhotosFor(user: User, incidentIds: string[], db: D
     out.set(r.incidentId, [...(out.get(r.incidentId) ?? []), r]);
   }
   return out;
+}
+
+// ---- 장애 등급 커스텀(본사 관리자)
+export interface SeverityRuleRow {
+  code: string;
+  message: string;
+  /** 설정된 등급(없으면 null → 제조사 등급 매핑 사용). */
+  severity: Severity | null;
+  note: string;
+  updatedAt: string | null;
+  /** 최근 90일 발생 건수(참고). */
+  recentCount: number;
+}
+
+/** 등급 설정 화면용: 지금까지 본 장애 코드 + 알려진 PUDU 코드 + 샘플 코드. */
+export async function listSeverityRules(user: User): Promise<SeverityRuleRow[]> {
+  assertActive(user);
+  assertAdmin(user);
+  const db = getDb();
+  const since = new Date(Date.now() - 90 * 86400_000).toISOString();
+  const seen = await db.select({ code: schema.incidents.code, n: sql<number>`count(*)::int` }).from(schema.incidents).where(gte(schema.incidents.occurredAt, since)).groupBy(schema.incidents.code);
+  const allSeen = await db.selectDistinct({ code: schema.incidents.code }).from(schema.incidents);
+  const overrides = await db.select().from(schema.severityOverrides);
+  const codes = new Set<string>([...allSeen.map((r) => r.code), ...Object.keys(PUDU_ERROR_MESSAGES), ...SIMULATABLE_CODES.map((c) => c.code), ...overrides.map((o) => o.code)]);
+  return Array.from(codes)
+    .sort((a, b) => a.localeCompare(b))
+    .map((code) => {
+      const o = overrides.find((x) => x.code === code);
+      return { code, message: customerMessageFor(code), severity: o?.severity ?? null, note: o?.note ?? "", updatedAt: o?.updatedAt ?? null, recentCount: seen.find((r) => r.code === code)?.n ?? 0 };
+    });
+}
+
+/**
+ * 코드별 등급 설정(null 이면 설정 해제 → 제조사 등급 매핑으로 복귀). applyOpen 이면 미조치 장애의 등급도 바꾼다(복구된 이력은 그대로).
+ * 등급은 알림 수신 기준(등급 ≥)과 통보 여부(높음·긴급만 즉시 통보)에 쓰이므로 감사 기록에 남긴다.
+ */
+export async function setSeverityOverride(user: User, code: string, severity: Severity | null, opts: { note?: string; applyOpen?: boolean } = {}): Promise<{ updatedOpen: number }> {
+  assertActive(user);
+  assertAdmin(user);
+  const db = getDb();
+  const c = code.trim();
+  if (!c) throw new ValidationError("장애 코드가 비어 있습니다.");
+  if (severity && !SEVERITIES.includes(severity)) throw new ValidationError("등급 값이 올바르지 않습니다.");
+  const now = nowIso();
+  let updatedOpen = 0;
+  await db.transaction(async (tx) => {
+    if (severity) {
+      await tx
+        .insert(schema.severityOverrides)
+        .values({ code: c, severity, note: (opts.note ?? "").trim().slice(0, 200), updatedBy: user.id, updatedAt: now })
+        .onConflictDoUpdate({ target: schema.severityOverrides.code, set: { severity, note: (opts.note ?? "").trim().slice(0, 200), updatedBy: user.id, updatedAt: now } });
+      if (opts.applyOpen) {
+        const res = await tx.update(schema.incidents).set({ severity }).where(and(eq(schema.incidents.code, c), inArray(schema.incidents.status, ["OPEN", "ACKED", "ASSIGNED", "IN_PROGRESS"]), isNull(schema.incidents.dismissedAt))).returning({ id: schema.incidents.id });
+        updatedOpen = res.length;
+      }
+    } else {
+      await tx.delete(schema.severityOverrides).where(eq(schema.severityOverrides.code, c));
+    }
+    await audit(user, { siteId: null, robotId: null, action: "INCIDENT:SEVERITY_RULE", params: { code: c, severity, applyOpen: !!opts.applyOpen, updatedOpen }, result: "OK", detail: opts.note?.trim() || null, vendorTraceId: null }, tx);
+  });
+  return { updatedOpen };
+}
+
+/** 장애 생성 때 쓰는 등급: 설정이 있으면 그 등급, 없으면 제조사 등급 매핑. */
+export async function effectiveSeverity(code: string, fallback: Severity, db: DbLike = getDb()): Promise<Severity> {
+  const o = await db.query.severityOverrides.findFirst({ where: eq(schema.severityOverrides.code, code) });
+  return o?.severity ?? fallback;
 }

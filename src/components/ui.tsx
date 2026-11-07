@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import Link from "next/link";
 
 /** 화면 제목: 큰 제목 + 설명 + 오른쪽 도구. */
 export function PageTitle({ title, subtitle, right }: { title: string; subtitle?: ReactNode; right?: ReactNode }) {
@@ -37,18 +38,24 @@ export function SimTag({ children = "시뮬레이션" }: { children?: ReactNode 
   return <Badge className="bg-amber-50 text-amber-800 border-amber-200">{children}</Badge>;
 }
 
-/** 핵심 숫자 카드. 왼쪽 색 띠로 상태를 알린다. */
-export function Stat({ label, value, hint, tone = "default" }: { label: string; value: ReactNode; hint?: ReactNode; tone?: "default" | "warn" | "bad" | "good" }) {
+/** 핵심 숫자 카드. 왼쪽 색 띠로 상태를 알리고, href 가 있으면 세부 화면으로 이어진다. */
+export function Stat({ label, value, hint, tone = "default", href }: { label: string; value: ReactNode; hint?: ReactNode; tone?: "default" | "warn" | "bad" | "good"; href?: string }) {
   const toneCls = { default: "text-navy", warn: "text-amber-600", bad: "text-red-600", good: "text-emerald-600" }[tone];
   const bar = { default: "bg-accent/70", warn: "bg-amber-400", bad: "bg-red-400", good: "bg-emerald-400" }[tone];
-  return (
-    <div className="rise relative overflow-hidden bg-surface rounded-2xl border border-gray-200/80 shadow-[var(--shadow-card)] px-4 py-3.5">
+  const body = (
+    <>
       <span className={`absolute left-0 top-3 bottom-3 w-1 rounded-r ${bar}`} aria-hidden />
-      <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">{label}</div>
+      <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500 flex items-center justify-between gap-2">
+        <span>{label}</span>
+        {href ? <span className="text-slate-300 group-hover:text-accent transition" aria-hidden>→</span> : null}
+      </div>
       <div className={`mt-0.5 text-2xl sm:text-[1.7rem] font-bold tracking-tight tabular-nums ${toneCls}`}>{value}</div>
       {hint ? <div className="text-xs text-slate-500 mt-1 leading-snug">{hint}</div> : null}
-    </div>
+    </>
   );
+  const cls = "rise group relative overflow-hidden bg-surface rounded-2xl border border-gray-200/80 shadow-[var(--shadow-card)] px-4 py-3.5 block";
+  if (href) return <Link href={href} className={`${cls} hover:border-accent/50 hover:shadow-md transition no-underline`}>{body}</Link>;
+  return <div className={cls}>{body}</div>;
 }
 
 export function Empty({ children }: { children: ReactNode }) {

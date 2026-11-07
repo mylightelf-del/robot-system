@@ -256,6 +256,13 @@ export async function deleteIncidentPhotoAction(photoId: string): Promise<Action
     revalidatePath("/incidents");
   });
 }
+export async function setSeverityOverrideAction(code: string, severity: Severity | null, note: string, applyOpen: boolean): Promise<ActionResult> {
+  return run(async () => {
+    const r = await incidents.setSeverityOverride(await getCurrentUser(), code, severity, { note, applyOpen });
+    revalidatePath("/admin");
+    return { message: severity ? `'${code}' 등급을 설정했습니다.${applyOpen ? ` 미조치 장애 ${r.updatedOpen}건에도 적용.` : ""}` : `'${code}' 등급 설정을 해제했습니다(제조사 등급으로 복귀).` };
+  });
+}
 export async function createApiTokenAction(name: string, siteIds: string[]): Promise<ActionResult> {
   return run(async () => {
     const { createApiToken } = await import("@/lib/services/apiTokens");

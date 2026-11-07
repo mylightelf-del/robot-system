@@ -5,7 +5,8 @@ import { getAdminData } from "@/lib/services/admin";
 import { AppError } from "@/lib/util/errors";
 import { Card, PageTitle } from "@/components/ui";
 import { AccessDenied } from "@/components/AccessDenied";
-import { ApiTokensPanel, NewUserForm, RecipientsPanel, RemoteControlPanel, SettingsPanel, UserRow } from "@/components/AdminPanels";
+import { ApiTokensPanel, NewUserForm, RecipientsPanel, RemoteControlPanel, SettingsPanel, SeverityRulesPanel, UserRow } from "@/components/AdminPanels";
+import { listSeverityRules } from "@/lib/services/incidents";
 import { formatDateTime } from "@/lib/util/time";
 
 export default async function AdminPage() {
@@ -17,6 +18,7 @@ export default async function AdminPage() {
     return <AccessDenied reason={e instanceof AppError ? e.message : "접근할 수 없습니다."} />;
   }
   const notify = notifyStatus();
+  const severityRules = await listSeverityRules(user);
   const kakaoUsers = await kakaoCandidates();
   const pushUsers = await pushCandidates();
   // 사용 중지된 사업장은 운영 설정(원격 제어·알림 수신)에서 뺀다. 고급 설정에서만 다룬다.
@@ -69,6 +71,11 @@ export default async function AdminPage() {
             <Link href="/admin/advanced" className="inline-flex items-center rounded border border-amber-400 bg-amber-50 px-3 py-1.5 text-amber-900 font-medium">고급 설정 열기 →</Link>
             <span className="text-xs text-gray-600">사업장·층·구역·로봇 배치, 지도 가져오기, 제조사 연결(PUDU). 잘못 바꾸면 위치 표시·보고서가 달라지므로 따로 두었습니다.</span>
           </div>
+        </Card>
+
+        <Card title="장애 등급 설정 (코드별)">
+          <SeverityRulesPanel rules={severityRules} />
+          <p className="text-xs text-gray-500 mt-2">등급은 장애 목록 표시, 알림 수신 기준(등급 ≥), 즉시 통보 여부에 쓰입니다. 설정은 새로 들어오는 장애부터 적용되고, 체크하면 지금 미조치인 같은 코드의 장애도 바뀝니다. 복구된 이력은 바꾸지 않습니다.</p>
         </Card>
 
         <Card title="알림 수신 설정 (사업장별)">

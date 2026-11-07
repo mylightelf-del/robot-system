@@ -3,6 +3,7 @@ import type { Incident, Robot, Schedule } from "@/lib/domain/types";
 import { getDb, schema } from "@/lib/db/client";
 import { getNotificationSetting, getSite, getStatus, listZonesByFloor, siteAt } from "@/lib/db/repo";
 import { storeRunImage } from "@/lib/services/coverage";
+import { effectiveSeverity } from "@/lib/services/incidents";
 import { snapshotMaintenance } from "@/lib/services/maintenance";
 import { notifyIncident } from "@/lib/notify/notifier";
 import { newId } from "@/lib/util/random";
@@ -221,7 +222,7 @@ async function upsertIncidentFromError(robot: Robot, e: { code: string; level: s
   if (dup) return false;
   const grouped = await db.select({ id: schema.incidents.id }).from(schema.incidents).where(sql`${schema.incidents.groupedEventIds} ? ${e.key}`);
   if (grouped.length) return false; // 이미 묶음으로 집계된 발생
-  const severity = mapErrorLevel(e.level);
+  const severity = await effectiveSeverity(e.code, mapErrorLevel(e.level), db); // 관리자가 코드별 등급을 정했으면 그 등급
   // 묶음: 같은 로봇·같은 코드의 미해결 장애가 최근 INCIDENT_GROUP_HOURS 안에 있으면 새로 만들지 않고 횟수·최근 발생 시각만 갱신한다.
   const open = await db
     .select()

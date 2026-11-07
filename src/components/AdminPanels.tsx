@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { NOTIFY_CHANNEL_LABEL, NOTIFY_KIND_LABEL, NOTIFY_KINDS, type CommandType, type NotifyChannel, type NotifyKind, type Role, type Severity, type User } from "@/lib/domain/types";
-import { COMMAND_LABEL, ROLE_LABEL } from "@/lib/domain/status";
+import { COMMAND_LABEL, ROLE_LABEL, SEVERITY_LABEL } from "@/lib/domain/status";
 import {
   addRecipientAction,
   createUserAction,
@@ -14,6 +14,7 @@ import {
   updateRecipientAction,
   createApiTokenAction,
   revokeApiTokenAction,
+  setSeverityOverrideAction,
   resetSampleAction,
   setSiteManagerCanConfirmAction,
   setRemoteControlAction,
@@ -488,5 +489,67 @@ export function ApiTokensPanel({ tokens, sites, baseUrl }: { tokens: { id: strin
       </div>
       <ResultLine result={result} />
     </div>
+  );
+}
+
+/** 장애 등급 커스텀: 코드별로 등급을 정한다(없으면 제조사 등급 매핑). */
+export function SeverityRulesPanel({ rules }: { rules: { code: string; message: string; severity: Severity | null; note: string; updatedAt: string | null; recentCount: number }[] }) {
+  const { pending, result, run } = useAction();
+  const [applyOpen, setApplyOpen] = useState(true);
+  const [filter, setFilter] = useState("");
+  const [newCode, setNewCode] = useState("");
+  const [newSev, setNewSev] = useState<Severity>("HIGH");
+  const shown = rules.filter((r) => !filter || r.code.toLowerCase().includes(filter.toLowerCase()) || r.message.includes(filter));
+  return (
+    <div className="text-sm space-y-2">
+      <div className="flex flex-wrap items-center gap-2 text-xs">
+        <input className="border rounded px-2 py-1 w-48" placeholder="코드·설명 검색" value={filter} onChange={(e) => setFilter(e.target.value)} />
+        <label className="inline-flex items-center gap-1"><input type="checkbox" checked={applyOpen} onChange={(e) => setApplyOpen(e.target.checked)} /> 미조치 장애에도 바로 적용</label>
+        <span className="text-gray-500">기본 등급: 제조사 등급 그대로(Fatal→긴급, Error→높음, Warning→보통, Event→낮음). 높음·긴급만 즉시 통보됩니다.</span>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="data">
+          <thead><tr><th>코드</th><th>고객 표시 문구</th><th className="text-right">90일 발생</th><th>설정 등급</th><th>비고</th><th></th></tr></thead>
+          <tbody>
+            {shown.map((r) => (
+              <SeverityRuleRow key={r.code} rule={r} applyOpen={applyOpen} pending={pending} run={run} />
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="flex flex-wrap items-center gap-1 text-xs border-t pt-2">
+        아직 안 본 코드 추가:
+        <input className="border rounded px-2 py-1 w-44 font-mono" placeholder="예: CleanWaterEmpty" value={newCode} onChange={(e) => setNewCode(e.target.value)} />
+        <select className="border rounded px-1 py-1" value={newSev} onChange={(e) => setNewSev(e.target.value as Severity)}>
+          {(["LOW", "MEDIUM", "HIGH", "CRITICAL"] as Severity[]).map((x) => <option key={x} value={x}>{SEVERITY_LABEL[x]}</option>)}
+        </select>
+        <button type="button" className={btn.small} disabled={pending || !newCode.trim()} onClick={() => run(async () => { const r = await setSeverityOverrideAction(newCode.trim(), newSev, "", applyOpen); if (r.ok) setNewCode(""); return r; })}>추가</button>
+      </div>
+      <ResultLine result={result} />
+    </div>
+  );
+}
+
+function SeverityRuleRow({ rule, applyOpen, pending, run }: { rule: { code: string; message: string; severity: Severity | null; note: string; updatedAt: string | null; recentCount: number }; applyOpen: boolean; pending: boolean; run: ReturnType<typeof useAction>["run"] }) {
+  const [sev, setSev] = useState<Severity | "">(rule.severity ?? "");
+  const [note, setNote] = useState(rule.note);
+  const dirty = sev !== (rule.severity ?? "") || note !== rule.note;
+  return (
+    <tr>
+      <td className="font-mono text-xs">{rule.code}</td>
+      <td className="text-xs text-gray-700 max-w-[280px]">{rule.message}</td>
+      <td className="text-right">{rule.recentCount}</td>
+      <td>
+        <select className="border rounded px-1 py-0.5 text-xs" value={sev} onChange={(e) => setSev(e.target.value as Severity | "")}>
+          <option value="">제조사 등급(기본)</option>
+          {(["LOW", "MEDIUM", "HIGH", "CRITICAL"] as Severity[]).map((x) => <option key={x} value={x}>{SEVERITY_LABEL[x]}</option>)}
+        </select>
+      </td>
+      <td><input className="border rounded px-1 py-0.5 text-xs w-40" placeholder="사유·메모" value={note} onChange={(e) => setNote(e.target.value)} /></td>
+      <td className="whitespace-nowrap">
+        <button type="button" className={btn.small} disabled={pending || !dirty} onClick={() => run(() => setSeverityOverrideAction(rule.code, sev === "" ? null : sev, note, applyOpen))}>저장</button>
+        {rule.updatedAt && <span className="ml-1 text-[10px] text-gray-400">{new Date(rule.updatedAt).toLocaleDateString("ko-KR")}</span>}
+      </td>
+    </tr>
   );
 }

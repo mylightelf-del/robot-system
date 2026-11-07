@@ -72,7 +72,7 @@ export default async function TasksPage({ searchParams }: { searchParams: Promis
                     <tr key={t.task.id}>
                       <td>
                         <div className="font-medium">{t.task.name}</div>
-                        <div className="text-xs text-gray-500">{t.siteName} · {t.task.mode}{t.task.vendorTaskRef ? ` · 제조사 참조 ${t.task.vendorTaskRef}` : ""}</div>
+                        <div className="text-xs text-gray-500">{t.siteName} · {t.task.mode}</div>
                       </td>
                       <td>
                         <Link href={`/robots/${t.task.robotId}`} className="text-navy hover:underline">{t.robotName}</Link>
@@ -90,7 +90,7 @@ export default async function TasksPage({ searchParams }: { searchParams: Promis
                                   {s.daysOfWeek.map((d) => DOW[d]).join("")} {s.time}
                                 </span>
                                 <span className={`rounded px-1 ${s.executor === "VENDOR" ? "bg-sky-50 text-sky-800" : "bg-gray-100 text-gray-700"}`}>{s.executor === "VENDOR" ? "제조사 예약" : "자체 실행기"}</span>
-                                {!customer && (s.executor === "VENDOR" ? <span className="text-[11px] text-gray-500">변경은 PUDU 앱에서</span> : <ScheduleToggle scheduleId={s.id} enabled={s.enabled} disabled={false} />)}
+                                {!customer && s.executor !== "VENDOR" && <ScheduleToggle scheduleId={s.id} enabled={s.enabled} disabled={false} />}
                               </li>
                             ))}
                           </ul>

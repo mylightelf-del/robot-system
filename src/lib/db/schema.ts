@@ -642,6 +642,15 @@ export const vendorConnections = pgTable("vendor_connections", {
   notes: text().notNull().default(""),
 });
 
+/** 장애 등급 커스텀: 장애 코드별로 제조사 등급 매핑 대신 쓸 등급(본사 관리자 설정). 없으면 제조사 등급(Fatal→긴급, Error→높음, Warning→보통, Event→낮음). */
+export const severityOverrides = pgTable("severity_overrides", {
+  code: text().primaryKey(),
+  severity: text().$type<Severity>().notNull(),
+  note: text().notNull().default(""),
+  updatedBy: text().notNull(),
+  updatedAt: isoTimestamp().notNull(),
+});
+
 /** 운영 설정(단일 행, id = 'default'). 확정값처럼 하드코딩하지 않는다. */
 export const appSettings = pgTable("app_settings", {
   id: text().primaryKey(),

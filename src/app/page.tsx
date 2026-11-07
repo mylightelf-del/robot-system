@@ -1,11 +1,10 @@
 import Link from "next/link";
 import { getCurrentUser } from "@/lib/auth/session";
 import { getDashboard, getTodo, LOW_CONSUMABLE_PCT, STATUS_KEYS } from "@/lib/services/dashboard";
-import { listIncidents } from "@/lib/services/incidents";
 import { listRobots } from "@/lib/services/robots";
 import { STATUS_LABEL, STATUS_STYLE } from "@/lib/domain/status";
 import { Card, Empty, PageTitle, Stat } from "@/components/ui";
-import { IncidentStatusBadge, SeverityBadge, StatusBadge } from "@/components/StatusBadge";
+import { StatusBadge } from "@/components/StatusBadge";
 import { formatDateTime, relativeFromNow } from "@/lib/util/time";
 import { AccessDenied } from "@/components/AccessDenied";
 import { AutoRefresh } from "@/components/AutoRefresh";
@@ -38,7 +37,6 @@ export default async function DashboardPage() {
   if (!user.active) return <AccessDenied reason="비활성화된 사용자입니다. 접근이 차단되었습니다." />;
   const dash = await getDashboard(user);
   const todo = await getTodo(user);
-  const incidents = (await listIncidents(user)).slice(0, 8);
   const stale = (await listRobots(user)).filter((r) => r.status.common === "OFFLINE" || r.status.common === "UNKNOWN");
   const t = dash.totals;
   const todoCount = todo.missedRuns.length + todo.unacknowledgedIncidents + todo.lowConsumables.length + todo.staleRobots.length;
@@ -50,13 +48,12 @@ export default async function DashboardPage() {
       <AutoRefresh seconds={10} />
       <PageTitle title="종합 대시보드" subtitle={`접근 가능 사업장 ${dash.sites.length}곳 · 기준 시각 ${formatDateTime(dash.now)}`} />
 
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-4">
-        <Stat label="로봇 대수" value={t.robotCount} />
-        <Stat label="청소 중" value={t.byStatus.CLEANING} tone="good" />
-        <Stat label="충전·대기" value={t.byStatus.CHARGING + t.byStatus.IDLE} hint={`충전 ${t.byStatus.CHARGING} · 대기 ${t.byStatus.IDLE}`} />
-        <Stat label="오류" value={t.byStatus.ERROR} tone={t.byStatus.ERROR ? "bad" : "default"} />
-        <Stat label="통신 끊김·불명" value={t.byStatus.OFFLINE + t.byStatus.UNKNOWN} tone={t.byStatus.OFFLINE + t.byStatus.UNKNOWN ? "warn" : "default"} hint={`마지막 수신 ${dash.staleThresholdMinutes}분 초과 ${t.staleRobots}대`} />
-        <Stat label="미조치 장애" value={t.openIncidents} tone={t.unacknowledgedIncidents ? "bad" : t.openIncidents ? "warn" : "default"} hint={`미확인 ${t.unacknowledgedIncidents}건`} />
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 mb-4">
+        <Stat label="로봇 대수" value={t.robotCount} href="/robots" />
+        <Stat label="청소 중" value={t.byStatus.CLEANING} tone="good" href="/robots?status=CLEANING,PAUSED,RETURNING" />
+        <Stat label="충전·대기" value={t.byStatus.CHARGING + t.byStatus.IDLE} hint={`충전 ${t.byStatus.CHARGING} · 대기 ${t.byStatus.IDLE}`} href="/robots?status=CHARGING,IDLE" />
+        <Stat label="오류" value={t.byStatus.ERROR} tone={t.byStatus.ERROR ? "bad" : "default"} href="/robots?status=ERROR" />
+        <Stat label="통신 끊김·불명" value={t.byStatus.OFFLINE + t.byStatus.UNKNOWN} tone={t.byStatus.OFFLINE + t.byStatus.UNKNOWN ? "warn" : "default"} hint={`마지막 수신 ${dash.staleThresholdMinutes}분 초과 ${t.staleRobots}대`} href="/robots?status=OFFLINE,UNKNOWN" />
       </div>
 
       <Card title={`오늘 할 일 ${todoCount ? `(${todoCount})` : ""}`} className="mb-4">
@@ -87,12 +84,11 @@ export default async function DashboardPage() {
         <div className="text-xs text-gray-500 mt-2">오늘 예정 회차 {todo.plannedToday.total}건 · 아직 시각이 안 된 회차 {todo.plannedToday.remaining}건</div>
       </Card>
 
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 mb-4">
-        <Stat label="최근 7일 작업" value={`${w.runs.toLocaleString()}건`} hint={weekDelta(w.runs, pw.runs, "건")} />
-        <Stat label="최근 7일 청소 면적" value={`${w.areaM2.toLocaleString()}㎡`} hint={weekDelta(w.areaM2, pw.areaM2, "㎡")} />
-        <Stat label="최근 7일 완료율" value={w.completionRatePct === null ? "해당 없음" : `${w.completionRatePct}%`} hint={weekDelta(w.completionRatePct, pw.completionRatePct, "%")} tone={w.completionRatePct !== null && w.completionRatePct < 80 ? "warn" : "default"} />
-        <Stat label="생산성(㎡/시간)" value={w.productivityM2PerHour === null ? "-" : w.productivityM2PerHour.toLocaleString()} hint={weekDelta(w.productivityM2PerHour, pw.productivityM2PerHour, "")} />
-        <Stat label="장애 평균 조치 시간" value={dash.mttrMin30d === null ? "해당 없음" : fmtMin(dash.mttrMin30d)} hint={`최근 30일 복구 기준 · 7일 장애 ${w.incidents}건(전주 ${pw.incidents})`} />
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+        <Stat label="최근 7일 작업" value={`${w.runs.toLocaleString()}건`} hint={weekDelta(w.runs, pw.runs, "건")} href="/reports" />
+        <Stat label="최근 7일 청소 면적" value={`${w.areaM2.toLocaleString()}㎡`} hint={weekDelta(w.areaM2, pw.areaM2, "㎡")} href="/reports" />
+        <Stat label="생산성(㎡/시간)" value={w.productivityM2PerHour === null ? "-" : w.productivityM2PerHour.toLocaleString()} hint={weekDelta(w.productivityM2PerHour, pw.productivityM2PerHour, "")} href="/reports" />
+        <Stat label="장애 평균 조치 시간" value={dash.mttrMin30d === null ? "해당 없음" : fmtMin(dash.mttrMin30d)} hint={`최근 30일 복구 기준 · 7일 장애 ${w.incidents}건(전주 ${pw.incidents})`} href="/incidents?all=1" />
       </div>
 
       <div className="grid lg:grid-cols-3 gap-4">
@@ -108,9 +104,7 @@ export default async function DashboardPage() {
                     <th>대수</th>
                     <th>상태</th>
                     <th>당일 실적</th>
-                    <th>7일 완료율</th>
                     <th>7일 생산성</th>
-                    <th>미조치 장애</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -135,17 +129,7 @@ export default async function DashboardPage() {
                         {s.todayRuns}건 · {s.todayAreaM2.toLocaleString()}㎡
                         <div className="text-xs text-gray-500">정상 완료 {s.todayCompleted}건</div>
                       </td>
-                      <td className="whitespace-nowrap">{s.week.completionRatePct === null ? <span className="text-gray-400">-</span> : `${s.week.completionRatePct}%`}<div className="text-xs text-gray-500">{weekDelta(s.week.completionRatePct, s.prevWeek.completionRatePct, "%") || "전주 없음"}</div></td>
                       <td className="whitespace-nowrap">{s.week.productivityM2PerHour === null ? <span className="text-gray-400">-</span> : `${s.week.productivityM2PerHour.toLocaleString()}㎡/h`}<div className="text-xs text-gray-500">{s.week.runs}건 · {s.week.areaM2.toLocaleString()}㎡</div></td>
-                      <td>
-                        {s.openIncidents ? (
-                          <span className={s.unacknowledgedIncidents ? "text-red-700 font-semibold" : "text-amber-700"}>
-                            {s.openIncidents}건{s.unacknowledgedIncidents ? ` (미확인 ${s.unacknowledgedIncidents})` : ""}
-                          </span>
-                        ) : (
-                          <span className="text-gray-400">없음</span>
-                        )}
-                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -155,31 +139,6 @@ export default async function DashboardPage() {
         </Card>
 
         <div className="space-y-4 min-w-0">
-          <Card title="미조치 장애" right={<Link href="/incidents" className="text-xs text-navy hover:underline">전체 보기</Link>}>
-            {incidents.length === 0 ? (
-              <Empty>미조치 장애가 없습니다.</Empty>
-            ) : (
-              <ul className="divide-y text-sm">
-                {incidents.map((i) => (
-                  <li key={i.id} className="py-2">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <SeverityBadge severity={i.severity} />
-                      <IncidentStatusBadge status={i.status} />
-                      <span className="text-xs text-gray-500">{relativeFromNow(i.occurredAt, dash.now)}</span>
-                    </div>
-                    <div className="mt-0.5">
-                      <Link href={`/robots/${i.robotId}`} className="font-medium text-navy hover:underline">
-                        {i.robotName}
-                      </Link>{" "}
-                      <span className="text-gray-500 text-xs">{i.siteName}</span>
-                    </div>
-                    <div className="text-gray-700">{i.message}</div>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </Card>
-
           <Card title="통신 끊김 · 상태 불명">
             {stale.length === 0 ? (
               <Empty>해당 로봇이 없습니다.</Empty>

@@ -11,7 +11,8 @@ import { SiteFilter } from "@/components/SiteFilter";
 import { ReportStatusBadge } from "@/components/StatusBadge";
 import { ReportScheduleTable } from "@/components/ReportSchedule";
 import { formatDateTime, localMonthKey, localToUtcIso, monthLabel, nowIso, shiftMonth } from "@/lib/util/time";
-import { periodText, reportTitle } from "@/lib/reports/schedule";
+import { periodText, reportTitle, type ReportKind } from "@/lib/reports/schedule";
+import type { ReportRow } from "@/lib/services/reports";
 import { RUN_RESULT_LABEL } from "@/lib/domain/status";
 
 function monthRange(month: string): { fromIso: string; toIso: string } {
@@ -19,8 +20,12 @@ function monthRange(month: string): { fromIso: string; toIso: string } {
   return { fromIso: localToUtcIso(`${month}-01`, "00:00"), toIso: localToUtcIso(`${next}-01`, "00:00") };
 }
 
-export default async function ReportsPage({ searchParams }: { searchParams: Promise<{ site?: string; month?: string }> }) {
+const KIND_ORDER: ReportKind[] = ["INSTALLATION", "DAILY", "WEEKLY", "MONTHLY"];
+const KIND_LABEL: Record<ReportKind, string> = { INSTALLATION: "설치 완료보고서", DAILY: "일간 보고서", WEEKLY: "주간 보고서", MONTHLY: "월간 보고서" };
+
+export default async function ReportsPage({ searchParams }: { searchParams: Promise<{ site?: string; month?: string; view?: string }> }) {
   const sp = await searchParams;
+  const view: "site" | "schedule" = sp.view === "schedule" ? "schedule" : "site";
   const user = await getCurrentUser();
   const now = nowIso();
   const thisMonth = localMonthKey(now);
@@ -69,10 +74,10 @@ export default async function ReportsPage({ searchParams }: { searchParams: Prom
         subtitle={customer ? "확정·공개된 보고서와 자기 사업장 실적만 표시됩니다." : "설치일 기준 보고서 일정(설치·일간·주간·월간) · 초안 → 검토 → 확정 → 고객 공개"}
         right={
           <div className="flex flex-wrap gap-2 items-center">
-            <SiteFilter sites={sites} current={site ?? ""} basePath="/reports" extra={`month=${month}`} />
+            <SiteFilter sites={sites} current={site ?? ""} basePath="/reports" extra={`view=${view}&month=${month}`} />
             <div className="flex gap-1">
               {monthOptions.map((m) => (
-                <Link key={m} href={`/reports?month=${m}${site ? `&site=${site}` : ""}`} className={`px-2.5 py-1 rounded text-xs sm:text-sm border ${m === month ? "bg-navy text-white border-navy" : "bg-white border-gray-300"}`}>
+                <Link key={m} href={`/reports?view=${view}&month=${m}${site ? `&site=${site}` : ""}`} className={`px-2.5 py-1 rounded text-xs sm:text-sm border ${m === month ? "bg-navy text-white border-navy" : "bg-white border-gray-300"}`}>
                   {monthLabel(m)}
                 </Link>
               ))}
@@ -126,44 +131,49 @@ export default async function ReportsPage({ searchParams }: { searchParams: Prom
       </div>
 
       <div className="grid lg:grid-cols-2 gap-4">
-        <Card className="min-w-0" title="보고서" right={<span className="text-xs text-gray-500">{reports.length}건</span>}>
+        <Card
+          className="min-w-0"
+          title={
+            <span className="inline-flex items-center gap-1">
+              <span className="mr-1">보고서</span>
+              <Link href={`/reports?view=site&month=${month}${site ? `&site=${site}` : ""}`} className={`px-2.5 py-0.5 rounded-full text-xs border transition ${view === "site" ? "bg-navy text-white border-navy" : "bg-white text-slate-600 border-gray-200 hover:bg-slate-50"}`}>사업장별</Link>
+              <Link href={`/reports?view=schedule&month=${month}${site ? `&site=${site}` : ""}`} className={`px-2.5 py-0.5 rounded-full text-xs border transition ${view === "schedule" ? "bg-navy text-white border-navy" : "bg-white text-slate-600 border-gray-200 hover:bg-slate-50"}`}>일정별</Link>
+            </span>
+          }
+          right={<span className="text-xs text-gray-500">{reports.length}건</span>}
+        >
           {reports.length === 0 ? (
             <Empty>{customer ? "공개된 보고서가 없습니다." : "보고서가 없습니다. 위 일정에서 초안을 만드세요."}</Empty>
+          ) : view === "site" ? (
+            <div className="space-y-4">
+              {sites
+                .filter((st) => !site || st.id === site)
+                .map((st) => {
+                  const list = reports.filter((r) => r.siteId === st.id);
+                  if (list.length === 0) return null;
+                  return (
+                    <div key={st.id}>
+                      <div className="flex items-center justify-between gap-2 mb-1.5">
+                        <h3 className="font-semibold text-navy text-sm">{st.name} <span className="text-xs font-normal text-slate-500">{list.length}건</span></h3>
+                        {editor && !site && <Link href={`/reports?site=${st.id}&month=${month}`} className="text-xs text-navy underline">일정 보기</Link>}
+                      </div>
+                      <ReportTable rows={list} customer={customer} showSite={false} />
+                    </div>
+                  );
+                })}
+            </div>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="data">
-                <thead>
-                  <tr>
-                    <th>보고서</th>
-                    <th>기간</th>
-                    <th>사업장</th>
-                    <th>버전</th>
-                    <th>상태</th>
-                    <th>완료율</th>
-                    <th>비고</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {reports.map((r) => (
-                    <tr key={r.id}>
-                      <td className="whitespace-nowrap">
-                        <Link href={`/reports/${r.id}`} className="text-navy font-medium hover:underline">
-                          {r.title}
-                        </Link>
-                      </td>
-                      <td className="whitespace-nowrap text-xs">{periodText(r)}</td>
-                      <td>{r.siteName}</td>
-                      <td>v{r.version}{r.isLatestVersion ? "" : <span className="text-xs text-gray-400"> (이전)</span>}</td>
-                      <td><ReportStatusBadge status={r.status} /></td>
-                      <td>{r.aggregates.completionRatePct === null ? "해당 없음" : `${r.aggregates.completionRatePct}%`}</td>
-                      <td className="text-xs">
-                        {r.confirmedAt && <div>확정 {formatDateTime(r.confirmedAt)}</div>}
-                        {!customer && r.lateRuns > 0 && <div className="text-amber-700">집계 후 수신 실적 {r.lateRuns}건</div>}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div className="space-y-4">
+              {KIND_ORDER.map((k) => {
+                const list = reports.filter((r) => r.kind === k).sort((a, b) => b.periodStart.localeCompare(a.periodStart) || b.version - a.version);
+                if (list.length === 0) return null;
+                return (
+                  <div key={k}>
+                    <h3 className="font-semibold text-navy text-sm mb-1.5">{KIND_LABEL[k]} <span className="text-xs font-normal text-slate-500">{list.length}건</span></h3>
+                    <ReportTable rows={list} customer={customer} showSite={!site} />
+                  </div>
+                );
+              })}
             </div>
           )}
         </Card>
@@ -206,5 +216,45 @@ export default async function ReportsPage({ searchParams }: { searchParams: Prom
         </Card>
       </div>
     </>
+  );
+}
+
+function ReportTable({ rows, customer, showSite }: { rows: ReportRow[]; customer: boolean; showSite: boolean }) {
+  return (
+    <div className="overflow-x-auto">
+      <table className="data">
+        <thead>
+          <tr>
+            <th>보고서</th>
+            <th>기간</th>
+            {showSite && <th>사업장</th>}
+            <th>버전</th>
+            <th>상태</th>
+            <th>완료율</th>
+            <th>비고</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.id}>
+              <td className="whitespace-nowrap">
+                <Link href={`/reports/${r.id}`} className="text-navy font-medium hover:underline">
+                  {r.title}
+                </Link>
+              </td>
+              <td className="whitespace-nowrap text-xs">{periodText(r)}</td>
+              {showSite && <td>{r.siteName}</td>}
+              <td>v{r.version}{r.isLatestVersion ? "" : <span className="text-xs text-gray-400"> (이전)</span>}</td>
+              <td><ReportStatusBadge status={r.status} /></td>
+              <td>{r.aggregates.completionRatePct === null ? "해당 없음" : `${r.aggregates.completionRatePct}%`}</td>
+              <td className="text-xs">
+                {r.confirmedAt && <div>확정 {formatDateTime(r.confirmedAt)}</div>}
+                {!customer && r.lateRuns > 0 && <div className="text-amber-700">집계 후 수신 실적 {r.lateRuns}건</div>}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
