@@ -14,7 +14,13 @@ PROFILE="${AWS_PROFILE_DEPLOY:-default}"
 BUCKET="${DEPLOY_BUCKET:-widebot-deploy-315899575985}"
 SERVICES="${REMOTE_ENV_SERVICES:-web worker caddy}"
 DOMAIN_CHECK="${REMOTE_DOMAIN:-widebot.kro.kr}"
-[ $# -ge 1 ] || { echo "사용: $0 KEY=VALUE [KEY=VALUE ...]"; exit 2; }
+# --file 경로: KEY=VALUE 줄이 든 파일에서 읽는다(긴 비밀값을 명령줄·프로세스 목록에 노출하지 않기 위해). 파일은 사용 뒤 호출자가 지운다.
+if [ "${1:-}" = "--file" ]; then
+  FILE="${2:?KEY=VALUE 파일 경로}"
+  mapfile -t KVS < <(grep -vE '^\s*(#|$)' "$FILE")
+  set -- "${KVS[@]}"
+fi
+[ $# -ge 1 ] || { echo "사용: $0 KEY=VALUE [KEY=VALUE ...]  |  $0 --file 파일"; exit 2; }
 for kv in "$@"; do
   case "$kv" in
     [A-Za-z_]*=*) ;;
