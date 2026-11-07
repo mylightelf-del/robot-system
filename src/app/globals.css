@@ -1,50 +1,199 @@
 @import "tailwindcss";
 
+/*
+ * 디자인 토큰(2026-11 개편): 차분한 회색 바탕 + 흰 카드(가는 테두리·부드러운 그림자), 둥근 모서리, 숫자는 tabular-nums.
+ * 브랜드색은 기존 네이비를 유지하고 강조색(파랑)을 더했다. 글꼴은 Pretendard(가변, CDN) → 시스템 한글 글꼴 순.
+ */
 :root {
-  --background: #f6f8fb;
-  --foreground: #10213a;
-  --navy: #14305a;
-  --navy-light: #244a85;
+  --background: #f3f5f9;
+  --foreground: #0f1f3a;
+  --surface: #ffffff;
+  --muted: #64748b;
+  --border: #e4e8ef;
+  --navy: #142d57;
+  --navy-light: #1f4a8f;
+  --accent: #2f6bff;
+  --accent-soft: #eaf0ff;
   --sample: #fff4d6;
+  --ring: rgba(47, 107, 255, 0.35);
+  --shadow-card: 0 1px 2px rgba(15, 31, 58, 0.04), 0 10px 30px -18px rgba(15, 31, 58, 0.18);
+  --radius-card: 1rem;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  --color-surface: var(--surface);
   --color-navy: var(--navy);
   --color-navy-light: var(--navy-light);
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
   --color-sample: var(--sample);
-  --font-sans: var(--font-sans-kr);
+  --font-sans: "Pretendard Variable", Pretendard, "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", system-ui, sans-serif;
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: var(--font-sans-kr), "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+@layer base {
+  *,
+  ::before,
+  ::after {
+    border-color: var(--border);
+  }
+  html {
+    -webkit-tap-highlight-color: transparent;
+    scrollbar-gutter: stable;
+  }
+  body {
+    background: var(--background);
+    color: var(--foreground);
+    font-family: "Pretendard Variable", Pretendard, "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", system-ui, sans-serif;
+    font-feature-settings: "tnum" 1, "ss01" 1;
+    letter-spacing: -0.01em;
+  }
+  ::selection {
+    background: var(--accent-soft);
+    color: var(--navy);
+  }
+  /* 폼 요소 공통: 둥근 모서리·가는 테두리·포커스 링. 각 화면의 인라인 클래스(border rounded px-2 py-1)는 그대로 둬도 이 기본이 적용된다. */
+  input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="range"]),
+  select,
+  textarea {
+    background: var(--surface);
+    border-width: 1px;
+    border-color: var(--border);
+    border-radius: 0.5rem;
+    color: var(--foreground);
+    transition: border-color 0.15s, box-shadow 0.15s;
+  }
+  input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="range"]):focus,
+  select:focus,
+  textarea:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--ring);
+  }
+  input:disabled,
+  select:disabled,
+  textarea:disabled {
+    background: #f8fafc;
+    color: #94a3b8;
+  }
+  input[type="checkbox"],
+  input[type="radio"] {
+    accent-color: var(--accent);
+    width: 0.95rem;
+    height: 0.95rem;
+    vertical-align: -0.1em;
+  }
+  input[type="file"] {
+    font-size: 0.75rem;
+  }
+  input[type="file"]::file-selector-button {
+    border: 1px solid var(--border);
+    background: var(--surface);
+    border-radius: 0.5rem;
+    padding: 0.2rem 0.6rem;
+    margin-right: 0.5rem;
+    font: inherit;
+    font-size: 0.75rem;
+    cursor: pointer;
+  }
+  button:focus-visible,
+  a:focus-visible,
+  summary:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 3px var(--ring);
+    border-radius: 0.5rem;
+  }
+  code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+    font-size: 0.85em;
+  }
+  details > summary {
+    list-style: none;
+  }
+  details > summary::-webkit-details-marker {
+    display: none;
+  }
+  details > summary::before {
+    content: "▸";
+    display: inline-block;
+    margin-right: 0.3rem;
+    transition: transform 0.15s;
+    color: var(--muted);
+  }
+  details[open] > summary::before {
+    transform: rotate(90deg);
+  }
 }
 
-/* 기본 표 스타일 */
+/* 기본 표 스타일 — 머리 행은 작은 대문자 느낌, 행 구분선은 아주 옅게, 마우스 올리면 행 강조 */
 table.data {
   width: 100%;
-  border-collapse: collapse;
+  border-collapse: separate;
+  border-spacing: 0;
   font-size: 0.875rem;
+  font-variant-numeric: tabular-nums;
 }
 table.data th {
   text-align: left;
   font-weight: 600;
-  color: #4b5563;
-  background: #f1f4f9;
-  padding: 0.5rem 0.625rem;
-  border-bottom: 1px solid #e5e7eb;
+  font-size: 0.72rem;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+  background: #f8fafc;
+  padding: 0.55rem 0.7rem;
+  border-bottom: 1px solid var(--border);
   white-space: nowrap;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+table.data th:first-child {
+  border-top-left-radius: 0.6rem;
+}
+table.data th:last-child {
+  border-top-right-radius: 0.6rem;
 }
 table.data td {
-  padding: 0.5rem 0.625rem;
-  border-bottom: 1px solid #eef0f4;
+  padding: 0.6rem 0.7rem;
+  border-bottom: 1px solid #eef1f6;
   vertical-align: top;
 }
-table.data tr:hover td {
-  background: #fafbfd;
+table.data tbody tr:last-child td {
+  border-bottom: 0;
+}
+table.data tbody tr:hover td {
+  background: #f8faff;
+}
+table.data td.num,
+table.data th.num {
+  text-align: right;
+}
+
+/* 얇은 스크롤바 */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #cbd5e1 transparent;
+}
+
+/* 나타남 효과(카드) */
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.rise {
+  animation: rise 0.25s ease-out both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .rise {
+    animation: none;
+  }
 }
 
 /* 인쇄(보고서 PDF) */
@@ -60,5 +209,8 @@ table.data tr:hover td {
   }
   .print-page:last-child {
     page-break-after: auto;
+  }
+  table.data th {
+    position: static;
   }
 }
