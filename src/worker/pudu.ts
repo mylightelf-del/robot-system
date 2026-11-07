@@ -175,7 +175,7 @@ export async function syncPuduReports(api: PuduApi = createPuduApi(), windowHour
         if (res.length) {
           const planned = await db.select().from(schema.plannedRuns).where(and(eq(schema.plannedRuns.robotId, robot.id), eq(schema.plannedRuns.status, "PLANNED")));
           const hit = planned.find((p) => Math.abs(new Date(p.plannedAt).getTime() - new Date(run.startedAt).getTime()) <= 90 * 60_000);
-          if (hit) await db.update(schema.plannedRuns).set({ status: "DONE", actualRunId: run.id }).where(eq(schema.plannedRuns.id, hit.id));
+          if (hit) await db.update(schema.plannedRuns).set({ status: "DONE", actualRunId: run.id, reason: null }).where(eq(schema.plannedRuns.id, hit.id));
         }
       }
       if (list.length < 20) break;
