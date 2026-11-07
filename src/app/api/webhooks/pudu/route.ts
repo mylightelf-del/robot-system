@@ -10,7 +10,11 @@ export async function POST(req: Request) {
   const expected = process.env.PUDU_CALLBACK_CODE;
   if (!expected) return Response.json({ ok: false, error: "callback not configured" }, { status: 503 });
   const code = req.headers.get("callbackcode") ?? req.headers.get("CallbackCode");
-  if (!code || code !== expected) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  if (!code || code !== expected) {
+    // 등록 확인용 흔적(비밀값은 남기지 않는다): 코드가 다르면 대리점 등록값과 서버 설정이 어긋난 것
+    console.warn(`[pudu-callback ${new Date().toISOString()}] 거부 401 — ${code ? "CallbackCode 불일치" : "CallbackCode 헤더 없음"} (from ${req.headers.get("x-forwarded-for") ?? "?"})`);
+    return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  }
   // 본문 크기 제한(콜백은 수 KB): 비정상적으로 큰 요청은 저장하지 않는다
   const MAX = 256 * 1024;
   const declared = Number(req.headers.get("content-length") ?? 0);
@@ -27,6 +31,7 @@ export async function POST(req: Request) {
   if ((body as { callback_type?: string })?.callback_type === "selfTest") return Response.json({ ok: true, selfTest: true });
   const traceId = req.headers.get("traceid") ?? req.headers.get("TraceId");
   const result = await ingestPuduCallback(body, traceId);
+  console.log(`[pudu-callback ${new Date().toISOString()}] 수신 ${(body as { callback_type?: string })?.callback_type ?? "?"} — ${result.stored ? "저장" : result.duplicate ? "중복" : "형식 불일치(무시)"}`);
   return Response.json({ ok: true, stored: result.stored, duplicate: result.duplicate });
 }
 
