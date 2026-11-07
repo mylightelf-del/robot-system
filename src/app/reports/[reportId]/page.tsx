@@ -27,6 +27,13 @@ function Text({ value }: { value: string }) {
   return <div className="text-sm whitespace-pre-wrap mb-4">{value || <span className="text-gray-400">(작성 전)</span>}</div>;
 }
 const hm = (min: number) => `${Math.floor(min / 60)}시간 ${Math.round(min % 60)}분`;
+/** 전기 대비 증감 문구(비교 기간이 있을 때만). */
+function delta(cur: number | null | undefined, prev: number | null | undefined, unit = ""): string {
+  if (cur === null || cur === undefined || prev === null || prev === undefined) return "";
+  if (prev === 0) return cur === 0 ? "전기와 같음" : `전기 0${unit}`;
+  const pct = Math.round(((cur - prev) / prev) * 100);
+  return `전기 ${prev.toLocaleString("ko-KR")}${unit} (${pct >= 0 ? "+" : ""}${pct}%)`;
+}
 const md = (k: string) => `${Number(k.slice(5, 7))}/${Number(k.slice(8, 10))}`;
 
 /** 수치 표시기: 수정 모드면 입력칸, 아니면 값(+보정 표시 *). */
@@ -62,12 +69,14 @@ function SummaryStats({ a, n }: { a: ReportAggregates; n: NumFn }) {
       <Cell label="계획 완료율" hint={<>{n("summary.plannedCompleted", a.plannedCompleted)}/{n("summary.validPlanned", a.validPlanned)}회</>}>
         {n("summary.completionRatePct", a.completionRatePct, { unit: "%", step: 0.1, empty: "해당 없음" })}
       </Cell>
-      <Cell label="총 작업" hint={<>즉시·원격 {n("summary.adhocRuns", a.adhocRuns)}건 별도</>}>{n("summary.totalRuns", a.totalRuns, { unit: "건" })}</Cell>
-      <Cell label="누적 청소 면적" hint="반복 구역 포함">{n("summary.cumulativeAreaM2", a.cumulativeAreaM2, { unit: "㎡" })}</Cell>
-      <Cell label="총 작업 시간">{n("summary.totalDurationMin", a.totalDurationMin, { unit: "분", text: hm })}</Cell>
+      <Cell label="총 작업" hint={<>즉시·원격 {n("summary.adhocRuns", a.adhocRuns)}건 별도{a.prev ? ` · ${delta(a.totalRuns, a.prev.totalRuns, "건")}` : ""}</>}>{n("summary.totalRuns", a.totalRuns, { unit: "건" })}</Cell>
+      <Cell label="누적 청소 면적" hint={`반복 구역 포함${a.prev ? ` · ${delta(a.cumulativeAreaM2, a.prev.cumulativeAreaM2, "㎡")}` : ""}`}>{n("summary.cumulativeAreaM2", a.cumulativeAreaM2, { unit: "㎡" })}</Cell>
+      <Cell label="총 작업 시간" hint={a.prev ? delta(a.totalDurationMin, a.prev.totalDurationMin, "분") : undefined}>{n("summary.totalDurationMin", a.totalDurationMin, { unit: "분", text: hm })}</Cell>
+      <Cell label="생산성" hint={`면적 ÷ 작업 시간${a.prev ? ` · ${delta(a.productivityM2PerHour, a.prev.productivityM2PerHour, "㎡/h")}` : ""}`}>{a.productivityM2PerHour === undefined ? "-" : a.productivityM2PerHour === null ? "계산 불가" : `${a.productivityM2PerHour.toLocaleString("ko-KR")}㎡/h`}</Cell>
       <Cell label="물 사용량">{n("summary.waterL", a.waterL, { unit: "L", step: 0.1 })}</Cell>
       <Cell label="세제 사용량">{n("summary.detergentMl", a.detergentMl, { unit: "mL" })}</Cell>
-      <Cell label="장애 건수">{a.incidents.length}건</Cell>
+      <Cell label="장애 건수" hint={a.prev ? delta(a.incidents.length, a.prev.incidents, "건") : undefined}>{a.incidents.length}건</Cell>
+      <Cell label="장애 평균 조치 시간" hint="기간 내 발생·복구 기준">{a.incidentMttrMin === undefined ? "-" : a.incidentMttrMin === null ? "해당 없음" : hm(a.incidentMttrMin)}</Cell>
     </div>
   );
 }

@@ -688,11 +688,12 @@ export function buildSampleStore(nowIso: string): StoreData {
     data.notificationSettings.push({
       siteId: site.id,
       recipients: [
-        { id: `rcp-${site.id}-1`, channel: "EMAIL", address: `site${n}-manager@example.invalid`, minSeverity: "MEDIUM", hoursFrom: "00:00", hoursTo: "23:59" },
-        { id: `rcp-${site.id}-2`, channel: "KAKAO", address: `010-0000-000${n}(샘플)`, minSeverity: "HIGH", hoursFrom: "08:00", hoursTo: "20:00" },
+        { id: `rcp-${site.id}-1`, channel: "EMAIL", address: `site${n}-manager@example.invalid`, minSeverity: "MEDIUM", hoursFrom: "00:00", hoursTo: "23:59", kinds: ["INCIDENT", "ESCALATION", "MISSED_RUN", "NO_ACTIVITY", "REPORT"] },
+        { id: `rcp-${site.id}-2`, channel: "KAKAO", address: `010-0000-000${n}(샘플)`, minSeverity: "HIGH", hoursFrom: "08:00", hoursTo: "20:00", kinds: ["INCIDENT", "ESCALATION"] },
       ],
       dedupeMinutes: 30,
       escalateAfterMinutes: 60,
+      noActivityHours: 0,
     });
   }
 

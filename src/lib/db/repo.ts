@@ -102,7 +102,7 @@ export async function getNotificationSetting(siteId: string, db: DbLike = getDb(
   const s = await db.query.notificationSettings.findFirst({ where: eq(schema.notificationSettings.siteId, siteId) });
   if (!s) return undefined;
   const recipients = await db.select().from(schema.notificationRecipients).where(eq(schema.notificationRecipients.siteId, siteId)).orderBy(schema.notificationRecipients.id);
-  return { siteId, dedupeMinutes: s.dedupeMinutes, escalateAfterMinutes: s.escalateAfterMinutes, recipients: recipients.map(({ siteId: _s, ...r }) => r) };
+  return { siteId, dedupeMinutes: s.dedupeMinutes, escalateAfterMinutes: s.escalateAfterMinutes, noActivityHours: s.noActivityHours, recipients: recipients.map(({ siteId: _s, ...r }) => r) };
 }
 
 /** 장애 + 조치 + 알림 기록을 도메인 객체로 조립한다. */

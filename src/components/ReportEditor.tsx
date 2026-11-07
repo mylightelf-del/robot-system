@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import type { ReportComments, ReportStatus } from "@/lib/domain/types";
 import { commentLabels, type ReportKind } from "@/lib/reports/schedule";
-import { confirmReportAction, createDraftAction, createNextVersionAction, publishReportAction, recomputeDraftAction, returnToDraftAction, submitReviewAction, updateCommentsAction } from "@/app/actions";
+import { confirmReportAction, createDraftAction, createNextVersionAction, publishReportAction, recomputeDraftAction, returnToDraftAction, sendReportAction, submitReviewAction, updateCommentsAction } from "@/app/actions";
 import { ActionButton, btn, ResultLine, useAction } from "./ActionButton";
 
 const KEYS: (keyof ReportComments)[] = ["overallOpinion", "incompleteReasons", "improvements", "focusZones", "nextMonthPlan"];
@@ -60,7 +60,10 @@ export function ReportWorkflow({ reportId, status, canEdit, canConfirm, lateRuns
         </>
       )}
       {canConfirm && status === "CONFIRMED" && (
-        <ActionButton variant="primary" action={() => publishReportAction(reportId)}>고객 공개</ActionButton>
+        <ActionButton variant="primary" confirmText="고객에게 공개하고, 이 사업장의 '보고서 발행' 수신자에게 PPT·Excel 을 이메일(카카오톡은 링크)로 자동 발송합니다. 진행할까요?" action={() => publishReportAction(reportId)}>고객 공개</ActionButton>
+      )}
+      {canEdit && (status === "CONFIRMED" || status === "PUBLISHED") && (
+        <ActionButton confirmText="이 사업장의 '보고서 발행' 수신자에게 지금 다시 보냅니다. 보낼까요?" action={() => sendReportAction(reportId)}>수신자에게 발송</ActionButton>
       )}
       {!canConfirm && status === "REVIEW" && canEdit && <span className="text-xs text-gray-500 self-center">확정은 본사 관리자(또는 설정으로 허용된 현장 담당자)가 합니다.</span>}
       {(status === "CONFIRMED" || status === "PUBLISHED") && canEdit && isLatest && lateRuns > 0 && (

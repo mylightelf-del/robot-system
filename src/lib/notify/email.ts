@@ -24,7 +24,13 @@ export function emailConfig(): EmailConfig | null {
   return { from, fallbackFrom: process.env.MAIL_FROM_FALLBACK || null, region: process.env.SES_REGION || "ap-southeast-2", accessKeyId, secretAccessKey };
 }
 
-type Sender = (input: { from: string; to: string; subject: string; text: string; html: string }) => Promise<{ messageId: string }>;
+export interface EmailAttachment {
+  filename: string;
+  contentType: string;
+  data: Buffer;
+}
+
+type Sender = (input: { from: string; to: string; subject: string; text: string; html: string; attachments?: EmailAttachment[] }) => Promise<{ messageId: string }>;
 let senderOverride: Sender | null = null;
 /** 시험용: SES 대신 쓸 발송 함수(실제 전송 없음). */
 export function setEmailSenderForTest(s: Sender | null): void {
@@ -34,16 +40,64 @@ export function setEmailSenderForTest(s: Sender | null): void {
 let client: SESv2Client | null = null;
 function sesSender(cfg: EmailConfig): Sender {
   client ??= new SESv2Client({ region: cfg.region, credentials: { accessKeyId: cfg.accessKeyId, secretAccessKey: cfg.secretAccessKey } });
-  return async ({ from, to, subject, text, html }) => {
+  return async ({ from, to, subject, text, html, attachments }) => {
     const out = await client!.send(
       new SendEmailCommand({
         FromEmailAddress: from,
         Destination: { ToAddresses: [to] },
-        Content: { Simple: { Subject: { Data: subject, Charset: "UTF-8" }, Body: { Text: { Data: text, Charset: "UTF-8" }, Html: { Data: html, Charset: "UTF-8" } } } },
+        Content: attachments?.length
+          ? { Raw: { Data: buildMime({ from, to, subject, text, html, attachments }) } }
+          : { Simple: { Subject: { Data: subject, Charset: "UTF-8" }, Body: { Text: { Data: text, Charset: "UTF-8" }, Html: { Data: html, Charset: "UTF-8" } } } },
       }),
     );
     return { messageId: out.MessageId ?? "" };
   };
+}
+
+const b64 = (s: string | Buffer) => Buffer.from(s).toString("base64");
+const b64lines = (buf: Buffer) => buf.toString("base64").replace(/(.{76})/g, "$1\r\n");
+/** RFC 2047 제목·파일 이름(한글). */
+const encWord = (s: string) => `=?UTF-8?B?${b64(s)}?=`;
+
+/** 첨부가 있는 메일의 MIME 원문(SES Raw). multipart/mixed > multipart/alternative(text, html) + 첨부. */
+export function buildMime(m: { from: string; to: string; subject: string; text: string; html: string; attachments: EmailAttachment[] }): Uint8Array {
+  const mixed = `mixed-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  const alt = `alt-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  const fromHeader = m.from.includes("<") ? `${encWord(m.from.replace(/\s*<.*$/, ""))} ${m.from.slice(m.from.indexOf("<"))}` : m.from;
+  const parts: string[] = [
+    `From: ${fromHeader}`,
+    `To: ${m.to}`,
+    `Subject: ${encWord(m.subject)}`,
+    "MIME-Version: 1.0",
+    `Content-Type: multipart/mixed; boundary="${mixed}"`,
+    "",
+    `--${mixed}`,
+    `Content-Type: multipart/alternative; boundary="${alt}"`,
+    "",
+    `--${alt}`,
+    "Content-Type: text/plain; charset=UTF-8",
+    "Content-Transfer-Encoding: base64",
+    "",
+    b64lines(Buffer.from(m.text, "utf8")),
+    `--${alt}`,
+    "Content-Type: text/html; charset=UTF-8",
+    "Content-Transfer-Encoding: base64",
+    "",
+    b64lines(Buffer.from(m.html, "utf8")),
+    `--${alt}--`,
+  ];
+  for (const a of m.attachments) {
+    parts.push(
+      `--${mixed}`,
+      `Content-Type: ${a.contentType}; name="${encWord(a.filename)}"`,
+      "Content-Transfer-Encoding: base64",
+      `Content-Disposition: attachment; filename="${encWord(a.filename)}"`,
+      "",
+      b64lines(a.data),
+    );
+  }
+  parts.push(`--${mixed}--`, "");
+  return new Uint8Array(Buffer.from(parts.join("\r\n"), "utf8"));
 }
 
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
@@ -65,13 +119,13 @@ export function renderEmail(title: string, lines: string[], url: string): { text
   return { text, html };
 }
 
-export async function sendEmail(to: string, subject: string, text: string, html: string): Promise<{ ok: boolean; reason: string }> {
+export async function sendEmail(to: string, subject: string, text: string, html: string, attachments?: EmailAttachment[]): Promise<{ ok: boolean; reason: string }> {
   const cfg = emailConfig();
   if (!cfg && !senderOverride) return { ok: false, reason: "이메일 발송 미설정" };
   const send = senderOverride ?? sesSender(cfg!);
   const from = cfg?.from ?? "test@example.invalid";
   try {
-    const { messageId } = await send({ from, to, subject, text, html });
+    const { messageId } = await send({ from, to, subject, text, html, attachments });
     return { ok: true, reason: `이메일 발송(SES ${messageId.slice(0, 12)}…)` };
   } catch (first) {
     let e = first;
@@ -80,7 +134,7 @@ export async function sendEmail(to: string, subject: string, text: string, html:
     const senderUnverified = err0.name === "MessageRejected" && /not verified/i.test(String(err0.message)) && String(err0.message).includes(from.replace(/^.*<|>$/g, ""));
     if (senderUnverified && cfg?.fallbackFrom) {
       try {
-        const { messageId } = await send({ from: cfg.fallbackFrom, to, subject, text, html });
+        const { messageId } = await send({ from: cfg.fallbackFrom, to, subject, text, html, attachments });
         return { ok: true, reason: `이메일 발송(대체 주소, SES ${messageId.slice(0, 12)}…)` };
       } catch (e2) {
         e = e2;

@@ -30,6 +30,7 @@ import type {
   RunResult,
   ScheduleExecutor,
   Severity,
+  NotifyKind,
   Vendor,
 } from "@/lib/domain/types";
 
@@ -331,14 +332,16 @@ export const incidentActions = pgTable("incident_actions", {
 
 export const notificationLogs = pgTable("notification_logs", {
   id: text().primaryKey(),
-  incidentId: text()
-    .notNull()
-    .references(() => incidents.id),
+  /** 장애 통보일 때만. 그 밖의 통보(미실행·무실적·보고서)는 null 이고 kind·refId 로 구분한다. */
+  incidentId: text().references(() => incidents.id),
   at: isoTimestamp().notNull(),
   channel: text().$type<"EMAIL" | "KAKAO">().notNull(),
   recipient: text().notNull(),
   status: text().$type<"SENT" | "MOCK_SENT" | "SUPPRESSED" | "FAILED">().notNull(),
   reason: text().notNull().default(""),
+  kind: text().$type<NotifyKind>().notNull().default("INCIDENT"),
+  /** 통보 대상 ID(계획 회차·로봇·보고서). 같은 대상에 한 번만 보내는 기준. */
+  refId: text(),
 });
 
 export const inspections = pgTable("inspections", {
@@ -506,6 +509,8 @@ export const notificationSettings = pgTable("notification_settings", {
     .references(() => sites.id),
   dedupeMinutes: integer().notNull().default(30),
   escalateAfterMinutes: integer().notNull().default(60),
+  /** 이 시간(시간 단위) 동안 실적이 없는 로봇을 통보. 0 = 끔. */
+  noActivityHours: integer().notNull().default(0),
 });
 
 export const notificationRecipients = pgTable("notification_recipients", {
@@ -518,6 +523,8 @@ export const notificationRecipients = pgTable("notification_recipients", {
   minSeverity: text().$type<Severity>().notNull(),
   hoursFrom: text().notNull().default("00:00"),
   hoursTo: text().notNull().default("23:59"),
+  /** 받을 통보 종류. 기본은 전부. */
+  kinds: jsonb().$type<NotifyKind[]>().notNull().default(["INCIDENT", "ESCALATION", "MISSED_RUN", "NO_ACTIVITY", "REPORT"]),
 });
 
 export const vendorConnections = pgTable("vendor_connections", {

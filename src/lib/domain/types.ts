@@ -263,6 +263,8 @@ export interface NotificationLog {
   /** SENT: 실제 발송(공급사 접수), MOCK_SENT: 모의(설정 전), SUPPRESSED: 설정으로 억제, FAILED: 발송 실패 */
   status: "SENT" | "MOCK_SENT" | "SUPPRESSED" | "FAILED";
   reason: string;
+  kind?: NotifyKind;
+  refId?: string | null;
 }
 
 export interface Incident {
@@ -364,6 +366,12 @@ export interface ReportAggregates {
   };
   dataGapDays: string[]; // 데이터 미수신 일자
   unsupportedMetrics: string[];
+  /** 생산성 = 누적 청소 면적 ÷ 총 작업 시간(㎡/시간). 작업 시간 0 이면 null. 2026-11-07 이후 집계에만 있다. */
+  productivityM2PerHour?: number | null;
+  /** 기간 안에 발생해 복구된 장애의 평균 조치 시간(분). 없으면 null. */
+  incidentMttrMin?: number | null;
+  /** 직전 같은 길이 기간의 요약(추이 비교용). 설치 보고서에는 없다. */
+  prev?: { periodStart: string; periodEnd: string; totalRuns: number; cumulativeAreaM2: number; totalDurationMin: number; completionRatePct: number | null; incidents: number; productivityM2PerHour: number | null };
   /** 이 집계에 포함된 실적 중 가장 늦은 수신 시각. 이후 수신분은 "늦은 실적"으로 별도 계산한다. */
   includesRunsReceivedUntil: string;
 }
@@ -439,6 +447,11 @@ export interface User {
   sitePermissions: SitePermission[];
 }
 
+/** 통보 종류: 장애 발생·복구 / 미조치 확대 / 예정 작업 미실행 / 장기간 무실적 / 보고서 발행 */
+export type NotifyKind = "INCIDENT" | "ESCALATION" | "MISSED_RUN" | "NO_ACTIVITY" | "REPORT";
+export const NOTIFY_KINDS: NotifyKind[] = ["INCIDENT", "ESCALATION", "MISSED_RUN", "NO_ACTIVITY", "REPORT"];
+export const NOTIFY_KIND_LABEL: Record<NotifyKind, string> = { INCIDENT: "장애 발생·복구", ESCALATION: "미조치 확대 통보", MISSED_RUN: "예정 작업 미실행", NO_ACTIVITY: "장기간 무실적", REPORT: "보고서 발행" };
+
 export interface NotificationRecipient {
   id: string;
   channel: "EMAIL" | "KAKAO";
@@ -446,6 +459,8 @@ export interface NotificationRecipient {
   minSeverity: Severity;
   hoursFrom: string; // "HH:mm"
   hoursTo: string;
+  /** 받을 통보 종류(없으면 전부). */
+  kinds: NotifyKind[];
 }
 
 export interface NotificationSetting {
@@ -453,6 +468,8 @@ export interface NotificationSetting {
   recipients: NotificationRecipient[];
   dedupeMinutes: number;
   escalateAfterMinutes: number;
+  /** 이 시간 동안 실적이 없는 로봇을 통보(시간). 0 = 끔. */
+  noActivityHours: number;
 }
 
 export interface VendorConnection {

@@ -14,6 +14,7 @@ import { vendorModes } from "@/lib/vendors";
 import { purgeOldVendorEvents, writeHeartbeat } from "@/lib/ops/heartbeat";
 import { autoCreateScheduledDrafts } from "@/lib/services/reports";
 import { escalateOverdueIncidents } from "@/lib/services/incidents";
+import { notifyMissedRuns, notifyNoActivity } from "@/lib/services/alerts";
 import { keepKakaoLinksAlive } from "@/lib/notify/kakao";
 import { channelModes } from "@/lib/notify/notifier";
 
@@ -97,6 +98,14 @@ async function main() {
     loop("escalation", 5 * 60_000, async () => {
       const n = await escalateOverdueIncidents();
       if (n) log(`미조치 확대 통보 ${n}건`);
+    }),
+  );
+  // 운영 알림(10분): 예정 작업 미실행(자동 판정) 1회 통보, 사업장 설정에 따른 장기간 무실적 로봇 통보(로봇당 하루 1회)
+  jobs.push(
+    loop("alerts", 10 * 60_000, async () => {
+      const missed = await notifyMissedRuns();
+      const idle = await notifyNoActivity();
+      if (missed || idle) log(`운영 알림: 미실행 ${missed}건 · 무실적 ${idle}건`);
     }),
   );
   // 카카오톡 연결 유지(하루 1회): 만료가 가까운 리프레시 토큰 갱신

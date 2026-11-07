@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import type { CommandType, Role, Severity, User } from "@/lib/domain/types";
+import { NOTIFY_KIND_LABEL, NOTIFY_KINDS, type CommandType, type NotifyKind, type Role, type Severity, type User } from "@/lib/domain/types";
 import { COMMAND_LABEL, ROLE_LABEL } from "@/lib/domain/status";
 import {
   addRecipientAction,
@@ -11,6 +11,7 @@ import {
   removeRecipientAction,
   setRobotActiveAction,
   testRecipientAction,
+  updateRecipientAction,
   resetSampleAction,
   setSiteManagerCanConfirmAction,
   setRemoteControlAction,
@@ -140,7 +141,38 @@ export function NewUserForm({ sites }: { sites: { id: string; name: string }[] }
   );
 }
 
-export function RecipientsPanel({ siteId, recipients, dedupeMinutes, escalateAfterMinutes, kakaoUsers }: { siteId: string; recipients: { id: string; channel: "EMAIL" | "KAKAO"; address: string; minSeverity: Severity; hoursFrom: string; hoursTo: string }[]; dedupeMinutes: number; escalateAfterMinutes: number; kakaoUsers: { id: string; name: string; linked: boolean }[] }) {
+/** 통보 종류 체크박스(수신자 추가·수정·내 구독 공용). */
+export function KindPicker({ value, onChange, disabled }: { value: NotifyKind[]; onChange: (v: NotifyKind[]) => void; disabled?: boolean }) {
+  return (
+    <span className="inline-flex flex-wrap gap-x-2 gap-y-0.5">
+      {NOTIFY_KINDS.map((k) => (
+        <label key={k} className="inline-flex items-center gap-0.5 whitespace-nowrap">
+          <input type="checkbox" disabled={disabled} checked={value.includes(k)} onChange={(e) => onChange(e.target.checked ? [...value, k] : value.filter((x) => x !== k))} />
+          {NOTIFY_KIND_LABEL[k]}
+        </label>
+      ))}
+    </span>
+  );
+}
+
+export const kindsSummary = (kinds: NotifyKind[]) => (kinds.length === NOTIFY_KINDS.length ? "모든 통보" : kinds.map((k) => NOTIFY_KIND_LABEL[k]).join("·"));
+
+function RecipientKindsEditor({ siteId, recipient }: { siteId: string; recipient: { id: string; kinds: NotifyKind[] } }) {
+  const { pending, result, run } = useAction();
+  const [open, setOpen] = useState(false);
+  const [kinds, setKinds] = useState<NotifyKind[]>(recipient.kinds);
+  if (!open) return <button type="button" className={btn.small} onClick={() => setOpen(true)}>종류 변경</button>;
+  return (
+    <span className="inline-flex flex-wrap items-center gap-1">
+      <KindPicker value={kinds} onChange={setKinds} disabled={pending} />
+      <button type="button" className={btn.small} disabled={pending || kinds.length === 0} onClick={() => run(async () => { const r = await updateRecipientAction(siteId, recipient.id, { kinds }); if (r.ok) setOpen(false); return r; })}>저장</button>
+      <button type="button" className={btn.small} onClick={() => setOpen(false)}>취소</button>
+      <ResultLine result={result} />
+    </span>
+  );
+}
+
+export function RecipientsPanel({ siteId, recipients, dedupeMinutes, escalateAfterMinutes, noActivityHours, kakaoUsers }: { siteId: string; recipients: { id: string; channel: "EMAIL" | "KAKAO"; address: string; minSeverity: Severity; hoursFrom: string; hoursTo: string; kinds: NotifyKind[] }[]; dedupeMinutes: number; escalateAfterMinutes: number; noActivityHours: number; kakaoUsers: { id: string; name: string; linked: boolean }[] }) {
   const { pending, result, run } = useAction();
   const [channel, setChannel] = useState<"EMAIL" | "KAKAO">("EMAIL");
   const [address, setAddress] = useState("");
@@ -148,8 +180,10 @@ export function RecipientsPanel({ siteId, recipients, dedupeMinutes, escalateAft
   const [sev, setSev] = useState<Severity>("HIGH");
   const [from, setFrom] = useState("00:00");
   const [to, setTo] = useState("23:59");
+  const [kinds, setKinds] = useState<NotifyKind[]>([...NOTIFY_KINDS]);
   const [dedupe, setDedupe] = useState(dedupeMinutes);
   const [esc, setEsc] = useState(escalateAfterMinutes);
+  const [idleHours, setIdleHours] = useState(noActivityHours);
   const label = (r: { channel: string; address: string }) => {
     if (r.channel === "EMAIL") return r.address;
     if (!r.address.startsWith("user:")) return `${r.address} (전화번호 알림톡 — 모의)`;
@@ -164,7 +198,8 @@ export function RecipientsPanel({ siteId, recipients, dedupeMinutes, escalateAft
           <li key={r.id} className="flex items-center gap-2 flex-wrap">
             <span className="rounded bg-gray-100 px-1">{r.channel === "EMAIL" ? "이메일" : "카카오톡"}</span>
             <span>{label(r)}</span>
-            <span className="text-gray-500">등급 ≥ {r.minSeverity} · {r.hoursFrom}~{r.hoursTo}</span>
+            <span className="text-gray-500">등급 ≥ {r.minSeverity} · {r.hoursFrom}~{r.hoursTo} · {kindsSummary(r.kinds)}</span>
+            <RecipientKindsEditor siteId={siteId} recipient={r} />
             <ActionButton variant="small" action={() => testRecipientAction(siteId, r.id)}>
               시험 발송
             </ActionButton>
@@ -202,19 +237,24 @@ export function RecipientsPanel({ siteId, recipients, dedupeMinutes, escalateAft
         <button
           type="button"
           className={btn.small}
-          disabled={pending || (channel === "EMAIL" ? !address.trim() : !kakaoUser)}
-          onClick={() => run(() => addRecipientAction(siteId, { channel, address: channel === "EMAIL" ? address : `user:${kakaoUser}`, minSeverity: sev, hoursFrom: from, hoursTo: to }))}
+          disabled={pending || kinds.length === 0 || (channel === "EMAIL" ? !address.trim() : !kakaoUser)}
+          onClick={() => run(() => addRecipientAction(siteId, { channel, address: channel === "EMAIL" ? address : `user:${kakaoUser}`, minSeverity: sev, hoursFrom: from, hoursTo: to, kinds }))}
         >
           수신자 추가
         </button>
       </div>
       <div className="flex flex-wrap gap-1 items-center">
+        받을 통보: <KindPicker value={kinds} onChange={setKinds} />
+      </div>
+      <div className="flex flex-wrap gap-1 items-center">
         중복 억제 <input type="number" className="border rounded px-1 py-0.5 w-16" value={dedupe} onChange={(e) => setDedupe(Number(e.target.value))} />분 · 미조치 확대 통보{" "}
-        <input type="number" className="border rounded px-1 py-0.5 w-16" value={esc} onChange={(e) => setEsc(Number(e.target.value))} />분
-        <button type="button" className={btn.small} disabled={pending} onClick={() => run(() => updateThresholdsAction(siteId, dedupe, esc))}>
+        <input type="number" className="border rounded px-1 py-0.5 w-16" value={esc} onChange={(e) => setEsc(Number(e.target.value))} />분 · 무실적 통보{" "}
+        <input type="number" className="border rounded px-1 py-0.5 w-16" min={0} max={720} value={idleHours} onChange={(e) => setIdleHours(Number(e.target.value))} />시간(0=끔)
+        <button type="button" className={btn.small} disabled={pending} onClick={() => run(() => updateThresholdsAction(siteId, dedupe, esc, idleHours))}>
           임계값 저장
         </button>
       </div>
+      <p className="text-gray-500">등급·시간대는 장애 통보에만 적용됩니다. 무실적 통보는 그 시간 동안 청소 실적이 없는 실제 로봇을 하루 한 번 알립니다. 보고서 발행 통보는 고객 공개 때 PPT·Excel 을 이메일로 보냅니다.</p>
       <ResultLine result={result} />
     </div>
   );

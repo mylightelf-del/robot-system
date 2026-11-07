@@ -6,13 +6,17 @@ import { AppNav } from "@/components/AppNav";
 import { UserMenu } from "@/components/UserMenu";
 import { ROLE_LABEL } from "@/lib/domain/status";
 import { vendorModes } from "@/lib/vendors";
+import { PwaRegister } from "@/components/PwaRegister";
 
 export const metadata: Metadata = {
   title: "청소로봇 통합관제",
   description: "포스코와이드 청소로봇 통합관제 — 2단계(기반)",
+  manifest: "/manifest.webmanifest",
+  appleWebApp: { capable: true, statusBarStyle: "default", title: "로봇관제" },
+  icons: { icon: "/icons/icon-192.png", apple: "/icons/apple-touch-icon.png" },
 };
 
-export const viewport: Viewport = { width: "device-width", initialScale: 1 };
+export const viewport: Viewport = { width: "device-width", initialScale: 1, themeColor: "#1e3a5f" };
 
 // 모든 화면은 요청마다 동적으로 렌더링한다(DB 조회 + 세션 쿠키).
 export const dynamic = "force-dynamic";
@@ -28,6 +32,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
   return (
     <html lang="ko" className="h-full antialiased">
       <body className="min-h-full flex flex-col">
+        <PwaRegister />
         {sampleMode && (
           <div className="no-print bg-sample text-amber-900 text-xs sm:text-sm px-4 py-1.5 border-b border-amber-200 text-center">
             <strong>샘플 데이터 · 시뮬레이션 모드</strong> — 사업장명·모델별 대수·배치는 모두 가상입니다. 실제 로봇 명령은 전송되지 않습니다.

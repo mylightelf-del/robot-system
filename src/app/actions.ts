@@ -4,7 +4,7 @@ import { isCustomer } from "@/lib/auth/authz";
 import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import type { CleanMode, CommandType, ReportComments, ReportContent, Role, Severity } from "@/lib/domain/types";
+import type { CleanMode, CommandType, NotifyKind, ReportComments, ReportContent, Role, Severity } from "@/lib/domain/types";
 import { cookieOptions, createSession, getCurrentUser, getOptionalUser, SESSION_COOKIE } from "@/lib/auth/session";
 import { AppError, errorMessage, ForbiddenError } from "@/lib/util/errors";
 import { issueCommand, type IssueCommandInput } from "@/lib/services/commands";
@@ -231,14 +231,40 @@ export async function reissueInviteAction(targetId: string): Promise<ActionResul
     return { message: "초대 링크를 재발급했습니다(기존 세션 종료).", link };
   });
 }
-export async function addRecipientAction(siteId: string, input: { channel: "EMAIL" | "KAKAO"; address: string; minSeverity: Severity; hoursFrom: string; hoursTo: string }): Promise<ActionResult> {
+export async function addRecipientAction(siteId: string, input: { channel: "EMAIL" | "KAKAO"; address: string; minSeverity: Severity; hoursFrom: string; hoursTo: string; kinds?: NotifyKind[] }): Promise<ActionResult> {
   return run(async () => admin.addRecipient(await getCurrentUser(), siteId, input));
+}
+export async function updateRecipientAction(siteId: string, recipientId: string, patch: { kinds?: NotifyKind[]; minSeverity?: Severity; hoursFrom?: string; hoursTo?: string }): Promise<ActionResult> {
+  return run(async () => admin.updateRecipient(await getCurrentUser(), siteId, recipientId, patch));
+}
+export async function subscribeMeAction(siteId: string, channel: "EMAIL" | "KAKAO", kinds?: NotifyKind[]): Promise<ActionResult> {
+  return run(async () => {
+    await notifySvc.subscribeMe(await getCurrentUser(), siteId, channel, kinds);
+    return { message: "이 사업장의 알림을 받습니다." };
+  });
+}
+export async function updateMySubscriptionAction(recipientId: string, patch: { kinds?: NotifyKind[]; hoursFrom?: string; hoursTo?: string }): Promise<ActionResult> {
+  return run(async () => notifySvc.updateMySubscription(await getCurrentUser(), recipientId, patch));
+}
+export async function unsubscribeMeAction(recipientId: string): Promise<ActionResult> {
+  return run(async () => {
+    await notifySvc.unsubscribeMe(await getCurrentUser(), recipientId);
+    return { message: "알림 수신을 해제했습니다." };
+  });
+}
+export async function sendReportAction(reportId: string): Promise<ActionResult> {
+  return run(async () => {
+    const { sendReportNotifications } = await import("@/lib/services/reportNotify");
+    const c = await sendReportNotifications(await getCurrentUser(), reportId, "MANUAL");
+    if (c.recipients === 0) return { message: "이 사업장에 등록된 수신자가 없습니다(관리 설정 → 알림 수신 설정)." };
+    return { message: `발송 ${c.sent}건 · 억제 ${c.suppressed}건 · 실패 ${c.failed}건 (수신자 ${c.recipients}명)` };
+  });
 }
 export async function removeRecipientAction(siteId: string, recipientId: string): Promise<ActionResult> {
   return run(async () => admin.removeRecipient(await getCurrentUser(), siteId, recipientId));
 }
-export async function updateThresholdsAction(siteId: string, dedupeMinutes: number, escalateAfterMinutes: number): Promise<ActionResult> {
-  return run(async () => admin.updateNotificationThresholds(await getCurrentUser(), siteId, dedupeMinutes, escalateAfterMinutes));
+export async function updateThresholdsAction(siteId: string, dedupeMinutes: number, escalateAfterMinutes: number, noActivityHours?: number): Promise<ActionResult> {
+  return run(async () => admin.updateNotificationThresholds(await getCurrentUser(), siteId, dedupeMinutes, escalateAfterMinutes, noActivityHours));
 }
 export async function relocateRobotAction(robotId: string, toSiteId: string, toFloorId: string, reason?: string): Promise<ActionResult> {
   return run(async () => admin.relocateRobot(await getCurrentUser(), robotId, toSiteId, toFloorId, reason));

@@ -3,13 +3,17 @@ import { ChangePasswordForm } from "@/components/AuthForms";
 import { Card, KV, PageTitle } from "@/components/ui";
 import { ROLE_LABEL } from "@/lib/domain/status";
 import { MyNotifyPanel } from "@/components/NotifyPanels";
-import { myKakaoStatus, notifyStatus } from "@/lib/services/notify";
+import { MySubscriptions } from "@/components/MySubscriptions";
+import { myKakaoStatus, mySubscriptions, notifyStatus } from "@/lib/services/notify";
+import { listSites } from "@/lib/services/robots";
 
 export default async function AccountPage({ searchParams }: { searchParams: Promise<{ kakao?: string }> }) {
   const user = await getCurrentUser();
   const { kakao: kakaoResult } = await searchParams;
   const ns = notifyStatus();
   const kakao = await myKakaoStatus(user);
+  const subs = await mySubscriptions(user);
+  const sites = (await listSites(user)).map((s) => ({ id: s.id, name: s.name }));
   return (
     <>
       <PageTitle title="내 계정" />
@@ -22,6 +26,9 @@ export default async function AccountPage({ searchParams }: { searchParams: Prom
         </Card>
         <Card title="알림 받기">
           <MyNotifyPanel email={user.email} emailMode={ns.modes.EMAIL} emailFrom={ns.emailFrom} kakao={kakao} kakaoResult={kakaoResult} />
+        </Card>
+        <Card title="내 알림 구독 (사업장·종류)">
+          <MySubscriptions subs={subs.map((s) => ({ id: s.id, siteId: s.siteId, siteName: s.siteName, channel: s.channel, hoursFrom: s.hoursFrom, hoursTo: s.hoursTo, kinds: s.kinds }))} sites={sites} kakaoLinked={kakao.linked} />
         </Card>
       </div>
     </>

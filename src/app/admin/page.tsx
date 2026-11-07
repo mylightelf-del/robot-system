@@ -75,7 +75,7 @@ export default async function AdminPage() {
             {d.notificationSettings.filter((n) => activeSites.some((s) => s.id === n.siteId)).map((n) => (
               <div key={n.siteId} className="border rounded p-3">
                 <div className="font-medium text-sm mb-1">{d.sites.find((s) => s.id === n.siteId)?.name}</div>
-                <RecipientsPanel siteId={n.siteId} recipients={n.recipients} dedupeMinutes={n.dedupeMinutes} escalateAfterMinutes={n.escalateAfterMinutes} kakaoUsers={kakaoUsers} />
+                <RecipientsPanel siteId={n.siteId} recipients={n.recipients} dedupeMinutes={n.dedupeMinutes} escalateAfterMinutes={n.escalateAfterMinutes} noActivityHours={n.noActivityHours} kakaoUsers={kakaoUsers} />
               </div>
             ))}
           </div>

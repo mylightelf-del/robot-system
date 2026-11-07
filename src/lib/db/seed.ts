@@ -99,7 +99,7 @@ export async function seedDatabase(data: StoreData, samplePassword: string): Pro
     );
     const perms = data.users.flatMap((u) => u.sitePermissions.map((p) => ({ userId: u.id, siteId: p.siteId, allowedCommands: p.allowedCommands })));
     if (perms.length) await tx.insert(schema.sitePermissions).values(perms);
-    await tx.insert(schema.notificationSettings).values(data.notificationSettings.map((n) => ({ siteId: n.siteId, dedupeMinutes: n.dedupeMinutes, escalateAfterMinutes: n.escalateAfterMinutes })));
+    await tx.insert(schema.notificationSettings).values(data.notificationSettings.map((n) => ({ siteId: n.siteId, dedupeMinutes: n.dedupeMinutes, escalateAfterMinutes: n.escalateAfterMinutes, noActivityHours: n.noActivityHours })));
     await tx.insert(schema.notificationRecipients).values(data.notificationSettings.flatMap((n) => n.recipients.map((r) => ({ ...r, siteId: n.siteId }))));
     await tx.insert(schema.vendorConnections).values(data.vendorConnections);
     // 워커가 동시에 기본 설정 행을 만들 수 있으므로(loadSettings) 덮어쓰기로 넣는다.

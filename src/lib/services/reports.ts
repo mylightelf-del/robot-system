@@ -348,6 +348,13 @@ export async function publishReport(user: User, reportId: string): Promise<void>
   if (r.status !== "CONFIRMED") throw new ValidationError("확정된 보고서만 고객에게 공개할 수 있습니다.");
   await db.update(schema.reportVersions).set({ status: "PUBLISHED", publishedAt: nowIso() }).where(eq(schema.reportVersions.id, reportId));
   await audit(user, { siteId: r.siteId, robotId: null, action: "REPORT:PUBLISH", params: { reportId }, result: "OK", detail: null, vendorTraceId: null }, db);
+  // 고객 공개와 함께 사업장 수신자('보고서 발행' 종류)에게 자동 발송. 발송 실패가 공개를 되돌리지는 않는다(기록만 남김).
+  try {
+    const { sendReportNotifications } = await import("./reportNotify");
+    await sendReportNotifications(user, reportId, "PUBLISH");
+  } catch (e) {
+    await audit(user, { siteId: r.siteId, robotId: null, action: "REPORT:NOTIFY", params: { reportId, trigger: "PUBLISH" }, result: "ERROR", detail: String((e as Error).message ?? e).slice(0, 200), vendorTraceId: null }, db);
+  }
 }
 
 /** 수치 보정(초안·검토 상태). value 가 null 이면 보정을 지우고 원래 집계값으로 되돌린다. 원래값·보정값·사용자를 감사 기록에 남긴다. */

@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { getCurrentUser } from "@/lib/auth/session";
-import { getDashboard, STATUS_KEYS } from "@/lib/services/dashboard";
+import { getDashboard, getTodo, LOW_CONSUMABLE_PCT, STATUS_KEYS } from "@/lib/services/dashboard";
 import { listIncidents } from "@/lib/services/incidents";
 import { listRobots } from "@/lib/services/robots";
 import { STATUS_LABEL, STATUS_STYLE } from "@/lib/domain/status";
@@ -10,13 +10,39 @@ import { formatDateTime, relativeFromNow } from "@/lib/util/time";
 import { AccessDenied } from "@/components/AccessDenied";
 import { AutoRefresh } from "@/components/AutoRefresh";
 
+const fmtMin = (min: number) => (min >= 60 ? `${Math.floor(min / 60)}시간 ${Math.round(min % 60)}분` : `${Math.round(min)}분`);
+/** 전주 대비 문구. */
+function weekDelta(cur: number | null, prev: number | null, unit: string): string {
+  if (cur === null || prev === null) return "";
+  if (prev === 0) return cur === 0 ? "전주와 같음" : `전주 0${unit}`;
+  const pct = Math.round(((cur - prev) / prev) * 100);
+  return `전주 ${prev.toLocaleString()}${unit} (${pct >= 0 ? "+" : ""}${pct}%)`;
+}
+
+function TodoBlock({ title, count, href, tone, children }: { title: string; count: number; href: string; tone: "bad" | "warn"; children: React.ReactNode }) {
+  const cls = count === 0 ? "text-gray-400" : tone === "bad" ? "text-red-700" : "text-amber-700";
+  return (
+    <div className="border rounded p-2 min-w-0">
+      <div className="flex items-center justify-between gap-2">
+        <span className="font-medium">{title}</span>
+        <Link href={href} className={`text-lg font-bold ${cls} hover:underline`}>{count}</Link>
+      </div>
+      {count > 0 && <ul className="mt-1 space-y-0.5 text-xs break-words">{children}</ul>}
+    </div>
+  );
+}
+
 export default async function DashboardPage() {
   const user = await getCurrentUser();
   if (!user.active) return <AccessDenied reason="비활성화된 사용자입니다. 접근이 차단되었습니다." />;
   const dash = await getDashboard(user);
+  const todo = await getTodo(user);
   const incidents = (await listIncidents(user)).slice(0, 8);
   const stale = (await listRobots(user)).filter((r) => r.status.common === "OFFLINE" || r.status.common === "UNKNOWN");
   const t = dash.totals;
+  const todoCount = todo.missedRuns.length + todo.unacknowledgedIncidents + todo.lowConsumables.length + todo.staleRobots.length;
+  const w = dash.week;
+  const pw = dash.prevWeek;
 
   return (
     <>
@@ -32,6 +58,42 @@ export default async function DashboardPage() {
         <Stat label="미조치 장애" value={t.openIncidents} tone={t.unacknowledgedIncidents ? "bad" : t.openIncidents ? "warn" : "default"} hint={`미확인 ${t.unacknowledgedIncidents}건`} />
       </div>
 
+      <Card title={`오늘 할 일 ${todoCount ? `(${todoCount})` : ""}`} className="mb-4">
+        {todoCount === 0 ? (
+          <div className="text-sm text-gray-600">처리할 일이 없습니다. 오늘 예정 회차 {todo.plannedToday.total}건 중 {todo.plannedToday.remaining}건이 남아 있습니다.</div>
+        ) : (
+          <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3 text-sm">
+            <TodoBlock title="예정 작업 미실행(24시간)" count={todo.missedRuns.length} href="/tasks" tone="bad">
+              {todo.missedRuns.slice(0, 4).map((m) => (
+                <li key={m.id}><Link href={`/robots/${m.robotId}`} className="text-navy hover:underline">{m.robotName}</Link> · {m.taskName} <span className="text-gray-500">{formatDateTime(m.plannedAt)}</span></li>
+              ))}
+            </TodoBlock>
+            <TodoBlock title="미확인 장애" count={todo.unacknowledgedIncidents} href="/incidents" tone="bad">
+              <li className="text-gray-600">장애·조치 화면에서 확인 처리하세요.</li>
+            </TodoBlock>
+            <TodoBlock title={`소모품 ${LOW_CONSUMABLE_PCT}% 미만`} count={todo.lowConsumables.length} href="/robots" tone="warn">
+              {todo.lowConsumables.slice(0, 4).map((c) => (
+                <li key={`${c.robotId}-${c.name}`}><Link href={`/robots/${c.robotId}`} className="text-navy hover:underline">{c.robotName}</Link> · {c.name} <span className="text-amber-700">{c.remainingPct}%</span></li>
+              ))}
+            </TodoBlock>
+            <TodoBlock title="상태 미수신 로봇" count={todo.staleRobots.length} href="/robots" tone="warn">
+              {todo.staleRobots.slice(0, 4).map((r) => (
+                <li key={r.robotId}><Link href={`/robots/${r.robotId}`} className="text-navy hover:underline">{r.robotName}</Link> <span className="text-gray-500">{r.siteName} · {relativeFromNow(r.lastReceivedAt, dash.now)}</span></li>
+              ))}
+            </TodoBlock>
+          </div>
+        )}
+        <div className="text-xs text-gray-500 mt-2">오늘 예정 회차 {todo.plannedToday.total}건 · 아직 시각이 안 된 회차 {todo.plannedToday.remaining}건</div>
+      </Card>
+
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 mb-4">
+        <Stat label="최근 7일 작업" value={`${w.runs.toLocaleString()}건`} hint={weekDelta(w.runs, pw.runs, "건")} />
+        <Stat label="최근 7일 청소 면적" value={`${w.areaM2.toLocaleString()}㎡`} hint={weekDelta(w.areaM2, pw.areaM2, "㎡")} />
+        <Stat label="최근 7일 완료율" value={w.completionRatePct === null ? "해당 없음" : `${w.completionRatePct}%`} hint={weekDelta(w.completionRatePct, pw.completionRatePct, "%")} tone={w.completionRatePct !== null && w.completionRatePct < 80 ? "warn" : "default"} />
+        <Stat label="생산성(㎡/시간)" value={w.productivityM2PerHour === null ? "-" : w.productivityM2PerHour.toLocaleString()} hint={weekDelta(w.productivityM2PerHour, pw.productivityM2PerHour, "")} />
+        <Stat label="장애 평균 조치 시간" value={dash.mttrMin30d === null ? "해당 없음" : fmtMin(dash.mttrMin30d)} hint={`최근 30일 복구 기준 · 7일 장애 ${w.incidents}건(전주 ${pw.incidents})`} />
+      </div>
+
       <div className="grid lg:grid-cols-3 gap-4">
         <Card title="사업장별 현황" className="lg:col-span-2 min-w-0">
           {dash.sites.length === 0 ? (
@@ -45,6 +107,8 @@ export default async function DashboardPage() {
                     <th>대수</th>
                     <th>상태</th>
                     <th>당일 실적</th>
+                    <th>7일 완료율</th>
+                    <th>7일 생산성</th>
                     <th>미조치 장애</th>
                   </tr>
                 </thead>
@@ -70,6 +134,8 @@ export default async function DashboardPage() {
                         {s.todayRuns}건 · {s.todayAreaM2.toLocaleString()}㎡
                         <div className="text-xs text-gray-500">정상 완료 {s.todayCompleted}건</div>
                       </td>
+                      <td className="whitespace-nowrap">{s.week.completionRatePct === null ? <span className="text-gray-400">-</span> : `${s.week.completionRatePct}%`}<div className="text-xs text-gray-500">{weekDelta(s.week.completionRatePct, s.prevWeek.completionRatePct, "%") || "전주 없음"}</div></td>
+                      <td className="whitespace-nowrap">{s.week.productivityM2PerHour === null ? <span className="text-gray-400">-</span> : `${s.week.productivityM2PerHour.toLocaleString()}㎡/h`}<div className="text-xs text-gray-500">{s.week.runs}건 · {s.week.areaM2.toLocaleString()}㎡</div></td>
                       <td>
                         {s.openIncidents ? (
                           <span className={s.unacknowledgedIncidents ? "text-red-700 font-semibold" : "text-amber-700"}>

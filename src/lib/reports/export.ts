@@ -76,15 +76,26 @@ async function imageSize(buf: Buffer): Promise<{ w: number; h: number }> {
 const dataUrl = (buf: Buffer, contentType: string) => `data:${contentType};base64,${buf.toString("base64")}`;
 
 /** 요약 지표(보정 여부 포함). PPT 카드·엑셀 요약 표가 같이 쓴다. */
+/** 전기 대비 증감 문구(비교 기간이 있을 때만). */
+function delta(cur: number | null | undefined, prev: number | null | undefined, unit = ""): string {
+  if (cur === null || cur === undefined || prev === null || prev === undefined) return "";
+  if (prev === 0) return cur === 0 ? "전기와 같음" : `전기 0${unit}`;
+  const pct = Math.round(((cur - prev) / prev) * 100);
+  return `전기 ${prev.toLocaleString("ko-KR")}${unit} (${pct >= 0 ? "+" : ""}${pct}%)`;
+}
+const withDelta = (note: string, d: string) => (d ? (note ? `${note} · ${d}` : d) : note);
+
 function kpis(a: ReportAggregates, adjusted: Set<string>) {
   const adj = (...k: string[]) => k.some((x) => adjusted.has(`summary.${x}`));
+  const p = a.prev;
   return [
     { label: "운영 대수", value: `${n0(a.robotCount)}대`, num: a.robotCount, unit: "대", note: "", adj: adj("robotCount") },
-    { label: "계획 완료율", value: a.completionRatePct === null ? "해당 없음" : `${a.completionRatePct}%`, num: a.completionRatePct, unit: "%", note: `정상 완료 ${n0(a.plannedCompleted)} / 유효 계획 ${n0(a.validPlanned)}회`, adj: adj("completionRatePct", "plannedCompleted", "validPlanned") },
-    { label: "총 작업", value: `${n0(a.totalRuns)}건`, num: a.totalRuns, unit: "건", note: `즉시·원격 ${n0(a.adhocRuns)}건 포함`, adj: adj("totalRuns", "adhocRuns") },
-    { label: "누적 청소 면적", value: `${n0(a.cumulativeAreaM2)}㎡`, num: a.cumulativeAreaM2, unit: "㎡", note: "반복 구역 포함", adj: adj("cumulativeAreaM2") },
-    { label: "총 작업 시간", value: hm(a.totalDurationMin), num: a.totalDurationMin, unit: "분", note: `${n0(a.totalDurationMin)}분`, adj: adj("totalDurationMin") },
-    { label: "장애", value: `${n0(a.incidents.length)}건`, num: a.incidents.length, unit: "건", note: `미실행 ${n0(a.missed)} · 취소 ${n0(a.cancelled)} · 제외 ${n0(a.excluded)}`, adj: false },
+    { label: "계획 완료율", value: a.completionRatePct === null ? "해당 없음" : `${a.completionRatePct}%`, num: a.completionRatePct, unit: "%", note: withDelta(`정상 완료 ${n0(a.plannedCompleted)} / 유효 계획 ${n0(a.validPlanned)}회`, p ? delta(a.completionRatePct, p.completionRatePct, "%") : ""), adj: adj("completionRatePct", "plannedCompleted", "validPlanned") },
+    { label: "총 작업", value: `${n0(a.totalRuns)}건`, num: a.totalRuns, unit: "건", note: withDelta(`즉시·원격 ${n0(a.adhocRuns)}건 포함`, p ? delta(a.totalRuns, p.totalRuns, "건") : ""), adj: adj("totalRuns", "adhocRuns") },
+    { label: "누적 청소 면적", value: `${n0(a.cumulativeAreaM2)}㎡`, num: a.cumulativeAreaM2, unit: "㎡", note: withDelta("반복 구역 포함", p ? delta(a.cumulativeAreaM2, p.cumulativeAreaM2, "㎡") : ""), adj: adj("cumulativeAreaM2") },
+    { label: "총 작업 시간", value: hm(a.totalDurationMin), num: a.totalDurationMin, unit: "분", note: withDelta(`${n0(a.totalDurationMin)}분`, p ? delta(a.totalDurationMin, p.totalDurationMin, "분") : ""), adj: adj("totalDurationMin") },
+    { label: "생산성", value: a.productivityM2PerHour === null || a.productivityM2PerHour === undefined ? "-" : `${a.productivityM2PerHour.toLocaleString("ko-KR")}㎡/h`, num: a.productivityM2PerHour ?? null, unit: "㎡/h", note: withDelta("면적 ÷ 작업 시간", p ? delta(a.productivityM2PerHour, p.productivityM2PerHour, "㎡/h") : ""), adj: false },
+    { label: "장애", value: `${n0(a.incidents.length)}건`, num: a.incidents.length, unit: "건", note: withDelta(`미실행 ${n0(a.missed)} · 취소 ${n0(a.cancelled)}${a.incidentMttrMin ? ` · 평균 조치 ${hm(a.incidentMttrMin)}` : ""}`, p ? delta(a.incidents.length, p.incidents, "건") : ""), adj: false },
   ];
 }
 
@@ -522,8 +533,11 @@ export async function buildXlsx(input: ExportInput): Promise<Buffer> {
       ["총 작업 시간", a.totalDurationMin, "분", hm(a.totalDurationMin), ["totalDurationMin"]],
       ["물 사용량", a.waterL ?? "미제공", "L", "", ["waterL"]],
       ["세제 사용량", a.detergentMl ?? "미제공", "mL", "", ["detergentMl"]],
+      ["생산성", a.productivityM2PerHour ?? (a.productivityM2PerHour === null ? "계산 불가" : "-"), "㎡/h", withDelta("면적 ÷ 작업 시간", a.prev ? delta(a.productivityM2PerHour, a.prev.productivityM2PerHour, "㎡/h") : ""), []],
       ["미실행 / 취소 / 제외", `${a.missed} / ${a.cancelled} / ${a.excluded}`, "회", "", ["missed", "cancelled", "excluded"]],
-      ["장애", a.incidents.length, "건", "", []],
+      ["장애", a.incidents.length, "건", withDelta("", a.prev ? delta(a.incidents.length, a.prev.incidents, "건") : ""), []],
+      ["장애 평균 조치 시간", a.incidentMttrMin ?? (a.incidentMttrMin === null ? "해당 없음" : "-"), "분", a.incidentMttrMin ? hm(a.incidentMttrMin) : "기간 내 발생·복구 기준", []],
+      ...(a.prev ? ([["비교 기간(전기)", `${a.prev.periodStart}~${a.prev.periodEnd}`, "", `총 작업 ${n0(a.prev.totalRuns)}건 · 면적 ${n0(a.prev.cumulativeAreaM2)}㎡ · 시간 ${n0(a.prev.totalDurationMin)}분 · 완료율 ${a.prev.completionRatePct ?? "해당 없음"}%`, []]] as [string, number | string | null, string, string, string[]][]) : []),
     ];
     for (const [l, v, u, nt, keys] of rows) {
       const mark = keys.some((k) => adjusted.has(`summary.${k}`));

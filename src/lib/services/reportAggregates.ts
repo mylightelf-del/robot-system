@@ -151,6 +151,10 @@ export function computeAggregates(data: AggregateInput, siteId: string, period: 
   ]).size;
 
   const latestReceived = runs.reduce((m, r) => (r.receivedAt > m ? r.receivedAt : m), "");
+  const productivityM2PerHour = productivity(Math.round(sum(runs, (r) => r.areaM2)), Math.round(sum(runs, (r) => r.durationMin)));
+  const resolved = incidents.filter((i) => i.resolvedAt);
+  const incidentMttrMin = resolved.length ? Math.round(resolved.reduce((s, i) => s + (new Date(i.resolvedAt!).getTime() - new Date(i.occurredAt).getTime()) / 60000, 0) / resolved.length) : null;
+  const prev = period.kind === "INSTALLATION" ? undefined : previousPeriodSummary(data, siteId, period, asOf, tz);
 
   return {
     generatedAt: asOf,
@@ -181,6 +185,42 @@ export function computeAggregates(data: AggregateInput, siteId: string, period: 
     dataGapDays,
     unsupportedMetrics,
     includesRunsReceivedUntil: latestReceived || asOf,
+    productivityM2PerHour,
+    incidentMttrMin,
+    ...(prev ? { prev } : {}),
+  };
+}
+
+/** 생산성(㎡/시간): 면적 ÷ 시간. 시간이 0 이면 null(계산 불가). */
+export function productivity(areaM2: number, durationMin: number): number | null {
+  return durationMin > 0 ? Math.round((areaM2 / (durationMin / 60)) * 10) / 10 : null;
+}
+
+/** 직전 같은 길이의 기간(끝 날짜 = 기간 시작 전날) 요약. 추이 비교용으로 핵심 숫자만 센다. */
+function previousPeriodSummary(data: AggregateInput, siteId: string, period: ReportPeriod, asOf: string, tz: string): NonNullable<ReportAggregates["prev"]> {
+  const days = Math.round((Date.UTC(+period.periodEnd.slice(0, 4), +period.periodEnd.slice(5, 7) - 1, +period.periodEnd.slice(8, 10)) - Date.UTC(+period.periodStart.slice(0, 4), +period.periodStart.slice(5, 7) - 1, +period.periodStart.slice(8, 10))) / 86400000) + 1;
+  const periodEnd = addDays(period.periodStart, -1);
+  const periodStart = addDays(periodEnd, -(days - 1));
+  const inPrev = (iso: string) => {
+    const k = localDateKey(iso, tz);
+    return k >= periodStart && k <= periodEnd;
+  };
+  const runs = data.actualRuns.filter((r) => r.siteId === siteId && inPrev(r.startedAt) && r.receivedAt <= asOf);
+  const planned = data.plannedRuns.filter((p) => p.siteId === siteId && inPrev(p.plannedAt));
+  const validPlanned = planned.filter((p) => p.status !== "CANCELLED" && p.status !== "EXCLUDED" && !(p.status === "PLANNED" && p.plannedAt > asOf));
+  const runById = new Map(runs.map((r) => [r.id, r]));
+  const completed = validPlanned.filter((p) => p.status === "DONE" && p.actualRunId && runById.get(p.actualRunId)?.result === "COMPLETED");
+  const area = Math.round(runs.reduce((s, r) => s + r.areaM2, 0));
+  const dur = Math.round(runs.reduce((s, r) => s + r.durationMin, 0));
+  return {
+    periodStart,
+    periodEnd,
+    totalRuns: runs.length,
+    cumulativeAreaM2: area,
+    totalDurationMin: dur,
+    completionRatePct: validPlanned.length === 0 ? null : Math.round((completed.length / validPlanned.length) * 1000) / 10,
+    incidents: data.incidents.filter((i) => i.siteId === siteId && inPrev(i.occurredAt)).length,
+    productivityM2PerHour: productivity(area, dur),
   };
 }
 

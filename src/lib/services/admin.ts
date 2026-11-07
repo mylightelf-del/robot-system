@@ -1,5 +1,5 @@
 import { and, desc, eq, gt, inArray, isNull, sql, type SQL } from "drizzle-orm";
-import type { CommandType, NotificationRecipient, Role, Severity, User } from "@/lib/domain/types";
+import { NOTIFY_KINDS, type CommandType, type NotificationRecipient, type NotifyKind, type Role, type Severity, type User } from "@/lib/domain/types";
 import { assertActive, assertAdmin } from "@/lib/auth/authz";
 import { destroyUserSessions } from "@/lib/auth/session";
 import { hashPassword, randomToken } from "@/lib/auth/password";
@@ -111,7 +111,13 @@ export async function reissueInvite(user: User, targetId: string): Promise<strin
   return inviteUrl(token);
 }
 
-export async function addRecipient(user: User, siteId: string, r: Omit<NotificationRecipient, "id">): Promise<void> {
+export function normalizeKinds(kinds: NotifyKind[] | undefined): NotifyKind[] {
+  const set = new Set((kinds ?? NOTIFY_KINDS).filter((k) => NOTIFY_KINDS.includes(k)));
+  if (set.size === 0) throw new ValidationError("받을 통보 종류를 하나 이상 고르세요.");
+  return NOTIFY_KINDS.filter((k) => set.has(k));
+}
+
+export async function addRecipient(user: User, siteId: string, r: Omit<NotificationRecipient, "id" | "kinds"> & { kinds?: NotifyKind[] }): Promise<void> {
   const db = getDb();
   assertAdmin(user);
   const s = await db.query.notificationSettings.findFirst({ where: eq(schema.notificationSettings.siteId, siteId) });
@@ -119,8 +125,20 @@ export async function addRecipient(user: User, siteId: string, r: Omit<Notificat
   if (!r.address.trim()) throw new ValidationError("수신 주소를 입력하세요.");
   if (r.channel === "EMAIL" && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(r.address.trim())) throw new ValidationError("이메일 주소 형식이 올바르지 않습니다.");
   if (r.channel === "KAKAO") await assertKakaoAddress(r.address.trim());
-  await db.insert(schema.notificationRecipients).values({ id: newId("rcp"), siteId, ...r, address: r.address.trim() });
-  await audit(user, { siteId, robotId: null, action: "NOTIFY:ADD_RECIPIENT", params: { channel: r.channel, minSeverity: r.minSeverity }, result: "OK", detail: null, vendorTraceId: null }, db);
+  const kinds = normalizeKinds(r.kinds);
+  await db.insert(schema.notificationRecipients).values({ id: newId("rcp"), siteId, ...r, kinds, address: r.address.trim() });
+  await audit(user, { siteId, robotId: null, action: "NOTIFY:ADD_RECIPIENT", params: { channel: r.channel, minSeverity: r.minSeverity, kinds }, result: "OK", detail: null, vendorTraceId: null }, db);
+}
+
+/** 수신자의 통보 종류·등급·시간대 변경(본사 관리자). */
+export async function updateRecipient(user: User, siteId: string, recipientId: string, patch: { kinds?: NotifyKind[]; minSeverity?: Severity; hoursFrom?: string; hoursTo?: string }): Promise<void> {
+  const db = getDb();
+  assertAdmin(user);
+  const r = await db.query.notificationRecipients.findFirst({ where: and(eq(schema.notificationRecipients.id, recipientId), eq(schema.notificationRecipients.siteId, siteId)) });
+  if (!r) throw new NotFoundError("수신자를 찾을 수 없습니다.");
+  const set = { ...(patch.kinds ? { kinds: normalizeKinds(patch.kinds) } : {}), ...(patch.minSeverity ? { minSeverity: patch.minSeverity } : {}), ...(patch.hoursFrom ? { hoursFrom: patch.hoursFrom } : {}), ...(patch.hoursTo ? { hoursTo: patch.hoursTo } : {}) };
+  await db.update(schema.notificationRecipients).set(set).where(eq(schema.notificationRecipients.id, recipientId));
+  await audit(user, { siteId, robotId: null, action: "NOTIFY:UPDATE_RECIPIENT", params: { recipientId, ...set }, result: "OK", detail: null, vendorTraceId: null }, db);
 }
 
 export async function removeRecipient(user: User, siteId: string, recipientId: string): Promise<void> {
@@ -130,13 +148,14 @@ export async function removeRecipient(user: User, siteId: string, recipientId: s
   await audit(user, { siteId, robotId: null, action: "NOTIFY:REMOVE_RECIPIENT", params: { recipientId }, result: "OK", detail: null, vendorTraceId: null }, db);
 }
 
-export async function updateNotificationThresholds(user: User, siteId: string, dedupeMinutes: number, escalateAfterMinutes: number): Promise<void> {
+export async function updateNotificationThresholds(user: User, siteId: string, dedupeMinutes: number, escalateAfterMinutes: number, noActivityHours?: number): Promise<void> {
   const db = getDb();
   assertAdmin(user);
   if (!(dedupeMinutes >= 0 && escalateAfterMinutes >= 0)) throw new ValidationError("분 단위 값은 0 이상이어야 합니다.");
-  const res = await db.update(schema.notificationSettings).set({ dedupeMinutes, escalateAfterMinutes }).where(eq(schema.notificationSettings.siteId, siteId)).returning();
+  if (noActivityHours !== undefined && !(Number.isInteger(noActivityHours) && noActivityHours >= 0 && noActivityHours <= 24 * 30)) throw new ValidationError("무실적 통보 시간은 0(끔)~720 시간 사이의 정수여야 합니다.");
+  const res = await db.update(schema.notificationSettings).set({ dedupeMinutes, escalateAfterMinutes, ...(noActivityHours !== undefined ? { noActivityHours } : {}) }).where(eq(schema.notificationSettings.siteId, siteId)).returning();
   if (!res.length) throw new NotFoundError();
-  await audit(user, { siteId, robotId: null, action: "NOTIFY:UPDATE_THRESHOLDS", params: { dedupeMinutes, escalateAfterMinutes }, result: "OK", detail: null, vendorTraceId: null }, db);
+  await audit(user, { siteId, robotId: null, action: "NOTIFY:UPDATE_THRESHOLDS", params: { dedupeMinutes, escalateAfterMinutes, noActivityHours }, result: "OK", detail: null, vendorTraceId: null }, db);
 }
 
 /** 로봇 사업장 이동: 배치 이력을 닫고 새로 연다. 과거 실적은 당시 사업장에 남는다. */
