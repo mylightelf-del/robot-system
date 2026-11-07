@@ -213,7 +213,7 @@ export async function autoCreateScheduledDrafts(now: string = nowIso(), db: DbLi
   const sites = await db.select().from(schema.sites);
   const created: string[] = [];
   for (const site of sites) {
-    if (!site.installedOn) continue;
+    if (!site.installedOn || site.retiredAt) continue;
     const today = todayAt(site, now);
     const hour = Number(localHourMinute(now, site.timezone).slice(0, 2));
     const due = reportSchedule(site.installedOn, today).filter(

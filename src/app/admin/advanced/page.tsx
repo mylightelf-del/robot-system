@@ -6,7 +6,7 @@ import { NewSiteForm, SiteCard } from "@/components/SitePanels";
 import { AppError } from "@/lib/util/errors";
 import { Card, KV, PageTitle } from "@/components/ui";
 import { AccessDenied } from "@/components/AccessDenied";
-import { RelocateForm } from "@/components/AdminPanels";
+import { RelocateForm, RobotActivePanel } from "@/components/AdminPanels";
 import { AdvancedGate } from "@/components/AdvancedGate";
 import { VENDOR_LABEL } from "@/lib/domain/commands";
 import { formatDateTime } from "@/lib/util/time";
@@ -21,7 +21,13 @@ export default async function AdvancedAdminPage() {
     return <AccessDenied reason={e instanceof AppError ? e.message : "접근할 수 없습니다."} />;
   }
   const vendor = await getVendorStatus(user);
-  const floors = d.floors.map((f) => ({ id: f.id, siteId: f.siteId, name: f.name, siteName: d.sites.find((s) => s.id === f.siteId)?.name ?? f.siteId }));
+  const activeSites = d.sites.filter((s) => !s.retiredAt);
+  const floors = d.floors.filter((f) => activeSites.some((s) => s.id === f.siteId)).map((f) => ({ id: f.id, siteId: f.siteId, name: f.name, siteName: d.sites.find((s) => s.id === f.siteId)?.name ?? f.siteId }));
+  const sitesOrdered = [...activeSites, ...d.sites.filter((s) => s.retiredAt)];
+  const robotRows = d.robots.map((r) => {
+    const site = d.sites.find((s) => s.id === r.siteId);
+    return { id: r.id, name: r.name, siteName: site?.name ?? r.siteId, floorName: d.floors.find((f) => f.id === r.floorId)?.name ?? r.floorId, active: r.active, live: r.vendorMeta?.source === "api", siteRetired: !!site?.retiredAt };
+  });
 
   return (
     <>
@@ -31,7 +37,7 @@ export default async function AdvancedAdminPage() {
         <Card title="사업장 · 층 · 구역 · 로봇 배치">
           <div className="mb-3"><NewSiteForm /></div>
           <div className="grid md:grid-cols-2 gap-4">
-            {d.sites.map((s) => (
+            {sitesOrdered.map((s) => (
               <SiteCard
                 key={s.id}
                 site={{
@@ -41,6 +47,7 @@ export default async function AdvancedAdminPage() {
                   timezone: s.timezone,
                   isSample: s.isSample,
                   installedOn: s.installedOn ?? null,
+                  retiredAt: s.retiredAt ?? null,
                   hasPuduRobot: d.robots.some((r) => r.siteId === s.id && r.vendor === "PUDU" && r.vendorMeta?.source === "api"),
                   floors: d.floors
                     .filter((f) => f.siteId === s.id)
@@ -51,17 +58,22 @@ export default async function AdvancedAdminPage() {
                         name: f.name,
                         map: mv ? { id: mv.id, version: mv.version, vendor: mv.vendor ?? null, vendorMapName: mv.vendorMapName ?? null, imageUrl: mv.imageUrl ?? null, widthPx: mv.widthPx, heightPx: mv.heightPx, hasCorners: !!mv.corners } : null,
                         zones: d.zones.filter((z) => z.floorId === f.id).length,
-                        robots: d.robots.filter((r) => r.floorId === f.id).map((r) => `${r.name}[${VENDOR_LABEL[r.vendor]} ${r.model}]`),
+                        robots: d.robots.filter((r) => r.floorId === f.id).map((r) => `${r.name}[${VENDOR_LABEL[r.vendor]} ${r.model}]${r.active ? "" : "(사용 중지)"}`),
                       };
                     }),
                 }}
               />
             ))}
           </div>
-          <p className="text-xs text-gray-500 mt-2">사업장·층은 여기서 만들고, PUDU 로봇을 배치한 층은 『PUDU 지도 가져오기』로 실제 지도(이미지·구역)를 연결합니다. 로봇·층·실적이 있는 항목은 삭제할 수 없습니다(이력 보존).</p>
+          <p className="text-xs text-gray-500 mt-2">사업장·층은 여기서 만들고, PUDU 로봇을 배치한 층은 『PUDU 지도 가져오기』로 실제 지도(이미지·구역)를 연결합니다. 로봇·층·실적이 있는 항목은 삭제할 수 없습니다(이력 보존). 더 쓰지 않는 사업장은 『사용 중지』로 운영에서 빼고 이력만 남깁니다.</p>
+          <div className="mt-3 border-t pt-3">
+            <div className="text-sm font-medium mb-1">로봇 사용 중지 / 다시 사용</div>
+            <RobotActivePanel robots={robotRows} />
+            <p className="text-xs text-gray-500 mt-1">사용 중지한 로봇은 상태 동기화·운영 화면·명령·보고서 운영 대수에서 빠지고, 과거 실적·장애·명령 이력은 그대로 남습니다. 로봇 자체(제조사 등록·지도)에는 아무것도 보내지 않습니다.</p>
+          </div>
           <div className="mt-3 border-t pt-3">
             <div className="text-sm font-medium mb-1">로봇 배치 변경(이 시스템의 사업장·층)</div>
-            <RelocateForm robots={d.robots.map((r) => ({ id: r.id, name: r.name, siteId: r.siteId }))} floors={floors} />
+            <RelocateForm robots={d.robots.filter((r) => r.active && activeSites.some((s) => s.id === r.siteId)).map((r) => ({ id: r.id, name: r.name, siteId: r.siteId }))} floors={floors} />
           </div>
         </Card>
 

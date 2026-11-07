@@ -249,6 +249,24 @@ export async function setRemoteControlAction(siteId: string, enabled: boolean, r
     return { message: enabled ? "원격 제어를 켰습니다." : "원격 제어를 껐습니다." };
   });
 }
+export async function setRobotActiveAction(robotId: string, active: boolean, reason?: string): Promise<ActionResult> {
+  return run(async () => {
+    await admin.setRobotActive(await getCurrentUser(), robotId, active, reason);
+    return { message: active ? "로봇을 다시 사용합니다." : "로봇을 사용 중지했습니다. 운영 화면·동기화에서 빠지고 이력은 남습니다." };
+  });
+}
+export async function retireSiteAction(siteId: string, reason?: string): Promise<ActionResult> {
+  return run(async () => {
+    const r = await admin.retireSite(await getCurrentUser(), siteId, reason);
+    return { message: `사업장을 사용 중지했습니다(로봇 ${r.robots}대 중지, 예정 회차 ${r.cancelledPlannedRuns}건 취소). 이력은 남습니다.` };
+  });
+}
+export async function restoreSiteAction(siteId: string, reason?: string): Promise<ActionResult> {
+  return run(async () => {
+    await admin.restoreSite(await getCurrentUser(), siteId, reason);
+    return { message: "사업장을 다시 사용합니다. 로봇은 중지 상태이므로 필요한 로봇만 '로봇 사용 중지/재사용'에서 다시 켜세요." };
+  });
+}
 export async function setSiteManagerCanConfirmAction(value: boolean): Promise<ActionResult> {
   return run(async () => admin.setSiteManagerCanConfirm(await getCurrentUser(), value));
 }

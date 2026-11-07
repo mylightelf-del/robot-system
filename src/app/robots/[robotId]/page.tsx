@@ -44,6 +44,7 @@ export default async function RobotPage({ params }: { params: Promise<{ robotId:
         right={<StatusBadge status={st.common} />}
       />
 
+      {!d.robot.active && <div className="mb-3"><Notice tone="warn">사용 중지된 로봇입니다. 상태 동기화·명령이 멈춰 있고 아래는 과거 이력입니다. {customer ? "" : "본사 관리자가 고급 설정에서 다시 사용 처리할 수 있습니다."}</Notice></div>}
       {d.mapMismatch && <div className="mb-3"><Notice tone="warn">로봇이 보고한 지도 버전({st.mapVersionId})이 이 층의 현재 지도({d.map?.id})와 다릅니다. 영역 지정 명령은 차단됩니다.</Notice></div>}
       {st.common === "UNKNOWN" && <div className="mb-3"><Notice tone="warn">상태 데이터가 수신된 적이 없습니다(상태 불명). 수치 0 이 아니라 &lsquo;미수신&rsquo;으로 표시합니다.</Notice></div>}
 

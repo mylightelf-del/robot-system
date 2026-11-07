@@ -67,6 +67,8 @@ export const sites = pgTable("sites", {
   installedOn: text(),
   /** 원격 제어 허용(사업장별, 본사 관리자가 켜고 끈다). 꺼져 있으면 누구도 이 사업장 로봇에 명령을 보낼 수 없다. 기본 꺼짐. */
   remoteControlEnabled: boolean().notNull().default(false),
+  /** 사용 중지 시각(ISO). 값이 있으면 운영 화면·동기화·알림·보고서 일정에서 빠지고, 이력(실적·장애·보고서)은 보존된다. 고급 설정에서 다시 사용 가능. */
+  retiredAt: isoTimestamp(),
 });
 
 export const floors = pgTable("floors", {

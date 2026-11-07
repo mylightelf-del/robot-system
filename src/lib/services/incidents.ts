@@ -312,6 +312,7 @@ export async function escalateOverdueIncidents(now: string = nowIso()): Promise<
     if ((new Date(now).getTime() - new Date(inc.occurredAt).getTime()) / 60000 < setting.escalateAfterMinutes) continue;
     if (inc.notifications.some((n) => n.reason.startsWith("미조치 확대 통보"))) continue;
     const site = await getSite(inc.siteId, db);
+    if (site?.retiredAt) continue; // 사용 중지된 사업장은 통보하지 않는다
     const logs = await notifyIncident(setting, inc, null, now, site?.timezone ?? "Asia/Seoul", "ESCALATED");
     if (!logs.length) continue;
     await db.insert(schema.notificationLogs).values(logs.map((l) => ({ ...l, incidentId: inc.id })));

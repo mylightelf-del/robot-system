@@ -52,6 +52,8 @@ export interface Site {
   installedOn: string | null;
   /** 원격 제어 허용(사업장별). 기본 꺼짐. */
   remoteControlEnabled: boolean;
+  /** 사용 중지 시각. null 이면 운영 중. 중지된 사업장은 운영 화면·동기화·알림에서 빠지고 이력만 보존된다. */
+  retiredAt: string | null;
   /** 샘플 데이터 표식. 실제 운영 데이터에는 false. */
   isSample: boolean;
 }

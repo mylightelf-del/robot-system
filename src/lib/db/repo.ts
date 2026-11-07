@@ -23,8 +23,9 @@ export async function loadSettings(db: DbLike = getDb()): Promise<AppSettings> {
   return created ?? { siteManagerCanConfirmReports: false, commandExpiryMinutes: 5, commandAcceptedTimeoutSeconds: 60, staleThresholdMinutes: 15 };
 }
 
+/** 운영 중인 사업장 ID(사용 중지된 사업장 제외). 권한 계산의 기준이므로 중지된 사업장은 모든 운영 화면·명령·보고서 목록에서 빠진다. */
 export async function allSiteIds(db: DbLike = getDb()): Promise<string[]> {
-  const rows = await db.select({ id: schema.sites.id }).from(schema.sites).orderBy(schema.sites.id);
+  const rows = await db.select({ id: schema.sites.id }).from(schema.sites).where(isNull(schema.sites.retiredAt)).orderBy(schema.sites.id);
   return rows.map((r) => r.id);
 }
 

@@ -1,9 +1,9 @@
-import { and, desc, eq, gt, inArray, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, isNull, sql, type SQL } from "drizzle-orm";
 import type { CommandType, NotificationRecipient, Role, Severity, User } from "@/lib/domain/types";
 import { assertActive, assertAdmin } from "@/lib/auth/authz";
 import { destroyUserSessions } from "@/lib/auth/session";
 import { hashPassword, randomToken } from "@/lib/auth/password";
-import { getDb, schema } from "@/lib/db/client";
+import { getDb, schema, type Tx } from "@/lib/db/client";
 import { getNotificationSetting, getRobot, getStatus, listUsers, loadSettings, openPlacement } from "@/lib/db/repo";
 import { NotFoundError, ValidationError } from "@/lib/util/errors";
 import { newId } from "@/lib/util/random";
@@ -185,6 +185,81 @@ export async function setRemoteControl(user: User, siteId: string, enabled: bool
   if (site.remoteControlEnabled === enabled) return;
   await db.update(schema.sites).set({ remoteControlEnabled: enabled }).where(eq(schema.sites.id, siteId));
   await audit(user, { siteId, robotId: null, action: "SITE:REMOTE_CONTROL", params: { enabled }, result: "OK", detail: reason?.trim() || null, vendorTraceId: null }, db);
+}
+
+/** 로봇이 지금 작업 중이면 사용 중지·이동 같은 배치 변경을 막는다. */
+async function assertRobotNotWorking(robotId: string, db: ReturnType<typeof getDb>): Promise<void> {
+  const st = await getStatus(robotId, db);
+  if (st && (st.common === "CLEANING" || st.common === "PAUSED")) throw new ValidationError("작업 중인 로봇은 사용 중지할 수 없습니다. 작업이 끝난 뒤 다시 시도하세요.");
+}
+
+/** 미래의 예정 회차를 취소한다(계획 변경 이력 보존). 로봇 사용 중지·사업장 사용 중지에서 공통으로 쓴다. */
+async function cancelFuturePlannedRuns(tx: Tx, where: SQL, now: string, userId: string, reason: string): Promise<number> {
+  const future = await tx.select().from(schema.plannedRuns).where(and(where, eq(schema.plannedRuns.status, "PLANNED"), gt(schema.plannedRuns.plannedAt, now)));
+  for (const p of future) {
+    await tx
+      .update(schema.plannedRuns)
+      .set({ status: "CANCELLED", reason, changeHistory: [...p.changeHistory, { at: now, by: userId, from: p.status, to: "CANCELLED", reason }] })
+      .where(eq(schema.plannedRuns.id, p.id));
+  }
+  return future.length;
+}
+
+/**
+ * 로봇 사용 중지/재사용(본사 관리자). 중지하면 상태 동기화·운영 화면·명령·보고서 운영 대수에서 빠지고, 실적·장애·명령 이력은 그대로 남는다.
+ * 로봇 자체에는 아무 명령도 보내지 않는다(제조사 등록·지도는 그대로).
+ */
+export async function setRobotActive(user: User, robotId: string, active: boolean, reason?: string): Promise<void> {
+  const db = getDb();
+  assertActive(user);
+  assertAdmin(user);
+  const robot = await getRobot(robotId, db);
+  if (!robot) throw new NotFoundError("로봇을 찾을 수 없습니다.");
+  if (robot.active === active) return;
+  if (!active && !reason?.trim()) throw new ValidationError("로봇을 사용 중지하려면 사유를 입력하세요(감사 기록에 남습니다).");
+  if (!active) await assertRobotNotWorking(robot.id, db);
+  const now = nowIso();
+  await db.transaction(async (tx) => {
+    await tx.update(schema.robots).set({ active }).where(eq(schema.robots.id, robot.id));
+    const cancelled = active ? 0 : await cancelFuturePlannedRuns(tx, eq(schema.plannedRuns.robotId, robot.id), now, user.id, "로봇 사용 중지");
+    await audit(user, { siteId: robot.siteId, robotId: robot.id, action: active ? "ROBOT:ACTIVATE" : "ROBOT:DEACTIVATE", params: { name: robot.name, live: robot.vendorMeta?.source === "api", cancelledPlannedRuns: cancelled }, result: "OK", detail: reason?.trim() || null, vendorTraceId: null }, tx);
+  });
+}
+
+/**
+ * 사업장 사용 중지(본사 관리자, 사유 필수). 삭제가 아니다: 사업장·로봇·실적·장애·보고서는 남고, 운영 화면·권한 계산·동기화·알림·보고서 일정에서만 빠진다.
+ * 그 사업장의 로봇은 모두 사용 중지되고 미래 예정 회차는 취소된다. 원격 제어도 꺼진다.
+ */
+export async function retireSite(user: User, siteId: string, reason?: string): Promise<{ robots: number; cancelledPlannedRuns: number }> {
+  const db = getDb();
+  assertActive(user);
+  assertAdmin(user);
+  const site = await db.query.sites.findFirst({ where: eq(schema.sites.id, siteId) });
+  if (!site) throw new NotFoundError("사업장을 찾을 수 없습니다.");
+  if (site.retiredAt) throw new ValidationError("이미 사용 중지된 사업장입니다.");
+  if (!reason?.trim()) throw new ValidationError("사업장을 사용 중지하려면 사유를 입력하세요(감사 기록에 남습니다).");
+  // 사업장 전체를 빼는 것이므로 로봇의 작업 중 여부는 보지 않는다(로봇에는 아무 명령도 가지 않고, 감시만 멈춘다).
+  const robots = await db.select().from(schema.robots).where(eq(schema.robots.siteId, siteId));
+  const now = nowIso();
+  return db.transaction(async (tx) => {
+    await tx.update(schema.robots).set({ active: false }).where(eq(schema.robots.siteId, siteId));
+    const cancelledPlannedRuns = await cancelFuturePlannedRuns(tx, eq(schema.plannedRuns.siteId, siteId), now, user.id, "사업장 사용 중지");
+    await tx.update(schema.sites).set({ retiredAt: now, remoteControlEnabled: false }).where(eq(schema.sites.id, siteId));
+    await audit(user, { siteId, robotId: null, action: "SITE:RETIRE", params: { name: site.name, robots: robots.map((r) => r.id), deactivatedRobots: robots.filter((r) => r.active).length, cancelledPlannedRuns }, result: "OK", detail: reason.trim(), vendorTraceId: null }, tx);
+    return { robots: robots.filter((r) => r.active).length, cancelledPlannedRuns };
+  });
+}
+
+/** 사업장 다시 사용. 로봇은 중지 상태로 남으므로 필요한 로봇만 따로 재사용 처리한다(원격 제어도 꺼진 채). */
+export async function restoreSite(user: User, siteId: string, reason?: string): Promise<void> {
+  const db = getDb();
+  assertActive(user);
+  assertAdmin(user);
+  const site = await db.query.sites.findFirst({ where: eq(schema.sites.id, siteId) });
+  if (!site) throw new NotFoundError("사업장을 찾을 수 없습니다.");
+  if (!site.retiredAt) throw new ValidationError("사용 중인 사업장입니다.");
+  await db.update(schema.sites).set({ retiredAt: null }).where(eq(schema.sites.id, siteId));
+  await audit(user, { siteId, robotId: null, action: "SITE:RESTORE", params: { name: site.name, retiredAt: site.retiredAt }, result: "OK", detail: reason?.trim() || null, vendorTraceId: null }, db);
 }
 
 export async function setSiteManagerCanConfirm(user: User, value: boolean): Promise<void> {

@@ -1,11 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import { createFloorAction, createSiteAction, deleteFloorAction, deleteSiteAction, importPuduMapAction, listPuduMapsAction, refetchMapImageAction, renameFloorAction, updateSiteAction } from "@/app/actions";
+import { createFloorAction, createSiteAction, deleteFloorAction, deleteSiteAction, importPuduMapAction, listPuduMapsAction, refetchMapImageAction, renameFloorAction, restoreSiteAction, retireSiteAction, updateSiteAction } from "@/app/actions";
 import { btn, ResultLine, useAction } from "./ActionButton";
 
 type FloorInfo = { id: string; name: string; map: { id: string; version: number; vendor: string | null; vendorMapName: string | null; imageUrl: string | null; widthPx: number; heightPx: number; hasCorners: boolean } | null; zones: number; robots: string[] };
-type SiteInfo = { id: string; name: string; address: string; timezone: string; isSample: boolean; installedOn: string | null; floors: FloorInfo[]; hasPuduRobot: boolean };
+type SiteInfo = { id: string; name: string; address: string; timezone: string; isSample: boolean; installedOn: string | null; retiredAt: string | null; floors: FloorInfo[]; hasPuduRobot: boolean };
 
 /** 사업장 추가 폼(본사 관리자). 시간대 기본 Asia/Seoul. */
 export function NewSiteForm() {
@@ -37,8 +37,16 @@ export function SiteCard({ site }: { site: SiteInfo }) {
   const [installedOn, setInstalledOn] = useState(site.installedOn ?? "");
   const [newFloor, setNewFloor] = useState("");
   const deletable = site.floors.length === 0;
+  const retired = !!site.retiredAt;
   return (
-    <div className="border rounded p-3 text-sm">
+    <div className={`border rounded p-3 text-sm ${retired ? "bg-gray-50 border-dashed" : ""}`}>
+      {retired && (
+        <div className="mb-2 flex flex-wrap items-center gap-2 text-xs text-gray-700">
+          <span className="rounded bg-gray-200 px-1.5 py-0.5 font-medium">사용 중지</span>
+          <span>{site.retiredAt?.slice(0, 10)}부터 운영 화면·동기화·알림에서 빠져 있습니다. 실적·장애·보고서 이력은 남아 있습니다.</span>
+          <button type="button" className={btn.small} disabled={pending} onClick={() => { const reason = window.prompt(`'${site.name}' 을(를) 다시 사용합니다. 로봇은 중지 상태로 남으므로 필요한 로봇만 따로 다시 켜야 합니다.\n사유(감사 기록):`, ""); if (reason === null) return; run(() => restoreSiteAction(site.id, reason)); }}>다시 사용</button>
+        </div>
+      )}
       {editing ? (
         <div className="flex flex-wrap gap-1 items-center">
           <input className="border rounded px-2 py-1" value={name} onChange={(e) => setName(e.target.value)} />
@@ -76,6 +84,20 @@ export function SiteCard({ site }: { site: SiteInfo }) {
           </div>
           <div className="ml-auto flex gap-1">
             <button type="button" className={btn.small} onClick={() => setEditing(true)}>수정</button>
+            {!retired && !site.isSample && (
+              <button
+                type="button"
+                className={`${btn.small} border-red-300 text-red-800`}
+                disabled={pending}
+                onClick={() => {
+                  const reason = window.prompt(`'${site.name}' 사업장을 사용 중지합니다.\n- 운영 화면·권한·상태 동기화·알림·보고서 일정에서 빠집니다.\n- 이 사업장의 로봇은 모두 사용 중지되고 미래 예정 회차는 취소됩니다.\n- 실적·장애·보고서 이력은 지워지지 않고, 고급 설정에서 다시 사용할 수 있습니다.\n사유(감사 기록):`, "");
+                  if (reason === null) return;
+                  run(() => retireSiteAction(site.id, reason));
+                }}
+              >
+                사용 중지
+              </button>
+            )}
             {deletable && (
               <button type="button" className={btn.small} disabled={pending} onClick={() => { if (confirm(`사업장 '${site.name}' 을(를) 삭제할까요?`)) run(() => deleteSiteAction(site.id)); }}>삭제</button>
             )}

@@ -9,6 +9,7 @@ import {
   reissueInviteAction,
   relocateRobotAction,
   removeRecipientAction,
+  setRobotActiveAction,
   testRecipientAction,
   resetSampleAction,
   setSiteManagerCanConfirmAction,
@@ -214,6 +215,58 @@ export function RecipientsPanel({ siteId, recipients, dedupeMinutes, escalateAft
           임계값 저장
         </button>
       </div>
+      <ResultLine result={result} />
+    </div>
+  );
+}
+
+/** 로봇 사용 중지/재사용(본사 관리자, 고급 설정). 중지해도 로봇 자체에는 아무 명령도 가지 않는다. */
+export function RobotActivePanel({ robots }: { robots: { id: string; name: string; siteName: string; floorName: string; active: boolean; live: boolean; siteRetired: boolean }[] }) {
+  const { pending, result, run } = useAction();
+  return (
+    <div className="text-sm">
+      <table className="data">
+        <thead>
+          <tr>
+            <th>로봇</th>
+            <th>사업장 / 층</th>
+            <th>상태</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {robots.map((r) => (
+            <tr key={r.id} className={r.active ? "" : "text-gray-500"}>
+              <td>{r.name} <span className="font-mono text-xs">{r.id}</span>{r.live ? <span className="ml-1 text-[10px] text-blue-700">API</span> : null}</td>
+              <td>{r.siteName} / {r.floorName}</td>
+              <td>{r.active ? <span className="text-emerald-700 font-medium">사용 중</span> : <span>사용 중지</span>}</td>
+              <td>
+                {r.siteRetired ? (
+                  <span className="text-xs text-gray-500">사업장 사용 중지</span>
+                ) : (
+                  <button
+                    type="button"
+                    className={r.active ? `${btn.small} border-red-300 text-red-800` : `${btn.small} border-emerald-400 text-emerald-800`}
+                    disabled={pending}
+                    onClick={() => {
+                      const reason = window.prompt(
+                        r.active
+                          ? `'${r.name}' 로봇을 사용 중지합니다.\n- 운영 화면·상태 동기화·보고서 운영 대수에서 빠지고 명령이 막힙니다. 미래 예정 회차는 취소됩니다.\n- 실적·장애·명령 이력은 남고, 로봇 자체에는 아무 명령도 보내지 않습니다.\n사유(감사 기록):`
+                          : `'${r.name}' 로봇을 다시 사용합니다. 다음 동기화부터 상태를 받습니다.\n사유(감사 기록):`,
+                        "",
+                      );
+                      if (reason === null) return;
+                      run(() => setRobotActiveAction(r.id, !r.active, reason));
+                    }}
+                  >
+                    {r.active ? "사용 중지" : "다시 사용"}
+                  </button>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
       <ResultLine result={result} />
     </div>
   );

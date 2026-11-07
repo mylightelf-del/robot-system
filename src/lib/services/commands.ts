@@ -64,7 +64,11 @@ export async function issueCommand(user: User, input: IssueCommandInput): Promis
   const now = nowIso();
   const settings = await loadSettings(db);
 
-  // 0) 사업장 원격 제어 스위치(본사 관리자가 켜고 끈다) — 꺼져 있으면 역할과 무관하게 거부, 감사 기록
+  // 0) 사용 중지된 로봇 · 사업장 원격 제어 스위치(본사 관리자가 켜고 끈다) — 역할과 무관하게 거부, 감사 기록
+  if (!robot.active) {
+    await audit(user, { siteId: robot.siteId, robotId: robot.id, action: `COMMAND:${type}`, params: input.params ?? {}, result: "DENIED", detail: "사용 중지된 로봇", vendorTraceId: null }, db);
+    throw new ForbiddenError("사용 중지된 로봇입니다. 고급 설정에서 다시 사용 처리한 뒤 명령할 수 있습니다.");
+  }
   const site = await db.query.sites.findFirst({ where: eq(schema.sites.id, robot.siteId) });
   if (!site?.remoteControlEnabled) {
     await audit(user, { siteId: robot.siteId, robotId: robot.id, action: `COMMAND:${type}`, params: input.params ?? {}, result: "DENIED", detail: "사업장 원격 제어 꺼짐", vendorTraceId: null }, db);

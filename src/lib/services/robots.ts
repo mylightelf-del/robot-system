@@ -35,7 +35,8 @@ function unknownStatus(robotId: string): RobotStatus {
   return { robotId, common: "UNKNOWN", raw: "", online: false, batteryPct: null, pose: null, poseIsLastKnown: true, mapVersionId: null, currentMissionId: null, progressPct: null, lastReceivedAt: null, dataAt: null };
 }
 
-export async function listRobots(user: User, siteId?: string): Promise<RobotRow[]> {
+/** 로봇 목록. 사용 중지된 로봇은 기본적으로 뺀다(이력 화면에서만 includeInactive). */
+export async function listRobots(user: User, siteId?: string, opts: { includeInactive?: boolean } = {}): Promise<RobotRow[]> {
   assertActive(user);
   const db = getDb();
   const siteIds = await accessibleSiteIds(user, db);
@@ -48,7 +49,7 @@ export async function listRobots(user: User, siteId?: string): Promise<RobotRow[
     .leftJoin(schema.robotStatus, eq(schema.robotStatus.robotId, schema.robots.id))
     .innerJoin(schema.sites, eq(schema.sites.id, schema.robots.siteId))
     .innerJoin(schema.floors, eq(schema.floors.id, schema.robots.floorId))
-    .where(inArray(schema.robots.siteId, ids))
+    .where(opts.includeInactive ? inArray(schema.robots.siteId, ids) : and(inArray(schema.robots.siteId, ids), eq(schema.robots.active, true)))
     .orderBy(schema.robots.id);
   return rows.map(({ r, st, site, floor }) => ({ robot: toRobotView(r, user), status: st ? toStatus(st) : unknownStatus(r.id), site, floor }));
 }
@@ -128,7 +129,7 @@ export async function getRobotDetail(user: User, robotId: string): Promise<Robot
     inspections: await db.select().from(schema.inspections).where(eq(schema.inspections.robotId, robot.id)).orderBy(desc(schema.inspections.dueAt)).limit(12),
     maintenance: (await db.select().from(schema.maintenanceItems).where(eq(schema.maintenanceItems.robotId, robot.id)).orderBy(schema.maintenanceItems.id)).map(({ name, remainingPct, source }) => ({ name, remainingPct, source })),
     placements: placements.map((p) => ({ robotId: p.robotId, siteId: p.siteId, from: p.from, to: p.to, siteName: siteNames.get(p.siteId) ?? p.siteId })),
-    allowedCommands: robot.supportedCommands.filter((c) => canCommandOf(user, accessible, robot.siteId, c)),
+    allowedCommands: robot.active ? robot.supportedCommands.filter((c) => canCommandOf(user, accessible, robot.siteId, c)) : [],
     isSimulation: getAdapter(robot).isSimulation,
     now: nowIso(),
   };
@@ -165,10 +166,10 @@ export async function addManualInspection(user: User, robotId: string, item: str
   return insp;
 }
 
-/** 관리 화면 등에서 쓰는 단순 목록. */
+/** 관리 화면 등에서 쓰는 단순 목록(사용 중인 로봇만). */
 export async function listAllRobotsInSites(siteIds: string[]): Promise<Robot[]> {
   if (siteIds.length === 0) return [];
-  return getDb().select().from(schema.robots).where(and(inArray(schema.robots.siteId, siteIds))).orderBy(schema.robots.id);
+  return getDb().select().from(schema.robots).where(and(inArray(schema.robots.siteId, siteIds), eq(schema.robots.active, true))).orderBy(schema.robots.id);
 }
 
 /** 사업장들의 전체 구역(작업 등록 화면용). */

@@ -18,7 +18,9 @@ export default async function AdminPage() {
   }
   const notify = notifyStatus();
   const kakaoUsers = await kakaoCandidates();
-  const sites = d.sites.map((s) => ({ id: s.id, name: s.name }));
+  // 사용 중지된 사업장은 운영 설정(원격 제어·알림 수신)에서 뺀다. 고급 설정에서만 다룬다.
+  const activeSites = d.sites.filter((s) => !s.retiredAt);
+  const sites = activeSites.map((s) => ({ id: s.id, name: s.name }));
 
   return (
     <>
@@ -31,7 +33,7 @@ export default async function AdminPage() {
         </Card>
 
         <Card title="원격 제어 (사업장별)">
-          <RemoteControlPanel sites={d.sites.map((s) => ({ id: s.id, name: s.name, enabled: s.remoteControlEnabled, liveRobots: d.robots.filter((r) => r.siteId === s.id && r.vendorMeta?.source === "api").length }))} />
+          <RemoteControlPanel sites={activeSites.map((s) => ({ id: s.id, name: s.name, enabled: s.remoteControlEnabled, liveRobots: d.robots.filter((r) => r.siteId === s.id && r.active && r.vendorMeta?.source === "api").length }))} />
           <p className="text-xs text-gray-500 mt-2">꺼진 사업장은 본사 관리자를 포함해 누구도 로봇에 원격 명령(시작·일시정지·재개·중지·복귀)을 보낼 수 없습니다. 켜도 사용자별 제어 권한은 그대로 적용됩니다. 켜고 끈 기록은 감사 기록에 남습니다.</p>
         </Card>
 
@@ -70,7 +72,7 @@ export default async function AdminPage() {
 
         <Card title="알림 수신 설정 (사업장별)">
           <div className="grid md:grid-cols-2 gap-4">
-            {d.notificationSettings.map((n) => (
+            {d.notificationSettings.filter((n) => activeSites.some((s) => s.id === n.siteId)).map((n) => (
               <div key={n.siteId} className="border rounded p-3">
                 <div className="font-medium text-sm mb-1">{d.sites.find((s) => s.id === n.siteId)?.name}</div>
                 <RecipientsPanel siteId={n.siteId} recipients={n.recipients} dedupeMinutes={n.dedupeMinutes} escalateAfterMinutes={n.escalateAfterMinutes} kakaoUsers={kakaoUsers} />
