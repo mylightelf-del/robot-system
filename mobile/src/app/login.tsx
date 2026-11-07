@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { KeyboardAvoidingView, Platform, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { KeyboardAvoidingView, Linking, Platform, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useAuth } from "../lib/auth";
 import { errorText } from "../lib/api";
@@ -45,7 +45,10 @@ export default function LoginScreen() {
             <Button title={busy ? "로그인 중…" : "로그인"} onPress={submit} disabled={busy || !email || !password} />
             <Text style={[s.sub, { fontSize: 12 }]}>계정은 본사 관리자가 초대 링크로 만들어 줍니다. 비밀번호 설정·변경은 웹에서 합니다.</Text>
           </View>
-          <Pressable onPress={() => setShowServer((v) => !v)} style={{ marginTop: 16, alignSelf: "center" }}>
+          <Pressable onPress={() => Linking.openURL(`${apiBaseUrl}/privacy`)} style={{ marginTop: 16, alignSelf: "center" }}>
+            <Text style={{ color: "#c7d2fe", fontSize: 12, textDecorationLine: "underline" }}>개인정보처리방침</Text>
+          </Pressable>
+          <Pressable onPress={() => setShowServer((v) => !v)} style={{ marginTop: 8, alignSelf: "center" }}>
             <Text style={{ color: "#c7d2fe", fontSize: 12 }}>
               서버: {apiBaseUrl.replace(/^https?:\/\//, "")} · 앱 {APP_VERSION} {showServer ? "▲" : "▼"}
             </Text>

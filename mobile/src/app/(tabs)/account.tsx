@@ -137,6 +137,9 @@ export default function AccountScreen() {
         <Pressable onPress={() => Linking.openURL(`${apiBaseUrl}/`)}>
           <Text style={{ color: C.navy }}>관리 설정 · 보고서 작성 → 웹 관제 화면 열기 ›</Text>
         </Pressable>
+        <Pressable onPress={() => Linking.openURL(`${apiBaseUrl}/privacy`)}>
+          <Text style={{ color: C.navy }}>개인정보처리방침 ›</Text>
+        </Pressable>
       </Card>
 
       <Button title="로그아웃" variant="danger" onPress={() => Alert.alert("로그아웃", "이 기기의 로그인을 끝내고 푸시도 끕니다.", [{ text: "취소", style: "cancel" }, { text: "로그아웃", style: "destructive", onPress: () => void logout() }])} />
