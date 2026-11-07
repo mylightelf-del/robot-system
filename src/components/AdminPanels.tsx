@@ -12,6 +12,8 @@ import {
   setRobotActiveAction,
   testRecipientAction,
   updateRecipientAction,
+  createApiTokenAction,
+  revokeApiTokenAction,
   resetSampleAction,
   setSiteManagerCanConfirmAction,
   setRemoteControlAction,
@@ -411,6 +413,66 @@ export function RemoteControlPanel({ sites }: { sites: { id: string; name: strin
           ))}
         </tbody>
       </table>
+      <ResultLine result={result} />
+    </div>
+  );
+}
+
+/** 외부 연동 API 토큰(읽기 전용) 발급·폐기. 값은 발급 직후 한 번만 보인다. */
+export function ApiTokensPanel({ tokens, sites, baseUrl }: { tokens: { id: string; name: string; siteIds: string[]; createdAt: string; lastUsedAt: string | null; useCount: number; revokedAt: string | null }[]; sites: { id: string; name: string }[]; baseUrl: string }) {
+  const { pending, result, run } = useAction();
+  const [name, setName] = useState("");
+  const [siteIds, setSiteIds] = useState<string[]>([]);
+  const [issued, setIssued] = useState<string | null>(null);
+  const fmt = (iso: string | null) => (iso ? new Date(iso).toLocaleString("ko-KR", { timeZone: "Asia/Seoul" }) : "-");
+  const siteName = (id: string) => sites.find((s) => s.id === id)?.name ?? id;
+  return (
+    <div className="text-sm space-y-2">
+      {tokens.length === 0 ? (
+        <p className="text-xs text-gray-500">발급된 토큰이 없습니다.</p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="data">
+            <thead><tr><th>이름</th><th>사업장 범위</th><th>발급</th><th>마지막 사용</th><th className="text-right">호출</th><th></th></tr></thead>
+            <tbody>
+              {tokens.map((t) => (
+                <tr key={t.id} className={t.revokedAt ? "text-gray-400" : ""}>
+                  <td>{t.name}{t.revokedAt ? <span className="ml-1 text-xs">(폐기 {fmt(t.revokedAt)})</span> : null}</td>
+                  <td className="text-xs">{t.siteIds.length ? t.siteIds.map(siteName).join(", ") : "전체 사업장"}</td>
+                  <td className="text-xs whitespace-nowrap">{fmt(t.createdAt)}</td>
+                  <td className="text-xs whitespace-nowrap">{fmt(t.lastUsedAt)}</td>
+                  <td className="text-right">{t.useCount.toLocaleString()}</td>
+                  <td>{!t.revokedAt && <button type="button" className={`${btn.small} border-red-300 text-red-800`} disabled={pending} onClick={() => { const reason = window.prompt(`'${t.name}' 토큰을 폐기합니다. 이 토큰으로는 더 이상 호출할 수 없습니다.\n사유(감사 기록):`, ""); if (reason === null) return; run(() => revokeApiTokenAction(t.id, reason)); }}>폐기</button>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <div className="border-t pt-2 space-y-1 text-xs">
+        <div className="flex flex-wrap items-center gap-1">
+          <input className="border rounded px-2 py-1 w-56" placeholder="토큰 이름(예: 고객사 시설관리 시스템)" value={name} onChange={(e) => setName(e.target.value)} />
+          <button type="button" className={btn.primary} disabled={pending || name.trim().length < 2} onClick={() => run(async () => { const r = await createApiTokenAction(name, siteIds); if (r.ok && r.id) { setIssued(r.id); setName(""); } return r; })}>토큰 발급</button>
+        </div>
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+          범위(비우면 전체):
+          {sites.map((s) => (
+            <label key={s.id} className="inline-flex items-center gap-0.5 whitespace-nowrap">
+              <input type="checkbox" checked={siteIds.includes(s.id)} onChange={(e) => setSiteIds(e.target.checked ? [...siteIds, s.id] : siteIds.filter((x) => x !== s.id))} />
+              {s.name}
+            </label>
+          ))}
+        </div>
+        {issued && (
+          <div className="rounded border border-amber-300 bg-amber-50 p-2">
+            <div className="font-medium text-amber-900">새 토큰(지금 복사 — 다시 보여 주지 않음)</div>
+            <code className="block break-all select-all text-[11px] bg-white border rounded px-1 py-0.5 mt-1">{issued}</code>
+            <div className="mt-1 text-gray-700">예: <code className="text-[11px]">curl -H &quot;Authorization: Bearer {issued.slice(0, 8)}…&quot; {baseUrl}/api/v1/runs?from=2026-11-01&amp;to=2026-11-07</code></div>
+            <button type="button" className={`${btn.small} mt-1`} onClick={() => setIssued(null)}>닫기</button>
+          </div>
+        )}
+        <p className="text-gray-500">읽기 전용. 엔드포인트: /api/v1/sites · /api/v1/robots · /api/v1/runs · /api/v1/incidents · /api/v1/reports (분당 120회). 고객 화면과 같은 기준으로 공개 가능한 필드만 나갑니다(docs/19).</p>
+      </div>
       <ResultLine result={result} />
     </div>
   );

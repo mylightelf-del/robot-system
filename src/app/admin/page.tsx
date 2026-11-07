@@ -5,7 +5,7 @@ import { getAdminData } from "@/lib/services/admin";
 import { AppError } from "@/lib/util/errors";
 import { Card, PageTitle } from "@/components/ui";
 import { AccessDenied } from "@/components/AccessDenied";
-import { NewUserForm, RecipientsPanel, RemoteControlPanel, SettingsPanel, UserRow } from "@/components/AdminPanels";
+import { ApiTokensPanel, NewUserForm, RecipientsPanel, RemoteControlPanel, SettingsPanel, UserRow } from "@/components/AdminPanels";
 import { formatDateTime } from "@/lib/util/time";
 
 export default async function AdminPage() {
@@ -83,6 +83,10 @@ export default async function AdminPage() {
             이메일: <b>{notify.modes.EMAIL === "live" ? `실제 발송(AWS SES, 보내는 주소 ${notify.emailFrom})` : "모의 발송(서버 설정 전)"}</b> · 카카오톡: <b>{notify.modes.KAKAO === "live" ? "실제 발송(나에게 보내기 — 수신자 본인이 내 계정에서 연결)" : "모의 발송(서버 설정 전)"}</b>.
             장애 발생(등급 HIGH 이상)·복구·미조치 확대 통보를 보냅니다. 전화번호로 보내는 알림톡은 발송대행사 선정 뒤 붙입니다.
           </p>
+        </Card>
+
+        <Card title="외부 연동 API 토큰 (읽기 전용)">
+          <ApiTokensPanel tokens={d.apiTokens} sites={sites} baseUrl={(process.env.APP_BASE_URL ?? "").replace(/\/$/, "")} />
         </Card>
 
         <Card title="감사 기록 (최근 50건)">

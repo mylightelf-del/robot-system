@@ -1,7 +1,9 @@
 import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import type { Incident, Robot, Schedule } from "@/lib/domain/types";
 import { getDb, schema } from "@/lib/db/client";
-import { getNotificationSetting, getSite, getStatus, siteAt } from "@/lib/db/repo";
+import { getNotificationSetting, getSite, getStatus, listZonesByFloor, siteAt } from "@/lib/db/repo";
+import { storeRunImage } from "@/lib/services/coverage";
+import { snapshotMaintenance } from "@/lib/services/maintenance";
 import { notifyIncident } from "@/lib/notify/notifier";
 import { newId } from "@/lib/util/random";
 import { addMinutes, localDateKey, localToUtcIso, nowIso } from "@/lib/util/time";
@@ -157,13 +159,15 @@ export async function syncPuduReports(api: PuduApi = createPuduApi(), windowHour
         const robotTasks = taskRef ? await db.select().from(schema.registeredTasks).where(eq(schema.registeredTasks.robotId, robot.id)) : [];
         const matched = robotTasks.find((t) => t.vendorTaskRef?.startsWith(`${taskRef}@`))?.id ?? null;
         const siteId = (await siteAt(robot.id, new Date(r.start_time * 1000).toISOString(), db)) ?? robot.siteId;
-        const run = mapReportToRun(detail, { id: robot.id, siteId, floorId: robot.floorId }, now, matched);
+        const run = mapReportToRun(detail, { id: robot.id, siteId, floorId: robot.floorId }, now, matched, await listZonesByFloor(robot.floorId, db));
         const res = await db
           .insert(schema.actualRuns)
           .values({ ...run, vendor: "PUDU", vendorRobotId: robot.vendorRobotId, rawPayload: detail })
           .onConflictDoNothing({ target: [schema.actualRuns.vendor, schema.actualRuns.vendorRobotId, schema.actualRuns.vendorRunId] })
           .returning({ id: schema.actualRuns.id });
         inserted += res.length;
+        // 청소 범위 증빙 이미지(결과 지도)는 새 실적일 때 바로 받아 보관한다(실패해도 적재는 유지, 화면 조회 때 다시 시도)
+        if (res.length && run.coverage?.resultImageUrl) await storeRunImage(run.id, "RESULT", db).catch(() => undefined);
         // 예정 회차 연결: 같은 로봇의 PLANNED 회차 중 시작 시각 ±90분 이내 첫 건
         if (res.length) {
           const planned = await db.select().from(schema.plannedRuns).where(and(eq(schema.plannedRuns.robotId, robot.id), eq(schema.plannedRuns.status, "PLANNED")));
@@ -315,10 +319,16 @@ export async function syncPuduCatalog(api: PuduApi = createPuduApi()): Promise<S
       if (gone.length) await db.update(schema.schedules).set({ enabled: false }).where(inArray(schema.schedules.id, gone));
       const comp = await api.listComponents(sn);
       await db.delete(schema.maintenanceItems).where(and(eq(schema.maintenanceItems.robotId, robot.id), eq(schema.maintenanceItems.source, "API")));
+      const snap: { key: string; name: string; remainingPct: number | null }[] = [];
       for (const c of comp.list ?? []) {
-        await db.insert(schema.maintenanceItems).values({ id: `mnt-pudu-${sn}-${c.type}`, robotId: robot.id, name: `${c.name || c.type} 잔여 수명`, remainingPct: c.life_time > 0 ? Math.max(0, Math.round((1 - c.cost_time / c.life_time) * 100)) : null, source: "API" }).onConflictDoNothing();
+        const remainingPct = c.life_time > 0 ? Math.max(0, Math.round((1 - c.cost_time / c.life_time) * 100)) : null;
+        const name = `${c.name || c.type} 잔여 수명`;
+        await db.insert(schema.maintenanceItems).values({ id: `mnt-pudu-${sn}-${c.type}`, robotId: robot.id, name, remainingPct, source: "API" }).onConflictDoNothing();
+        snap.push({ key: String(c.type).replace(/[^A-Za-z0-9_-]/g, "_"), name, remainingPct });
         components += 1;
       }
+      // 소모품 일별 이력(교체 예상일 계산용)
+      await snapshotMaintenance(robot.id, snap, (await getSite(robot.siteId, db))?.timezone ?? "Asia/Seoul", db);
     }
     return { detail: `작업 ${tasks} · 예약 ${crons} · 소모품 ${components}`, counts: { tasks, crons, components } };
   });

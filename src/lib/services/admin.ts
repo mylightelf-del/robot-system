@@ -37,6 +37,7 @@ export async function getAdminData(user: User) {
     settings: await loadSettings(db),
     audit: await db.select().from(schema.auditLogs).orderBy(desc(schema.auditLogs.at)).limit(50),
     allowSampleReset: process.env.ALLOW_SAMPLE_RESET === "true",
+    apiTokens: (await db.select().from(schema.apiTokens).orderBy(desc(schema.apiTokens.createdAt))).map(({ tokenHash: _h, ...t }) => t),
   };
 }
 

@@ -252,6 +252,29 @@ export async function unsubscribeMeAction(recipientId: string): Promise<ActionRe
     return { message: "알림 수신을 해제했습니다." };
   });
 }
+export async function deleteIncidentPhotoAction(photoId: string): Promise<ActionResult> {
+  return run(async () => {
+    await incidents.deleteIncidentPhoto(await getCurrentUser(), photoId);
+    revalidatePath("/incidents");
+  });
+}
+export async function createApiTokenAction(name: string, siteIds: string[]): Promise<ActionResult> {
+  return run(async () => {
+    const { createApiToken } = await import("@/lib/services/apiTokens");
+    const r = await createApiToken(await getCurrentUser(), { name, siteIds });
+    revalidatePath("/admin");
+    // 토큰 값은 이 응답에만 담긴다(서버에는 해시만 저장). 화면이 한 번 보여 주고 다시 보여 주지 않는다.
+    return { message: "토큰을 발급했습니다. 지금 복사하세요 — 다시 볼 수 없습니다.", id: r.token };
+  });
+}
+export async function revokeApiTokenAction(tokenId: string, reason?: string): Promise<ActionResult> {
+  return run(async () => {
+    const { revokeApiToken } = await import("@/lib/services/apiTokens");
+    await revokeApiToken(await getCurrentUser(), tokenId, reason);
+    revalidatePath("/admin");
+    return { message: "토큰을 폐기했습니다." };
+  });
+}
 export async function sendReportAction(reportId: string): Promise<ActionResult> {
   return run(async () => {
     const { sendReportNotifications } = await import("@/lib/services/reportNotify");

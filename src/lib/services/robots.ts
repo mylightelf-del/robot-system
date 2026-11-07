@@ -9,6 +9,7 @@ import { newId } from "@/lib/util/random";
 import { ForbiddenError, NotFoundError } from "@/lib/util/errors";
 import { audit } from "./audit";
 import { sanitizeIncident, type IncidentView } from "./incidents";
+import { consumableForecast } from "./maintenance";
 
 /** 고객에게 보여줄 수 있는 로봇 정보(내부 메모·제조사 ID 제외). */
 export type RobotView = Omit<Robot, "internalNote" | "vendorRobotId" | "vendorMeta"> & { internalNote?: string; vendorRobotId?: string; vendorMeta?: Robot["vendorMeta"] };
@@ -127,7 +128,11 @@ export async function getRobotDetail(user: User, robotId: string): Promise<Robot
     incidents: incidents.map((i) => sanitizeIncident(i, user, { siteName: site.name, robotName: robot.name, assigneeName: null })),
     commands: customer ? [] : await db.select().from(schema.commands).where(eq(schema.commands.robotId, robot.id)).orderBy(desc(schema.commands.requestedAt)).limit(20),
     inspections: await db.select().from(schema.inspections).where(eq(schema.inspections.robotId, robot.id)).orderBy(desc(schema.inspections.dueAt)).limit(12),
-    maintenance: (await db.select().from(schema.maintenanceItems).where(eq(schema.maintenanceItems.robotId, robot.id)).orderBy(schema.maintenanceItems.id)).map(({ name, remainingPct, source }) => ({ name, remainingPct, source })),
+    maintenance: await (async () => {
+      const items = await db.select().from(schema.maintenanceItems).where(eq(schema.maintenanceItems.robotId, robot.id)).orderBy(schema.maintenanceItems.id);
+      const fc = new Map((await consumableForecast(robot.id, site.timezone, db)).map((f) => [f.name, f]));
+      return items.map(({ name, remainingPct, source }) => ({ name, remainingPct, source, ratePctPerDay: fc.get(name)?.ratePctPerDay ?? null, daysLeft: fc.get(name)?.daysLeft ?? null, expectedDate: fc.get(name)?.expectedDate ?? null }));
+    })(),
     placements: placements.map((p) => ({ robotId: p.robotId, siteId: p.siteId, from: p.from, to: p.to, siteName: siteNames.get(p.siteId) ?? p.siteId })),
     allowedCommands: robot.active ? robot.supportedCommands.filter((c) => canCommandOf(user, accessible, robot.siteId, c)) : [],
     isSimulation: getAdapter(robot).isSimulation,

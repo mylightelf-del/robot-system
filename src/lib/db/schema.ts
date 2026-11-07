@@ -31,6 +31,7 @@ import type {
   ScheduleExecutor,
   Severity,
   NotifyKind,
+  RunCoverage,
   Vendor,
 } from "@/lib/domain/types";
 
@@ -121,6 +122,8 @@ export const zones = pgTable("zones", {
   name: text().notNull(),
   polygon: jsonb().$type<[number, number][]>().notNull(),
   areaM2: doublePrecision().notNull(),
+  /** 제조사 지도의 구역(area) ID. 실적의 구역별 수행(area_array.area_id)과 맞추는 키. 샘플·수기 구역은 null. */
+  vendorZoneId: text(),
 });
 
 export const robots = pgTable("robots", {
@@ -251,6 +254,8 @@ export const actualRuns = pgTable(
     origin: text().$type<RunOrigin>().notNull(),
     receivedAt: isoTimestamp().notNull(),
     rawPayload: jsonb(),
+    /** 청소 범위 증빙(제조사 보고서에서 파싱): 수행률·구역별 청소 횟수·결과 지도 URL. 없으면 null. */
+    coverage: jsonb().$type<RunCoverage | null>(),
   },
   (t) => [
     // 실적 중복 제거 키: 제조사 + 제조사 로봇 ID + 제조사 작업 ID
@@ -258,6 +263,22 @@ export const actualRuns = pgTable(
     index("actual_runs_site_started_idx").on(t.siteId, t.startedAt),
     index("actual_runs_robot_started_idx").on(t.robotId, t.startedAt),
   ],
+);
+
+/** 실적의 결과 지도 이미지(제조사 S3 에서 받아 보관 — 증빙은 제조사 보관 기간과 무관하게 남긴다). */
+export const runImages = pgTable(
+  "run_images",
+  {
+    id: text().primaryKey(),
+    runId: text()
+      .notNull()
+      .references(() => actualRuns.id),
+    kind: text().$type<"RESULT" | "HEATMAP">().notNull(),
+    contentType: text().notNull(),
+    data: bytea().notNull(),
+    fetchedAt: isoTimestamp().notNull(),
+  },
+  (t) => [uniqueIndex("run_images_run_kind").on(t.runId, t.kind)],
 );
 
 export const commands = pgTable(
@@ -343,6 +364,56 @@ export const notificationLogs = pgTable("notification_logs", {
   /** 통보 대상 ID(계획 회차·로봇·보고서). 같은 대상에 한 번만 보내는 기준. */
   refId: text(),
 });
+
+/** 소모품 잔여 수명의 일별 이력(교체 예상일 계산용). 로봇·항목·날짜당 1행. */
+export const maintenanceHistory = pgTable(
+  "maintenance_history",
+  {
+    id: text().primaryKey(),
+    robotId: text()
+      .notNull()
+      .references(() => robots.id),
+    name: text().notNull(),
+    remainingPct: doublePrecision().notNull(),
+    at: isoTimestamp().notNull(),
+  },
+  (t) => [index("maintenance_history_robot_idx").on(t.robotId, t.at)],
+);
+
+/** 장애 조치 사진. 장애에 딸리며 내부(고객 비공개) 표시를 따른다. */
+export const incidentPhotos = pgTable(
+  "incident_photos",
+  {
+    id: text().primaryKey(),
+    incidentId: text()
+      .notNull()
+      .references(() => incidents.id),
+    caption: text().notNull().default(""),
+    contentType: text().notNull(),
+    data: bytea().notNull(),
+    internal: boolean().notNull().default(true),
+    createdAt: isoTimestamp().notNull(),
+    createdBy: text().notNull(),
+  },
+  (t) => [index("incident_photos_incident_idx").on(t.incidentId)],
+);
+
+/** 외부 연동용 읽기 전용 API 토큰. 값은 해시로만 저장(발급 때 한 번 보여 줌). siteIds 가 비면 전체 사업장. */
+export const apiTokens = pgTable(
+  "api_tokens",
+  {
+    id: text().primaryKey(),
+    name: text().notNull(),
+    tokenHash: text().notNull(),
+    siteIds: jsonb().$type<string[]>().notNull().default([]),
+    createdBy: text().notNull(),
+    createdAt: isoTimestamp().notNull(),
+    lastUsedAt: isoTimestamp(),
+    useCount: integer().notNull().default(0),
+    revokedAt: isoTimestamp(),
+  },
+  (t) => [uniqueIndex("api_tokens_hash_key").on(t.tokenHash)],
+);
 
 export const inspections = pgTable("inspections", {
   id: text().primaryKey(),
