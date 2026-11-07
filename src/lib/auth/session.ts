@@ -122,7 +122,7 @@ export function bearerToken(h: { get(name: string): string | null }): string | n
 
 /**
  * 화면·서버 액션·기존 /api 라우트에서 현재 사용자와 세션. 쿠키를 먼저 보고, 없으면 Bearer 헤더(앱이 지도 이미지·보고서 파일을 받을 때).
- * `/api/v1` 은 CSRF 를 피하기 위해 쿠키를 보지 않고 Bearer 만 받는다(src/lib/api/http.ts).
+ * `/api/app` 은 CSRF 를 피하기 위해 쿠키를 보지 않고 Bearer 만 받는다(src/lib/api/http.ts).
  */
 export async function getOptionalAuth(): Promise<AuthContext | null> {
   const jar = await cookies();

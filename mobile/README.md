@@ -1,6 +1,6 @@
 # 와이드봇 관제 — 모바일 앱(Expo / React Native, TypeScript)
 
-웹(`../src`)과 같은 서버의 `/api/v1` 을 쓰는 현장용 앱. 설계·결정·절차는 `../docs/19-안드로이드-앱-설계.md`.
+웹(`../src`)과 같은 서버의 `/api/app` 을 쓰는 현장용 앱. 설계·결정·절차는 `../docs/21-안드로이드-앱-설계.md`.
 
 ## 구조
 - `src/app/` 화면(Expo Router, 파일 = 화면). `(tabs)/` 홈·사업장·장애·보고서·내 계정, `sites/[siteId]` 지도, `robots/[robotId]` 상세·명령, `incidents/[incidentId]` 조치, `reports/[reportId]`, `notifications` 알림함, `login`.

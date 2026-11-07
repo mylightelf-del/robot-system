@@ -2,7 +2,7 @@ import { apiBase } from "./config";
 import type { Command, CommandType, Floor, MapVersion, NotifyChannel, NotifyKind, RobotStatus, Site, Zone, Role, SitePermission, Severity, IncidentStatus, IncidentAction, ActualRun, Inspection, MaintenanceItem, ReportVersion, ReportAggregates, ReportContent, CommonStatus } from "../../../src/lib/domain/types";
 
 /**
- * 서버 `/api/v1` 호출. 토큰은 `Authorization: Bearer` 로 보낸다(쿠키 없음).
+ * 서버 `/api/app` 호출. 토큰은 `Authorization: Bearer` 로 보낸다(쿠키 없음).
  * 오류는 서버의 `{ error: { code, message } }` 를 ApiError 로 바꾼다. 401 이면 호출자(AuthProvider)가 로그아웃 처리한다.
  * 응답 타입은 서버 서비스 계층의 타입을 그대로 가져와(타입 전용 import) 웹과 어긋나지 않게 한다.
  */
@@ -37,7 +37,7 @@ export async function api<T>(method: "GET" | "POST" | "PATCH" | "DELETE", path: 
   const timer = setTimeout(() => ctrl.abort(), opts.timeoutMs ?? 20_000);
   let res: Response;
   try {
-    res = await fetch(`${apiBase()}/api/v1${path}`, { method, headers, body: body !== undefined ? JSON.stringify(body) : undefined, signal: ctrl.signal });
+    res = await fetch(`${apiBase()}/api/app${path}`, { method, headers, body: body !== undefined ? JSON.stringify(body) : undefined, signal: ctrl.signal });
   } catch (e) {
     clearTimeout(timer);
     throw new ApiError(0, "NETWORK", `서버에 연결할 수 없습니다(${(e as Error).name === "AbortError" ? "시간 초과" : "네트워크 오류"}).`);
@@ -64,7 +64,7 @@ export function errorText(e: unknown): string {
   return "알 수 없는 오류";
 }
 
-/** 지도 이미지 등 /api/v1 밖의 서버 파일 주소(Bearer 헤더는 호출 측에서 붙인다). */
+/** 지도 이미지 등 /api/app 밖의 서버 파일 주소(Bearer 헤더는 호출 측에서 붙인다). */
 export function serverUrl(path: string): string {
   return `${apiBase()}${path.startsWith("/") ? path : `/${path}`}`;
 }

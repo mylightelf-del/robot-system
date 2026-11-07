@@ -3,7 +3,7 @@ import { bearerToken, resolveSession, type AuthContext, type SessionInfo } from 
 import { AppError } from "@/lib/util/errors";
 
 /**
- * 앱용 JSON API(`/api/v1`) 공통 처리.
+ * 앱용 JSON API(`/api/app`) 공통 처리.
  * - 인증: `Authorization: Bearer <토큰>` 만 받는다. 쿠키는 보지 않는다(브라우저가 자동으로 붙이는 쿠키로 상태 변경 요청이 들어오는 CSRF 를 원천 차단).
  * - 오류: 서비스 계층의 AppError 를 상태 코드로 바꾸고 `{ error: { code, message } }` 로 돌려준다. 그 밖의 오류는 500 + 일반 문구(내부 원문 비노출).
  * - 응답은 캐시하지 않는다(private, no-store). 시간은 ISO UTC 문자열이며 화면 표시는 앱이 사업장 시간대로 한다.
