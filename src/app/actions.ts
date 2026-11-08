@@ -256,6 +256,13 @@ export async function deleteIncidentPhotoAction(photoId: string): Promise<Action
     revalidatePath("/incidents");
   });
 }
+export async function refreshMapElementsAction(mapVersionId: string): Promise<ActionResult> {
+  return run(async () => {
+    const r = await sitesSvc.refreshMapElements(await getCurrentUser(), mapVersionId);
+    revalidatePath("/admin/advanced");
+    return { message: `지점 ${r.points}개 · 금지 구역 ${r.forbidden}개를 받았습니다. 사업장 관제 지도에 표시됩니다.` };
+  });
+}
 export async function setSeverityOverrideAction(code: string, severity: Severity | null, note: string, applyOpen: boolean): Promise<ActionResult> {
   return run(async () => {
     const r = await incidents.setSeverityOverride(await getCurrentUser(), code, severity, { note, applyOpen });

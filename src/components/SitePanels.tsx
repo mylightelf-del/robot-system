@@ -1,10 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import { createFloorAction, createSiteAction, deleteFloorAction, deleteSiteAction, importPuduMapAction, listPuduMapsAction, refetchMapImageAction, renameFloorAction, restoreSiteAction, retireSiteAction, updateSiteAction } from "@/app/actions";
+import { createFloorAction, createSiteAction, deleteFloorAction, deleteSiteAction, importPuduMapAction, listPuduMapsAction, refetchMapImageAction, refreshMapElementsAction, renameFloorAction, restoreSiteAction, retireSiteAction, updateSiteAction } from "@/app/actions";
 import { btn, ResultLine, useAction } from "./ActionButton";
 
-type FloorInfo = { id: string; name: string; map: { id: string; version: number; vendor: string | null; vendorMapName: string | null; imageUrl: string | null; widthPx: number; heightPx: number; hasCorners: boolean } | null; zones: number; robots: string[] };
+type FloorInfo = { id: string; name: string; map: { id: string; version: number; vendor: string | null; vendorMapName: string | null; imageUrl: string | null; widthPx: number; heightPx: number; hasCorners: boolean; points: number } | null; zones: number; robots: string[] };
 type SiteInfo = { id: string; name: string; address: string; timezone: string; isSample: boolean; installedOn: string | null; retiredAt: string | null; floors: FloorInfo[]; hasPuduRobot: boolean };
 
 /** 사업장 추가 폼(본사 관리자). 시간대 기본 Asia/Seoul. */
@@ -149,6 +149,11 @@ function FloorRow({ siteId, floor, hasPuduRobot }: { siteId: string; floor: Floo
             )}
             {m?.imageUrl && !m.imageUrl.startsWith("/api/") && (
               <button type="button" className={btn.small} disabled={pending} onClick={() => run(() => refetchMapImageAction(m.id))}>이미지 다시 받기</button>
+            )}
+            {m?.vendor === "PUDU" && (
+              <button type="button" className={btn.small} disabled={pending} title="충전소·워크스테이션·반환 지점·유지보수 지점과 금지 구역을 제조사 지도에서 다시 받습니다(지도 버전·구역은 그대로)" onClick={() => run(() => refreshMapElementsAction(m.id))}>
+                지점 받기{m.points ? ` (${m.points})` : ""}
+              </button>
             )}
             {hasPuduRobot && (
               <button

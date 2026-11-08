@@ -34,6 +34,7 @@ import type {
   NotifyChannel,
   NotifyKind,
   RunCoverage,
+  MapPoint,
   SessionKind,
   Vendor,
 } from "@/lib/domain/types";
@@ -100,6 +101,10 @@ export const mapVersions = pgTable("map_versions", {
   imageUrl: text(),
   resolution: doublePrecision(),
   origin: jsonb().$type<[number, number] | null>(),
+  /** 제조사 지도의 지점(충전소·워크스테이션·반환 지점·유지보수 지점) — 지도 px 좌표. 가져오기·요소 갱신 때 채운다. */
+  points: jsonb().$type<MapPoint[] | null>(),
+  /** 제조사 지도의 금지 구역 폴리곤(px). 화면에 옅게 표시만 한다. */
+  forbidden: jsonb().$type<[number, number][][] | null>(),
 });
 
 /**

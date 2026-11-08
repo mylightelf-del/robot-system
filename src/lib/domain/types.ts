@@ -73,6 +73,16 @@ export type MapCorners = {
   br: [number, number];
 };
 
+/** 제조사 지도의 지점. 실기(PUDU 2026-11-08): source(mode return_point)=반환 지점, charging_pile=충전 더미, chargeWorkStation=워크스테이션, maintenance=유지보수 지점. 좌표는 지도 px, yaw 는 도(°). */
+export interface MapPoint {
+  type: "CHARGING" | "WORKSTATION" | "RETURN" | "MAINTENANCE" | "OTHER";
+  name: string;
+  x: number;
+  y: number;
+  yawDeg: number | null;
+  vendorType: string;
+}
+
 export interface MapVersion {
   id: string;
   floorId: string;
@@ -87,6 +97,9 @@ export interface MapVersion {
   imageUrl?: string | null;
   resolution?: number | null; // m/px
   origin?: [number, number] | null; // 이미지 좌하단 픽셀의 월드 좌표(m) — ROS 지도 관례
+  /** 제조사 지도의 지점(충전소 등)과 금지 구역. 없으면 표시하지 않는다. */
+  points?: MapPoint[] | null;
+  forbidden?: [number, number][][] | null;
 }
 
 /** 월드 좌표(m) → 이미지 픽셀. ROS/PUDU 관례: u=(x-ox)/res, v=height-(y-oy)/res */

@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { getCurrentUser } from "@/lib/auth/session";
 import { listPlannedRuns, listTasks } from "@/lib/services/tasks";
+import { listRuns } from "@/lib/services/reports";
+import { WeeklyTimeline } from "@/components/ReportVisuals";
 import { listCommands } from "@/lib/services/commands";
 import { listRobots, listSites, listZonesInSites } from "@/lib/services/robots";
 import { isCustomer } from "@/lib/auth/authz";
@@ -34,6 +36,19 @@ export default async function TasksPage({ searchParams }: { searchParams: Promis
   const customer = isCustomer(user);
   const zones = await listZonesInSites(site ? [site] : sites.map((s) => s.id));
   const allTasks = tasks;
+  // 개별 사업장 보기: 사용 중인 예약을 요일×시간 타임라인으로. 블록 길이는 최근 30일 그 작업의 평균 소요 시간(없으면 60분 점선)
+  let weekly: { robotName: string; taskName: string; floorName: string; daysOfWeek: number[]; time: string; durationMin: number | null }[] = [];
+  if (site) {
+    const recent = await listRuns(user, { siteId: site, fromIso: addMinutes(now, -60 * 24 * 30), toIso: now });
+    const avg = new Map<string, number>();
+    for (const t of allTasks) {
+      const rs = recent.filter((r) => r.taskId === t.task.id && r.durationMin > 0);
+      if (rs.length) avg.set(t.task.id, Math.round(rs.reduce((a, r) => a + r.durationMin, 0) / rs.length));
+    }
+    const floorOf = new Map(robots.map((r) => [r.robot.id, r.floor.name]));
+    weekly = allTasks.flatMap((t) => t.schedules.filter((sc) => sc.enabled).map((sc) => ({ robotName: t.robotName, taskName: t.task.name, floorName: floorOf.get(t.task.robotId) ?? "-", daysOfWeek: [...sc.daysOfWeek].sort(), time: sc.time, durationMin: avg.get(t.task.id) ?? null })));
+    weekly.sort((a, b) => a.time.localeCompare(b.time) || a.robotName.localeCompare(b.robotName));
+  }
   const scheduledCount = allTasks.filter((t) => t.schedules.some((s) => s.enabled)).length;
   tasks = showAll ? allTasks : allTasks.filter((t) => t.schedules.some((s) => s.enabled));
   const q = (v: string) => `/tasks?${new URLSearchParams({ ...(site ? { site } : {}), ...(v === "all" ? { show: "all" } : {}) }).toString()}`;
@@ -42,6 +57,12 @@ export default async function TasksPage({ searchParams }: { searchParams: Promis
   return (
     <>
       <PageTitle title="작업·일정" subtitle="등록 작업, 예약, 예정 회차와 원격 명령 이력" right={<SiteFilter sites={sites} current={site ?? ""} basePath="/tasks" extra={showAll ? "show=all" : ""} />} />
+
+      {site && (
+        <Card className="mb-4" title={`주간 예약 일정 — ${sites.find((s) => s.id === site)?.name ?? ""}`} right={<span className="text-xs text-gray-500">사용 중인 예약 {weekly.length}건 · 시각은 사업장 시간대</span>}>
+          <WeeklyTimeline rows={weekly} />
+        </Card>
+      )}
 
       <div className="grid lg:grid-cols-2 gap-4">
         <Card
@@ -63,7 +84,6 @@ export default async function TasksPage({ searchParams }: { searchParams: Promis
                   <tr>
                     <th>작업</th>
                     <th>로봇</th>
-                    <th>구역</th>
                     <th>예약</th>
                   </tr>
                 </thead>
@@ -78,7 +98,6 @@ export default async function TasksPage({ searchParams }: { searchParams: Promis
                         <Link href={`/robots/${t.task.robotId}`} className="text-navy hover:underline">{t.robotName}</Link>
                         <div className="text-xs text-gray-500">{t.vendor} {t.model}</div>
                       </td>
-                      <td className="text-xs">{t.zoneNames.join(", ")}</td>
                       <td>
                         {t.schedules.length === 0 ? (
                           <span className="text-gray-400 text-xs">없음</span>
@@ -89,7 +108,6 @@ export default async function TasksPage({ searchParams }: { searchParams: Promis
                                 <span className={s.enabled ? "" : "line-through text-gray-400"}>
                                   {s.daysOfWeek.map((d) => DOW[d]).join("")} {s.time}
                                 </span>
-                                <span className={`rounded px-1 ${s.executor === "VENDOR" ? "bg-sky-50 text-sky-800" : "bg-gray-100 text-gray-700"}`}>{s.executor === "VENDOR" ? "제조사 예약" : "자체 실행기"}</span>
                                 {!customer && s.executor !== "VENDOR" && <ScheduleToggle scheduleId={s.id} enabled={s.enabled} disabled={false} />}
                               </li>
                             ))}

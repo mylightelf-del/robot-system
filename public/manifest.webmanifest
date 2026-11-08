@@ -1,7 +1,7 @@
 {
-  "name": "청소로봇 통합관제",
-  "short_name": "로봇관제",
-  "description": "포스코와이드 청소로봇 통합관제",
+  "name": "Wide Bot",
+  "short_name": "Wide Bot",
+  "description": "Wide Bot — 포스코와이드 청소로봇 통합관제",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

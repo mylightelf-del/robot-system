@@ -104,7 +104,7 @@ const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&
 
 /** 알림 메일 본문(텍스트 + 간단한 HTML). lines 는 "항목: 값" 줄. */
 export function renderEmail(title: string, lines: string[], url: string): { text: string; html: string } {
-  const text = `${title}\n\n${lines.join("\n")}\n\n관제 화면: ${url}\n\n— 청소로봇 통합관제(자동 발송, 회신 불가)`;
+  const text = `${title}\n\n${lines.join("\n")}\n\n관제 화면: ${url}\n\n— Wide Bot · 포스코와이드 청소로봇 통합관제(자동 발송, 회신 불가)`;
   const rows = lines
     .map((l) => {
       const i = l.indexOf(":");
@@ -115,7 +115,7 @@ export function renderEmail(title: string, lines: string[], url: string): { text
 <div style="background:#1e3a5f;color:#fff;padding:12px 16px;font-weight:bold">${esc(title)}</div>
 <table style="border-collapse:collapse;margin:12px 16px">${rows}</table>
 <div style="margin:8px 16px 16px"><a href="${esc(url)}" style="background:#1e3a5f;color:#fff;padding:8px 14px;text-decoration:none;border-radius:4px">관제 화면 열기</a></div>
-<div style="margin:0 16px 12px;color:#6b7280;font-size:12px">청소로봇 통합관제 자동 발송 메일입니다. 회신하지 마세요.</div></div>`;
+<div style="margin:0 16px 12px;color:#6b7280;font-size:12px">Wide Bot(포스코와이드 청소로봇 통합관제) 자동 발송 메일입니다. 회신하지 마세요.</div></div>`;
   return { text, html };
 }
 

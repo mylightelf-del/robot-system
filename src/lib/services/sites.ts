@@ -1,6 +1,7 @@
 import { and, eq, sql } from "drizzle-orm";
-import type { User, Vendor } from "@/lib/domain/types";
+import type { User, Vendor, MapPoint } from "@/lib/domain/types";
 import { getDb, schema } from "@/lib/db/client";
+import { getFloor } from "@/lib/db/repo";
 import { isDateKey } from "@/lib/reports/schedule";
 import { assertActive, assertAdmin, canAccessSite } from "@/lib/auth/authz";
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from "@/lib/util/errors";
@@ -9,7 +10,7 @@ import { newId } from "@/lib/util/random";
 
 import { audit } from "./audit";
 import { createPuduApi } from "@/lib/vendors/pudu/puduAdapter";
-import type { PuduMapDetail, PuduMapListItem } from "@/lib/vendors/pudu/api";
+import type { PuduMapDetail, PuduMapListItem, PuduMapElement } from "@/lib/vendors/pudu/api";
 
 /**
  * 사업장·층·지도 관리(본사 관리자 전용). 운영 준비 단계: 샘플 적재 없이 실제 사업장을 화면에서 만든다.
@@ -189,6 +190,36 @@ async function puduContextForFloor(floor: { id: string; siteId: string }): Promi
   return r ? { sn: r.vendorRobotId, shopId: String(r.vendorMeta!.shopId) } : puduContextForSite(floor.siteId);
 }
 
+
+/** 제조사 지도 요소 → 지점·금지 구역(px). 실기 유형: source(return_point)·charging_pile·chargeWorkStation·maintenance 는 [x,y,yaw](m, rad), forbidden 은 평면 폴리곤. */
+export function extractMapElements(detail: PuduMapDetail, toPx: (x: number, y: number) => [number, number]): { points: MapPoint[]; forbidden: [number, number][][] } {
+  const points: MapPoint[] = [];
+  const forbidden: [number, number][][] = [];
+  const typeOf = (e: PuduMapElement): MapPoint["type"] | null => {
+    const t = e.type.toLowerCase();
+    if (t === "charging_pile") return "CHARGING";
+    if (t === "chargeworkstation") return "WORKSTATION";
+    if (t === "maintenance") return "MAINTENANCE";
+    if (t === "source") return "RETURN";
+    return null;
+  };
+  for (const e of detail.element_list ?? []) {
+    if (!Array.isArray(e.vector_list)) continue;
+    if (e.type === "forbidden" && e.vector_list.length >= 6) {
+      const poly: [number, number][] = [];
+      for (let k = 0; k + 1 < e.vector_list.length; k += 2) poly.push(toPx(e.vector_list[k], e.vector_list[k + 1]));
+      forbidden.push(poly);
+      continue;
+    }
+    const t = typeOf(e);
+    if (!t || e.vector_list.length < 2) continue;
+    const [px, py] = toPx(e.vector_list[0], e.vector_list[1]);
+    const yaw = typeof e.vector_list[2] === "number" ? Math.round((e.vector_list[2] * 180) / Math.PI) : null;
+    points.push({ type: t, name: e.name || (t === "CHARGING" ? "충전소" : t === "WORKSTATION" ? "워크스테이션" : t === "MAINTENANCE" ? "유지보수 지점" : "반환 지점"), x: px, y: py, yawDeg: yaw, vendorType: e.type });
+  }
+  return { points, forbidden };
+}
+
 export async function listPuduMapsForSite(user: User, siteId: string): Promise<{ shopId: string; maps: PuduMapListItem[] }> {
   assertActive(user);
   assertAdmin(user);
@@ -239,6 +270,7 @@ export async function importPuduMap(user: User, floorId: string, mapName: string
     return { id: `zone-${floorId}-v${version}-${i + 1}`, floorId, name: a.name || `구역 ${i + 1}`, polygon: poly, areaM2: polygonAreaM2(a.vector_list), vendorElementId: a.id };
   });
   const vendor: Vendor = "PUDU";
+  const elements = extractMapElements(detail, toPx);
   await db.transaction(async (tx) => {
     await tx.insert(schema.mapVersions).values({
       id: mapVersionId,
@@ -246,6 +278,8 @@ export async function importPuduMap(user: User, floorId: string, mapName: string
       version,
       widthPx: detail.width,
       heightPx: detail.height,
+      points: elements.points,
+      forbidden: elements.forbidden,
       // 모서리(월드 m): 좌하 = 원점, 우상 = 원점 + 크기×해상도
       corners: { bl: [origin[0], origin[1]], tl: [origin[0], origin[1] + detail.height * res], tr: [origin[0] + detail.width * res, origin[1] + detail.height * res], br: [origin[0] + detail.width * res, origin[1]] },
       vendor,
@@ -362,6 +396,27 @@ export async function storeMapImage(mapVersionId: string, sourceUrl: string): Pr
   } catch (e) {
     return { ok: false, error: (e as Error).name === "AbortError" ? "이미지 내려받기 시간 초과" : `이미지 내려받기 실패: ${(e as Error).message}` };
   }
+}
+
+/** 현재 지도 버전의 지점(충전소 등)·금지 구역만 제조사에서 다시 받아 채운다(새 버전을 만들지 않음, 구역·이미지는 그대로). */
+export async function refreshMapElements(user: User, mapVersionId: string): Promise<{ points: number; forbidden: number }> {
+  assertActive(user);
+  assertAdmin(user);
+  const db = getDb();
+  const map = await db.query.mapVersions.findFirst({ where: eq(schema.mapVersions.id, mapVersionId) });
+  if (!map) throw new NotFoundError("지도 버전을 찾을 수 없습니다.");
+  if (map.vendor !== "PUDU" || !map.vendorMapName || !map.origin || !map.resolution) throw new ValidationError("제조사(PUDU) 지도를 가져온 층만 지점을 받을 수 있습니다.");
+  const floor = await getFloor(map.floorId, db);
+  if (!floor) throw new NotFoundError("층을 찾을 수 없습니다.");
+  const ctx = await puduContextForFloor(floor);
+  const detail = await createPuduApi().mapDetail(ctx.shopId, map.vendorMapName);
+  const origin = map.origin;
+  const res = map.resolution;
+  const toPx = (x: number, y: number): [number, number] => [Math.round((x - origin[0]) / res), Math.round(map.heightPx - (y - origin[1]) / res)];
+  const el = extractMapElements(detail, toPx);
+  await db.update(schema.mapVersions).set({ points: el.points, forbidden: el.forbidden }).where(eq(schema.mapVersions.id, mapVersionId));
+  await audit(user, { siteId: floor.siteId, robotId: null, action: "FLOOR:REFRESH_MAP_ELEMENTS", params: { mapVersionId, points: el.points.length, forbidden: el.forbidden.length }, result: "OK", detail: null, vendorTraceId: null }, db);
+  return { points: el.points.length, forbidden: el.forbidden.length };
 }
 
 /** PNG/JPEG/WebP/GIF 매직 바이트로 형식 판별. */

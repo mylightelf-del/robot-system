@@ -56,7 +56,7 @@ export default async function AdvancedAdminPage() {
                       return {
                         id: f.id,
                         name: f.name,
-                        map: mv ? { id: mv.id, version: mv.version, vendor: mv.vendor ?? null, vendorMapName: mv.vendorMapName ?? null, imageUrl: mv.imageUrl ?? null, widthPx: mv.widthPx, heightPx: mv.heightPx, hasCorners: !!mv.corners } : null,
+                        map: mv ? { id: mv.id, version: mv.version, vendor: mv.vendor ?? null, vendorMapName: mv.vendorMapName ?? null, imageUrl: mv.imageUrl ?? null, widthPx: mv.widthPx, heightPx: mv.heightPx, hasCorners: !!mv.corners, points: mv.points?.length ?? 0 } : null,
                         zones: d.zones.filter((z) => z.floorId === f.id).length,
                         robots: d.robots.filter((r) => r.floorId === f.id).map((r) => `${r.name}[${VENDOR_LABEL[r.vendor]} ${r.model}]${r.active ? "" : "(사용 중지)"}`),
                       };

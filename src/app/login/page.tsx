@@ -14,8 +14,8 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src="/icons/icon-192.png" alt="" className="h-10 w-10 rounded-xl" />
           <div>
-            <h1 className="text-lg font-bold text-navy tracking-tight leading-tight">로그인</h1>
-            <p className="text-xs text-slate-500">초대 링크로 비밀번호를 설정한 계정</p>
+            <h1 className="text-lg font-bold text-navy tracking-tight leading-tight">Wide Bot 로그인</h1>
+            <p className="text-xs text-slate-500">포스코와이드 청소로봇 통합관제 · 초대 링크로 비밀번호를 설정한 계정</p>
           </div>
         </div>
         {set === "1" && <div className="mb-3 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">비밀번호를 설정했습니다. 로그인하세요.</div>}

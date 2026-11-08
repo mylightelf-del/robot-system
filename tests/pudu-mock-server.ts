@@ -118,6 +118,8 @@ export function startMockPudu(state: MockState = defaultState()): Promise<{ url:
             { id: "a1", name: "로비 중앙", type: "area", mode: "", vector_list: [0, 0, 10, 0, 10, 5, 0, 5] },
             { id: "a2", name: "", type: "area", mode: "", vector_list: [20, 0, 30, 0, 30, 10] },
             { id: "s1", name: "워크스테이션1", type: "chargeWorkStation", mode: "", vector_list: [-0.4, 0, 0] },
+            { id: "c1", name: "", type: "charging_pile", mode: "", vector_list: [5, 2, 1.5707963] },
+            { id: "r1", name: "", type: "source", mode: "return_point", vector_list: [-5, -10, 0] },
             { id: "f1", name: "", type: "forbidden", mode: "", vector_list: [1, 1, 2, 1, 2, 2] },
           ], zone_list: [] });
         }

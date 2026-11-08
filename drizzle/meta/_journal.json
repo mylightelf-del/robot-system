@@ -113,6 +113,13 @@
       "when": 1794094181820,
       "tag": "0015_severity_overrides",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1794099624952,
+      "tag": "0016_map_points",
+      "breakpoints": true
     }
   ]
 }

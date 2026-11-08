@@ -6,7 +6,7 @@ import { PuduAdapter } from "@/lib/vendors/pudu/puduAdapter";
 import { syncPuduStatus } from "@/worker/pudu";
 import { puduImportRobots } from "@/lib/services/admin";
 import { relocateRobot } from "@/lib/services/admin";
-import { alignFloorMapsToRobots, createFloor, createSite, deleteFloor, deleteSite, getMapImage, importPuduMap, listPuduMapsForSite, polygonAreaM2, refetchMapImage, renameFloor, updateSite } from "@/lib/services/sites";
+import { alignFloorMapsToRobots, createFloor, createSite, deleteFloor, deleteSite, getMapImage, importPuduMap, listPuduMapsForSite, polygonAreaM2, refetchMapImage, refreshMapElements, renameFloor, updateSite } from "@/lib/services/sites";
 import { getRobotDetail } from "@/lib/services/robots";
 import { worldToPixel } from "@/lib/domain/types";
 import { getDb, resetAndSeed, schema, user } from "./helpers";
@@ -109,6 +109,18 @@ describe("사업장·층·지도 관리(운영 준비)", () => {
     expect(zones.find((z) => z.name === "구역 2")).toBeTruthy(); // 이름 없는 area 는 번호로
     expect(polygonAreaM2([0, 0, 10, 0, 10, 5, 0, 5])).toBe(50);
     expect(worldToPixel(map, 12.3, -4.5)).toEqual({ x: 446, y: 490 });
+    // 지점(충전소·워크스테이션·반환 지점)·금지 구역이 px 로 저장된다 (area 는 구역으로만, 지점 아님)
+    expect(map.points?.map((p) => [p.type, p.x, p.y, p.yawDeg])).toEqual([
+      ["WORKSTATION", 192, 400, 0],
+      ["CHARGING", 300, 360, 90],
+      ["RETURN", 100, 600, 0],
+    ]);
+    expect(map.points?.find((p) => p.type === "CHARGING")?.name).toBe("충전소");
+    expect(map.forbidden).toEqual([[[220, 380], [240, 380], [240, 360]]]);
+    // 지점 다시 받기: 지도 버전·구역은 그대로, 지점·금지 구역만 갱신
+    expect(await refreshMapElements(hq, r.mapVersionId)).toEqual({ points: 3, forbidden: 1 });
+    expect((await db().query.floors.findFirst({ where: eq(schema.floors.id, floorId) }))!.currentMapVersionId).toBe(r.mapVersionId);
+    await expect(refreshMapElements(await user("u-cust-1"), r.mapVersionId)).rejects.toThrow();
 
     // 상태 폴링: 로봇이 보고한 지도 이름이 층 지도와 같으면 위치를 px 로 변환하고 mapVersionId 가 일치
     await syncPuduStatus(new PuduAdapter(api));

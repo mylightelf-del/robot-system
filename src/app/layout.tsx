@@ -10,10 +10,10 @@ import { PwaRegister } from "@/components/PwaRegister";
 import { FontLoader } from "@/components/FontLoader";
 
 export const metadata: Metadata = {
-  title: "청소로봇 통합관제",
-  description: "포스코와이드 청소로봇 통합관제 — 2단계(기반)",
+  title: "Wide Bot",
+  description: "Wide Bot — 포스코와이드 청소로봇 통합관제",
   manifest: "/manifest.webmanifest",
-  appleWebApp: { capable: true, statusBarStyle: "default", title: "로봇관제" },
+  appleWebApp: { capable: true, statusBarStyle: "default", title: "Wide Bot" },
   icons: { icon: "/icons/icon-192.png", apple: "/icons/apple-touch-icon.png" },
 };
 
@@ -52,7 +52,8 @@ export default async function RootLayout({ children }: { children: React.ReactNo
             <Link href="/" className="inline-flex items-center gap-2 font-bold text-base sm:text-lg whitespace-nowrap tracking-tight">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src="/icons/icon-192.png" alt="" className="h-7 w-7 rounded-lg ring-1 ring-white/20" />
-              청소로봇 통합관제
+              <span>Wide Bot</span>
+              <span className="hidden sm:inline text-[11px] font-normal text-white/60 tracking-normal">by 포스코와이드</span>
             </Link>
             <div className="ml-auto flex items-center gap-2 text-xs sm:text-sm">
               {user ? <UserMenu name={user.name} role={ROLE_LABEL[user.role]} /> : <span className="opacity-80">로그인 필요</span>}
@@ -61,7 +62,9 @@ export default async function RootLayout({ children }: { children: React.ReactNo
           {user ? <AppNav role={user.role} isCustomer={isCustomer} /> : null}
         </header>
         <main className="flex-1 max-w-7xl w-full mx-auto px-4 py-5 sm:py-7">{children}</main>
-        <footer className="no-print text-xs text-slate-400 px-4 py-5 text-center">청소로봇 통합관제 · 시간 표시: 사업장 시간대(Asia/Seoul)</footer>
+        <footer className="no-print text-xs text-slate-400 px-4 py-5 text-center">
+          <span className="font-semibold text-slate-500">Wide Bot</span> · 청소로봇 통합관제 · 만든 곳: <span className="text-slate-500">포스코와이드</span> · 시간 표시: 사업장 시간대(Asia/Seoul)
+        </footer>
       </body>
     </html>
   );
