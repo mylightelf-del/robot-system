@@ -2,7 +2,7 @@ import Link from "next/link";
 import { getCurrentUser } from "@/lib/auth/session";
 import { listPlannedRuns, listTasks } from "@/lib/services/tasks";
 import { listRuns } from "@/lib/services/reports";
-import { WeeklyTimeline } from "@/components/ReportVisuals";
+import { WeeklyBoard } from "@/components/WeeklyBoard";
 import { listCommands } from "@/lib/services/commands";
 import { listRobots, listSites, listZonesInSites } from "@/lib/services/robots";
 import { isCustomer } from "@/lib/auth/authz";
@@ -36,7 +36,7 @@ export default async function TasksPage({ searchParams }: { searchParams: Promis
   const customer = isCustomer(user);
   const zones = await listZonesInSites(site ? [site] : sites.map((s) => s.id));
   const allTasks = tasks;
-  // 개별 사업장 보기: 사용 중인 예약을 요일×시간 타임라인으로. 블록 길이는 최근 30일 그 작업의 평균 소요 시간(없으면 60분 점선)
+  // 개별 사업장 보기: 사용 중인 예약을 요일별 목록(보드)으로. 소요 시간은 최근 30일 그 작업의 평균
   let weekly: { robotName: string; taskName: string; floorName: string; daysOfWeek: number[]; time: string; durationMin: number | null }[] = [];
   if (site) {
     const recent = await listRuns(user, { siteId: site, fromIso: addMinutes(now, -60 * 24 * 30), toIso: now });
@@ -60,7 +60,7 @@ export default async function TasksPage({ searchParams }: { searchParams: Promis
 
       {site && (
         <Card className="mb-4" title={`주간 예약 일정 — ${sites.find((s) => s.id === site)?.name ?? ""}`} right={<span className="text-xs text-gray-500">사용 중인 예약 {weekly.length}건 · 시각은 사업장 시간대</span>}>
-          <WeeklyTimeline rows={weekly} />
+          <WeeklyBoard rows={weekly} />
         </Card>
       )}
 

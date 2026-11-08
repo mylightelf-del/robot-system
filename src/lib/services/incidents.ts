@@ -431,6 +431,13 @@ export function incidentGuide(code: string): { field: string[]; vendor: boolean 
   return actionGuideFor(code);
 }
 
+/** 오류 코드 짧은 설명(마우스 올림 안내용): 뜻 한 줄 + 담당자 점검 순서. 모르는 코드는 일반 안내. */
+export function describeCode(code: string, fallback?: string): { summary: string; steps: string[]; vendor: boolean; known: boolean } {
+  const known = code in PUDU_ERROR_MESSAGES || code in CUSTOMER_MESSAGES;
+  const g = actionGuideFor(code);
+  return { summary: PUDU_ERROR_MESSAGES[code] ?? CUSTOMER_MESSAGES[code] ?? fallback ?? "제조사 오류 코드입니다. 로봇 화면의 안내를 확인하세요.", steps: g.field, vendor: g.vendor, known };
+}
+
 export interface IncidentStats {
   days: number;
   total: number;

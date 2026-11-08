@@ -1,7 +1,8 @@
 import Link from "next/link";
 import { listUsers } from "@/lib/db/repo";
 import { getCurrentUser } from "@/lib/auth/session";
-import { escalationMinutesBySite, incidentGuide, incidentPhotosFor, incidentStats, listAssignableUsers, listIncidents, SIMULATABLE_CODES } from "@/lib/services/incidents";
+import { describeCode, escalationMinutesBySite, incidentGuide, incidentPhotosFor, incidentStats, listAssignableUsers, listIncidents, SIMULATABLE_CODES } from "@/lib/services/incidents";
+import { CodeChip } from "@/components/CodeChip";
 import { IncidentPhotos } from "@/components/IncidentPhotos";
 import { listRobots, listSites } from "@/lib/services/robots";
 import { canAdmin, canHandleIncidents, isCustomer } from "@/lib/auth/authz";
@@ -75,7 +76,7 @@ export default async function IncidentsPage({ searchParams }: { searchParams: Pr
                   <tbody>
                     {stats.byCode.map((c) => (
                       <tr key={c.code}>
-                        <td><span className="font-mono text-xs">{c.code}</span><div className="text-xs text-gray-500">{c.message}{c.vendorHint ? " · 반복 시 대리점" : ""}</div></td>
+                        <td>{(() => { const dc = describeCode(c.code, c.message); return <CodeChip code={c.code} summary={dc.summary} steps={dc.steps} vendor={dc.vendor} />; })()}<div className="text-xs text-gray-500">{c.message}{c.vendorHint ? " · 반복 시 대리점" : ""}</div></td>
                         <td className="text-right">{c.count}</td>
                         <td className="text-right">{c.robots}</td>
                         <td className="text-right whitespace-nowrap">{c.mttrMin === null ? "-" : fmtMin(c.mttrMin)}</td>
@@ -111,7 +112,7 @@ export default async function IncidentsPage({ searchParams }: { searchParams: Pr
                       {stats.recurrences.map((r) => (
                         <tr key={`${r.robotId}-${r.code}`}>
                           <td><Link href={`/robots/${r.robotId}`} className="text-navy hover:underline">{r.robotName}</Link></td>
-                          <td className="font-mono text-xs">{r.code}</td>
+                          <td>{(() => { const dc = describeCode(r.code); return <CodeChip code={r.code} summary={dc.summary} steps={dc.steps} vendor={dc.vendor} />; })()}</td>
                           <td className="text-right">{r.count}</td>
                           <td className="text-right whitespace-nowrap">{r.avgGapHours === null ? "묶음" : r.avgGapHours >= 24 ? `${Math.round(r.avgGapHours / 24)}일` : `${r.avgGapHours}시간`}</td>
                         </tr>
@@ -143,7 +144,7 @@ export default async function IncidentsPage({ searchParams }: { searchParams: Pr
                       {handler && !dismissedView && <input type="checkbox" name="dismiss" value={i.id} aria-label="삭제 선택" className="no-print" />}
                       <SeverityBadge severity={i.severity} />
                       <IncidentStatusBadge status={i.status} />
-                      {!customer && <span className="font-mono text-xs text-gray-500">{i.code}</span>}
+                      {!customer && (() => { const dc = describeCode(i.code, i.message); return <CodeChip code={i.code} summary={dc.summary} steps={handler ? dc.steps : []} vendor={handler && dc.vendor} className="text-gray-500" />; })()}
                       <span className="text-xs text-gray-500" title={formatDateTime(i.occurredAt)}>
                         {relativeFromNow(i.occurredAt, now)} 발생
                       </span>
