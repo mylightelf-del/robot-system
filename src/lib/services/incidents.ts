@@ -9,7 +9,16 @@ import { newId } from "@/lib/util/random";
 import { nowIso } from "@/lib/util/time";
 import { audit } from "./audit";
 import { isLiveRobot } from "@/lib/vendors";
-import { actionGuideFor, customerMessageFor, PUDU_ERROR_MESSAGES } from "@/lib/vendors/pudu/mapping";
+import { actionGuideFor as puduActionGuideFor, customerMessageFor as puduCustomerMessageFor, PUDU_ERROR_MESSAGES } from "@/lib/vendors/pudu/mapping";
+import { CZ_ERROR_GUIDE, CZ_ERROR_MESSAGES, czCustomerMessage } from "@/lib/vendors/cenobots/mapping";
+
+/** 코드별 고객 문구·조치 안내: CZ-* 는 CENOBOTS 표, 나머지는 PUDU 표(없으면 일반 문구). */
+function customerMessageFor(code: string): string {
+  return code.startsWith("CZ-") ? czCustomerMessage(code) : puduCustomerMessageFor(code);
+}
+function actionGuideFor(code: string): { field: string[]; vendor: boolean } {
+  return CZ_ERROR_GUIDE[code] ?? puduActionGuideFor(code);
+}
 import { SEVERITIES } from "./admin";
 import { sniffImageType } from "./sites";
 
@@ -433,9 +442,9 @@ export function incidentGuide(code: string): { field: string[]; vendor: boolean 
 
 /** 오류 코드 짧은 설명(마우스 올림 안내용): 뜻 한 줄 + 담당자 점검 순서. 모르는 코드는 일반 안내. */
 export function describeCode(code: string, fallback?: string): { summary: string; steps: string[]; vendor: boolean; known: boolean } {
-  const known = code in PUDU_ERROR_MESSAGES || code in CUSTOMER_MESSAGES;
+  const known = code in PUDU_ERROR_MESSAGES || code in CUSTOMER_MESSAGES || code in CZ_ERROR_MESSAGES;
   const g = actionGuideFor(code);
-  return { summary: PUDU_ERROR_MESSAGES[code] ?? CUSTOMER_MESSAGES[code] ?? fallback ?? "제조사 오류 코드입니다. 로봇 화면의 안내를 확인하세요.", steps: g.field, vendor: g.vendor, known };
+  return { summary: PUDU_ERROR_MESSAGES[code] ?? CZ_ERROR_MESSAGES[code] ?? CUSTOMER_MESSAGES[code] ?? fallback ?? "제조사 오류 코드입니다. 로봇 화면의 안내를 확인하세요.", steps: g.field, vendor: g.vendor, known };
 }
 
 export interface IncidentStats {
@@ -612,7 +621,7 @@ export async function listSeverityRules(user: User): Promise<SeverityRuleRow[]> 
   const seen = await db.select({ code: schema.incidents.code, n: sql<number>`count(*)::int` }).from(schema.incidents).where(gte(schema.incidents.occurredAt, since)).groupBy(schema.incidents.code);
   const allSeen = await db.selectDistinct({ code: schema.incidents.code }).from(schema.incidents);
   const overrides = await db.select().from(schema.severityOverrides);
-  const codes = new Set<string>([...allSeen.map((r) => r.code), ...Object.keys(PUDU_ERROR_MESSAGES), ...SIMULATABLE_CODES.map((c) => c.code), ...overrides.map((o) => o.code)]);
+  const codes = new Set<string>([...allSeen.map((r) => r.code), ...Object.keys(PUDU_ERROR_MESSAGES), ...Object.keys(CZ_ERROR_MESSAGES), ...SIMULATABLE_CODES.map((c) => c.code), ...overrides.map((o) => o.code)]);
   return Array.from(codes)
     .sort((a, b) => a.localeCompare(b))
     .map((code) => {

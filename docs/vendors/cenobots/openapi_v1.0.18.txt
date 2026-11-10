@@ -1,0 +1,4063 @@
+Robot Open API
+Update Log
+V1.0.18
+
+New features(2026-10-10)
+
+Added Webhook subscription management endpoints: Create webhook subscription, List webhook subscriptions, Update webhook subscription, Delete webhook subscription, Verify webhook subscription and Rotate webhook subscription secret
+Webhook subscriptions are scoped to the company bound to the API Key; the company cannot be passed in the request
+Added List supported webhook event types so callers can load subscription event options dynamically
+V1.0.17
+
+New features(2026-08-14)
+
+Create new temporary mission, Create new schedule and Update schedule add parameters edgeMode and windMode
+Get all schedule by device returns edgeMode and windMode
+windMode is supported by all series: L series(scrubber) it means Absorption strength, S/SP series(vacuum) it means Suction Power
+Clarified the match rule between subSweepMode and windMode
+V1.0.16
+Supplemented descriptions for specific fields.(2026-04-16)
+V1.0.15
+
+New features(2026-04-08)
+
+Added Get robot info API endpoint
+Added Get robot's maintenance detail API endpoint
+Added query parameter isShowNavigationMission and response fields missionInitiator and missionCanceller to the Query history missions by page API endpoint
+V1.0.14
+
+New features(2026-03-17)
+
+Get device status returns remark
+V1.0.13
+
+New features(2026-03-02)
+
+Query history missions by page returns taskEndReasonEnum
+V1.0.12
+
+New features(2026-02-10)
+
+Add a new map interface: Get screenshot of map with four coordinate points
+V1.0.11
+
+New features(2025-11-13)
+
+Query history missions by page returnsstartBattery, endBattery, taskSourceTypeEnum, meanVel and cumulativeDistance info
+V1.0.10
+
+New features(2025-10-16)
+
+Add a new device interface: List device system errors
+
+V1.0.9
+
+New features(2025-08-28)
+
+New Interfaces of favorite:
+
+Create new favorite mission
+Update favorite mission
+Delete favorite msision
+Run favorite mission
+List favorite missions
+
+New Interfaces of robot
+
+Get robot setting
+Update robot setting
+V1.0.8
+
+New features(2025-05-06)
+
+Add more details in device status
+Current area ids of running task
+Current lap of running task
+New type when create task:
+Strict navigation task which can constraint angle
+V1.0.7
+
+Add audio and map open api(2024-12-20)
+
+New interfaces of Audio:
+Get volumn from device
+Set device volumn
+Play audio on device
+Stop play audio
+New interfaces of Map:
+List all maps of device
+Get screenshot of map
+V1.0.6
+Add example code for python and java(2024-11-21)
+V1.0.5
+
+Add some task end back point interfaces (2024-08-26)
+
+New interfaces:
+
+Create back point
+Update back point
+List back points
+Delete back point
+
+Create new temporary mission and Create new schedule add new parameter backPointId to specify where the robot will go when the task is finished
+
+V1.0.4
+Query history missions by page return 'taskSummaryPictureUrl' as the picture url of task summary
+V1.0.3
+Query history missions by page return 'errDesc' when the task is abnormal end
+V1.0.2
+Create new temporary/navigate mission return mission id if created successfully
+Query history missions by page return mission start timestamp and end timestamp
+Get device status return current mission id when device is running
+
+Description:Device Open API
+
+HOST: http://{Host}/app
+
+Version: v1.0.8
+
+[TOC]
+
+Example Code
+
+Notice:
+
+The HOST varies in different regions
+
+APAC use https://app-server-apac.cz-robots.com
+EU use https://app-server-eu.cz-robots.com
+US use https://app-server-us.cz-robots.com
+Other use https://app-server.cz-robots.com
+
+Get the robot's openId
+
+View https://operation.cz-robots.com/robots and click the 'Detail' button
+
+Java
+package com.czrobots.example;
+
+
+import com.alibaba.fastjson2.JSON;
+
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
+import java.io.BufferedReader;
+import java.io.DataOutputStream;
+import java.io.InputStreamReader;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
+import java.time.Instant;
+import java.util.HashMap;
+import java.util.Map;
+
+public class OpenApiExample {
+
+    enum Method {
+        GET, POST, HEAD, OPTIONS, PUT, DELETE, TRACE, CONNECT, PATCH
+    }
+
+    private static final String HOST = "https://app-server.cz-robots.com";
+    private static final String ROBOT_OPEN_ID = "ZXxxxxxx67";
+    private static final String ACCESS_KEY = "6xxx7d";
+    private static final String SECRET_KEY = "2xxxbd";
+
+
+    private static final String HEADER_ACCESS_KEY = "X-Api-Key";
+    private static final String HEADER_TIMESTAMP = "X-Api-timestamp";
+    private static final String HEADER_SIGNATURE = "X-Api-signature";
+
+
+    private static final char[] alphabets = "0123456789abcdef".toCharArray();
+
+    public static String bytesToHex(byte[] data) {
+        final int len = data.length;
+        final char[] out = new char[len << 1];
+        for (int i = 0, j = 0; i < len; i++) {
+            out[j++] = alphabets[(0xF0 & data[i]) >>> 4];
+            out[j++] = alphabets[0x0F & data[i]];
+        }
+        return new String(out);
+    }
+
+    public static void getExample() throws Exception {
+        String url = "/app/openapi/v1/device/status/" + ROBOT_OPEN_ID;
+        String timestamp = Instant.now().toEpochMilli() + "";
+
+        Mac mac = Mac.getInstance("HmacSHA256");
+        SecretKeySpec keySpec = new SecretKeySpec(SECRET_KEY.getBytes(StandardCharsets.UTF_8), "HmacSHA256");
+        mac.init(keySpec);
+        String signature = bytesToHex(mac.doFinal((Method.GET.name() + timestamp + url).getBytes(StandardCharsets.UTF_8)));
+
+        HttpURLConnection connection = (HttpURLConnection) new URL(HOST + url).openConnection();
+        connection.setRequestMethod(Method.GET.name());
+        connection.setRequestProperty(HEADER_ACCESS_KEY, ACCESS_KEY);
+        connection.setRequestProperty(HEADER_TIMESTAMP, timestamp);
+        connection.setRequestProperty(HEADER_SIGNATURE, signature);
+        connection.setRequestProperty("Accept", "application/json");
+
+        int responseCode = connection.getResponseCode();
+        System.out.println("Response Code: " + responseCode);
+
+
+        BufferedReader in = new BufferedReader(new InputStreamReader(connection.getInputStream()));
+        String inputLine;
+        StringBuffer content = new StringBuffer();
+        while ((inputLine = in.readLine()) != null) {
+            content.append(inputLine);
+        }
+        in.close();
+        connection.disconnect();
+        System.out.println(content);
+    }
+
+    public static void postExample() throws Exception {
+        String url = "/app/openapi/v1/mission/list";
+
+        Map<String, Object> dataMap = new HashMap<>();
+        dataMap.put("deviceOpenId", ROBOT_OPEN_ID);
+        dataMap.put("startTimestamp", "1712725202000");
+        dataMap.put("endTimestamp", "1712818791467");
+
+
+        Map<String, Object> paramMap = new HashMap<>();
+        paramMap.put("pageIndex", 1);
+        paramMap.put("pageLength", 1);
+        paramMap.put("requestData", dataMap);
+        String timestamp = Instant.now().toEpochMilli() + "";
+
+        Mac mac = Mac.getInstance("HmacSHA256");
+        SecretKeySpec keySpec = new SecretKeySpec(SECRET_KEY.getBytes(StandardCharsets.UTF_8), "HmacSHA256");
+        mac.init(keySpec);
+        String signature = bytesToHex(mac.doFinal((Method.POST.name() + timestamp + url).getBytes(StandardCharsets.UTF_8)));
+
+        HttpURLConnection connection = (HttpURLConnection) new URL(HOST + url).openConnection();
+        connection.setRequestMethod(Method.POST.name());
+        connection.setRequestProperty(HEADER_ACCESS_KEY, ACCESS_KEY);
+        connection.setRequestProperty(HEADER_TIMESTAMP, timestamp);
+        connection.setRequestProperty(HEADER_SIGNATURE, signature);
+        connection.setRequestProperty("Content-Type", "application/json");
+        connection.setRequestProperty("Accept", "application/json");
+        connection.setDoOutput(true);
+        try (DataOutputStream wr = new DataOutputStream(connection.getOutputStream())) {
+            wr.writeBytes(JSON.toJSONString(paramMap));
+            wr.flush();
+        }
+
+        int responseCode = connection.getResponseCode();
+        System.out.println("Response Code: " + responseCode);
+
+        BufferedReader in = new BufferedReader(new InputStreamReader(connection.getInputStream()));
+        String inputLine;
+        StringBuilder response = new StringBuilder();
+
+        while ((inputLine = in.readLine()) != null) {
+            response.append(inputLine);
+        }
+        in.close();
+
+        System.out.println("Response: " + response);
+    }
+
+
+    public static void main(String[] args) throws Exception {
+        getExample();
+        postExample();
+    }
+}
+Python
+import requests
+import time
+import hmac
+import hashlib
+import json
+
+HOST = "https://app-server.cz-robots.com"
+
+# Replace these with your actual values.
+ROBOT_OPEN_ID = ""
+ACCESS_KEY = ""
+SECRET_KEY = ""
+
+HEADER_ACCESS_KEY = "X-Api-Key"
+HEADER_TIMESTAMP = "X-Api-timestamp"
+HEADER_SIGNATURE = "X-Api-signature"
+
+
+def bytes_to_hex(data):
+    return ''.join(f'{byte:02x}' for byte in data)
+
+
+def get_example():
+    url = f"/app/openapi/v1/device/status/{ROBOT_OPEN_ID}"
+    timestamp = str(int(time.time() * 1000))
+
+    signature_string = f"GET{timestamp}{url}".encode('utf-8')
+    signature = hmac.new(SECRET_KEY.encode('utf-8'), signature_string, hashlib.sha256).digest()
+    signature_hex = bytes_to_hex(signature)
+
+    headers = {
+        HEADER_ACCESS_KEY: ACCESS_KEY,
+        HEADER_TIMESTAMP: timestamp,
+        HEADER_SIGNATURE: signature_hex
+    }
+
+    response = requests.get(HOST + url, headers=headers)
+    print("Response Code:", response.status_code)
+    print(response.text)
+
+
+def post_example():
+    url = "/app/openapi/v1/mission/list"
+
+    param_map = {
+        "pageIndex": 1,
+        "pageLength": 1,
+        "requestData": {
+            "deviceOpenId": ROBOT_OPEN_ID,
+            "startTimestamp": "1712725202000",
+            "endTimestamp": "1712818791467",
+        },
+    }
+
+    timestamp = str(int(time.time() * 1000))
+
+    signature_string = f"POST{timestamp}{url}".encode('utf-8')
+    signature = hmac.new(SECRET_KEY.encode('utf-8'), signature_string, hashlib.sha256).digest()
+    signature_hex = bytes_to_hex(signature)
+
+    headers = {
+        HEADER_ACCESS_KEY: ACCESS_KEY,
+        HEADER_TIMESTAMP: timestamp,
+        HEADER_SIGNATURE: signature_hex,
+        "Content-Type": "application/json",
+        "Accept": "application/json"
+    }
+
+    response = requests.post(HOST + url, headers=headers, data=json.dumps(param_map))
+    print("Response Code:", response.status_code)
+    print("Response:", response.text)
+
+
+if __name__ == "__main__":
+    get_example()
+    post_example()
+
+Schedule
+Create new schedule
+
+url:/app/openapi/v1/schedule
+
+method:POST
+
+produces:application/x-www-form-urlencoded,application/json
+
+consumes:*/*
+
+Note:
+
+If cleanEveryWhere is false, areaIds is required. Scrubbers(L series) can only create SWEEP missions. Vacuums(S series) can create both PATROL and SWEEP missions.
+If sweepMode is PATROL, subSweepMode can be one of: SPOT_CLEAN, LOW, MEDIUM, HIGH.
+If sweepMode is SWEEP, subSweepMode can be one of: LOW, MEDIUM, HIGH. Scrubbers can also set subSweepMode to VERY_QUIET.
+
+Example:
+
+{
+  "duration": 60,
+  "mapId": 1100011697639116,
+  "mapVersion": "map.1111699509667377.20230616-2.20240115-10",
+  "cleanEveryWhere": false,
+  "sweepMode": "PATROL",
+  "subSweepMode": "HIGH",
+  "edgeMode": "ON",
+  "windMode": "LOW",
+  "areaIds": [
+    "0",
+    "3"
+  ],
+  "fixedLaps": 1,
+  "backPointId": "-1",
+  "deviceOpenId": "1234",
+  "startTime": "04:42 PM",
+  "repeat": [
+    "Mon.",
+    "Tue.",
+    "Wed."
+    "Thur.",
+    "Fri.",
+    "Sat.",
+  	"Sun.",
+  ]
+}
+
+Params:
+
+name	description	in	require	type
+X-Api-Key	Key	header	true	string
+X-Api-timestamp	timestamp	header	true	string
+X-Api-signature	signature	header	true	string
+createScheduleOpenRequest	CreateScheduleOpenRequest	body	true	
+  deviceOpenId	your device open id		true	string
+  duration	task time limit, unit(minutes), [1, 1440]. Will be ignored if HOMING		false	integer
+  mapId	map id that task will use		true	integer
+  mapVersion	map id version that task will use		true	string
+  cleanEveryWhere	option to enable/disable cleaning of the entire place. if false,areaIds should not empty. Will be ignored if HOMING		false	boolean
+  sweepMode	clean mode,values:PATROL,HOMING,SWEEP		true	string
+  subSweepMode	sweep intensity,values:VERY_QUIET, LOW,MEDIUM,HIGH,SPOT_CLEAN
+default value: LOW		false	string
+  edgeMode	edge cleaning(OFF/ON),Avalible:OFF,ON		false	string
+  windMode	Absorption strength for L series(scrubber), Suction Power for S/SP series(vacuum). Avalible:LOW,MEDIUM,HIGH
+Must match subSweepMode: LOW -> LOW/MEDIUM/HIGH, MEDIUM -> MEDIUM/HIGH, HIGH -> HIGH		false	string
+  areaIds	clean areas, required when cleanEveryWhere is false		false	array
+  fixedLaps	fixed laps, required when duration is null, [1,3]. Will be ignored if HOMING		false	integer
+  backPointId	1. null or empty string is default behavior go back to station
+2. a valid back point id specify a customize back point. created by  POST /openapi/v1/map/backPoint		false	string
+  startTime	start time format, eg: '04:52 PM'(hours:minutes am/pm)		true	string
+  repeat	repeated days, available values(note the DOT): 
+"Mon."
+"Tue."
+"Wed."
+"Thur.",
+"Fri."
+"Sat."
+"Sun."		false	array
+
+Status:
+
+code	description	schema
+200	OK	ResponseVoid
+
+Response Params:
+
+name	description	type	schema
+data	dataset	object	
+success	used to determine whether the call is successful	boolean	
+code	response status code	integer(int32)	integer(int32)
+info	response description	string	
+rid	traceId is used to trace the records of API calls	string	
+
+Response Example:
+
+{
+	"data": {},
+	"success": true,
+	"code": 0,
+	"info": "",
+	"rid": ""
+}
+Update schedule
+
+url:/app/openapi/v1/schedule
+
+method:PUT
+
+produces:application/x-www-form-urlencoded,application/json
+
+consumes:*/*
+
+Note:
+
+If cleanEveryWhere is false, areaIds is required. Scrubbers(L series) can only create SWEEP missions. Vacuums(S series) can create both PATROL and SWEEP missions.
+If sweepMode is PATROL, subSweepMode can be one of: SPOT_CLEAN, LOW, MEDIUM, HIGH.
+If sweepMode is SWEEP, subSweepMode can be one of: LOW, MEDIUM, HIGH. Scrubbers can also set subSweepMode to VERY_QUIET.
+
+Example:
+
+{
+  "duration": 30,
+  "mapId": 1100011697639116,
+  "mapVersion": "map.1111699509667377.20230616-2.20240115-10",
+  "cleanEveryWhere": false,
+  "sweepMode": "PATROL",
+  "subSweepMode": "HIGH",
+  "edgeMode": "ON",
+  "windMode": "LOW",
+  "areaIds": [
+    "0",
+    "3"
+  ],
+  "fixedLaps": 1,
+  "backPointId": "-1",
+  "id": 56,
+  "deviceOpenId": "1234",
+  "startTime": "10:40 am",
+  "repeat": [
+    "Mon.",
+    "Tue.",
+    "Wed."
+    "Thur.",
+    "Fri.",
+    "Sat.",
+  	"Sun.",
+  ]
+}
+
+Params:
+
+name	description	in	require	type	schema
+X-Api-Key	Key	header	true	string	
+X-Api-timestamp	timestamp	header	true	string	
+X-Api-signature	signature	header	true	string	
+updateScheduleOpenRequest	UpdateScheduleOpenRequest	body	true		
+  duration	task duration		false	integer(int32)	
+  mapId	map id that task will use		true	integer(int64)	
+  mapVersion	map id version that task will use		true	string	
+  cleanEveryWhere	option to enable/disable cleaning of the entire place. if false,areaIds should not empty. Will be ignored if HOMING		false	boolean	
+  sweepMode	clean mode,values:PATROL,HOMING,SWEEP		true	string	
+  subSweepMode	sweep intensity,values:LOW,MEDIUM,HIGH,SPOT_CLEAN		false	string	
+  edgeMode	edge cleaning(OFF/ON),Avalible:OFF,ON		false	string	
+  windMode	Absorption strength for L series(scrubber), Suction Power for S/SP series(vacuum). Avalible:LOW,MEDIUM,HIGH
+Must match subSweepMode: LOW -> LOW/MEDIUM/HIGH, MEDIUM -> MEDIUM/HIGH, HIGH -> HIGH		false	string	
+  areaIds	clean areas, required when cleanEveryWhere is false		false	array	string
+  fixedLaps	fixed laps, required when duration is null, [1,3]. Will be ignored if HOMING		false	integer(int32)	
+  backPointId	1. null or empty string is default behavior go back to station
+2. a valid back point id specify a customize back point. created by  POST /openapi/v1/map/backPoint		false	string	
+  id	schedule id		true	integer(int64)	
+  deviceOpenId	your device open id		true	string	
+  startTime	formate start time (hours:minutes am/pm)		true	string	
+  repeat	repeated days, available values(note the DOT): 
+"Mon."
+"Tue."
+"Wed."
+"Thur.",
+"Fri."
+"Sat."
+"Sun."		false	array	string
+
+Status:
+
+code	description	schema
+200	OK	ResponseVoid
+
+Response Params:
+
+name	description	type	schema
+data	dataset	object	
+success	used to determine whether the call is successful	boolean	
+code	response status code	integer(int32)	integer(int32)
+info	response description	string	
+rid	traceId is used to trace the records of API calls	string	
+
+Response Example:
+
+{
+	"data": {},
+	"success": true,
+	"code": 0,
+	"info": "",
+	"rid": ""
+}
+Disable-Enable schedule
+
+url:/app/openapi/v1/schedule/active
+
+method:POST
+
+produces:application/x-www-form-urlencoded,application/json
+
+consumes:*/*
+
+Note:
+
+Example:
+
+{
+  "id": 10,
+  "deviceOpenId": "1234",
+  "enable": true
+}
+
+Params:
+
+name	description	in	require	type	schema
+X-Api-Key	Key	header	true	string	
+X-Api-timestamp	timestamp	header	true	string	
+X-Api-signature	signature	header	true	string	
+activeScheduleOpenRequest	ActiveScheduleOpenRequest	body	true	ActiveScheduleOpenRequest	ActiveScheduleOpenRequest
+  id	schedule id		true	integer(int64)	
+  deviceOpenId	device open id		true	string	
+  enable	enable/disable schedule		true	boolean	
+
+Status:
+
+code	description	schema
+200	OK	ResponseVoid
+
+Response Params:
+
+name	description	type	schema
+data	dataset	object	
+success	used to determine whether the call is successful	boolean	
+code	response status code	integer(int32)	integer(int32)
+info	response description	string	
+rid	traceId is used to trace the records of API calls	string	
+
+Response Example:
+
+{
+	"data": {},
+	"success": true,
+	"code": 0,
+	"info": "",
+	"rid": ""
+}
+Get all schedule by device
+
+url:/app/openapi/v1/schedule/list/{deviceOpenId}
+
+method:GET
+
+produces:application/x-www-form-urlencoded
+
+consumes:*/*
+
+Note:
+
+Params:
+
+name	description	in	require	type	schema
+deviceOpenId	device open id	path	true	string	
+X-Api-Key	Key	header	true	string	
+X-Api-timestamp	timestamp	header	true	string	
+X-Api-signature	signature	header	true	string	
+
+Status:
+
+code	description	schema
+200	OK	ResponseListScheduleTaskOpenResp
+
+Response Params:
+
+name	description	type	schema
+data	dataset	array	ScheduleTaskOpenResp
+  deviceId		integer(int64)	
+  id	schedule id	integer(int64)	
+  duration	duration (min)	integer(int64)	
+  executionDays	execution days	array	string
+  startTime	start time	string	
+  endTime	end time	string	
+  mapId	map id	integer(int64)	
+  areas	list of areas	array	Area
+    id	user defined area id, required when creating mission/schedule(the name of the parameter is 'areaIds')	string	
+    name	area name	string	
+    type	area type	string	
+  sweepMode	clean mode,values:PATROL,HOMING,SWEEP	string	
+  subSweepMode	sweep intensity,values:LOW,MEDIUM,HIGH,SPOT_CLEAN	string	
+  edgeMode	edge cleaning(OFF/ON),Avalible:OFF,ON	string	
+  windMode	L series: Absorption strength, S/SP series: Suction Power. Avalible:LOW,MEDIUM,HIGH	string	
+  cleanEveryWhere	cleaning of the entire map is required	boolean	
+  enable	scheduled task effective or not	boolean	
+  backPointId	mission back point id	string	
+  backPointName	mission back point name	string	
+  backPoint	back point	Point	Point
+    x	x	number(double)	
+    y	y	number(double)	
+    yaw	The robot's heading angle in radians. Range: [-π, π]	number(double)	
+  fixedLaps	fixed laps	integer(int32)	
+success	used to determine whether the call is successful	boolean	
+code	response status code	integer(int32)	integer(int32)
+info	response description	string	
+rid	traceId is used to trace the records of API calls	string	
+
+Response Example:
+
+{
+    "deviceId": 0,
+    "id": 10,
+    "duration": 60,
+    "executionDays": [
+        "Mon."
+    ],
+    "startTime": "10:40 am",
+    "endTime": "11:40 am",
+    "mapId": 1100011697114280,
+    "areas": [
+        {
+            "name": "area name example",
+            "id": "705429ee-8aca-4f18-b498-9a458bc18407",
+            "type": "divide_area"
+        }
+    ],
+    "sweepMode": "PATROL",
+    "subSweepMode": "LOW",
+    "edgeMode": "ON",
+    "windMode": "LOW",
+    "cleanEveryWhere": true,
+    "enable": true,
+    "fixedLaps": 1,
+    "backPointId": "",
+    "backPointName": "", 
+    "backPoint": {
+        "x": 2,
+        "y": 2,
+        "yaw": 2.1
+    }
+}
+Delete schedule
+
+url:/app/openapi/v1/schedule/delete/{id}
+
+method:DELETE
+
+produces:application/x-www-form-urlencoded
+
+consumes:*/*
+
+Note:
+
+Params:
+
+name	description	in	require	type	schema
+id	schedule id	path	true	integer(int64)	
+X-Api-Key	Key	header	true	string	
+X-Api-timestamp	timestamp	header	true	string	
+X-Api-signature	signature	header	true	string	
+
+Status:
+
+code	description	schema
+200	OK	ResponseVoid
+
+Response Params:
+
+name	description	type	schema
+data	dataset	object	
+success	used to determine whether the call is successful	boolean	
+code	response status code	integer(int32)	integer(int32)
+info	response description	string	
+rid	traceId is used to trace the records of API calls	string	
+
+Response Example:
+
+{
+	"data": {},
+	"success": true,
+	"code": 0,
+	"info": "",
+	"rid": ""
+}
+Audio
+Set device volume
+
+url:/app/openapi/v1/audio/volume
+
+method:PUT
+
+produces:application/x-www-form-urlencoded,application/json
+
+consumes:*/*
+
+Note:
+
+Example:
+
+{
+  "volume": 50,
+  "deviceOpenId": ""
+}
+
+Params:
+
+name	description	in	require	type	schema
+X-Api-Key	Key	header	true	string	
+X-Api-timestamp	timestamp	header	true	string	
+X-Api-signature	signature	header	true	string	
+setVolumeRequest	SetVolumeRequest	body	true	SetVolumeRequest	SetVolumeRequest
+  volume	volume value: 0 - 100		true	integer(int32)	
+  deviceOpenId	device open id		true	string	
+
+Status:
+
+code	description	schema
+200	OK	ResponseVoid
+
+Response Params:
+
+name	description	type	schema
+data	dataset	object	
+success	used to determine whether the call is successful	boolean	
+code	response status code	integer(int32)	integer(int32)
+info	response description	string	
+rid	traceId is used to trace the records of API calls	string	
+
+Response Example:
+
+{
+	"data": {},
+	"success": true,
+	"code": 0,
+	"info": "",
+	"rid": ""
+}
+Stop play audio on device
+
+url:/app/openapi/v1/audio/stop
+
+method:PUT
+
+produces:application/x-www-form-urlencoded,application/json
+
+consumes:*/*
+
+Note:
+
+Example:
+
+{
+  "deviceOpenId": ""
+}
+
+Params:
+
+name	description	in	require	type	schema
+X-Api-Key	Key	header	true	string	
+X-Api-timestamp	timestamp	header	true	string	
+X-Api-signature	signature	header	true	string	
+stopPlayAudioRequest	StopPlayAudioRequest	body	true	StopPlayAudioRequest	StopPlayAudioRequest
+  deviceOpenId	device open id		true	string	
+
+Status:
+
+code	description	schema
+200	OK	ResponseString
+
+Response Params:
+
+name	description	type	schema
+data	dataset	string	
+success	used to determine whether the call is successful	boolean	
+code	response status code	integer(int32)	integer(int32)
+info	response description	string	
+rid	traceId is used to trace the records of API calls	string	
+
+Response Example:
+
+{
+	"data": "",
+	"success": true,
+	"code": 0,
+	"info": "",
+	"rid": ""
+}
+Start play audio on device
+
+url:/app/openapi/v1/audio/start
+
+method:PUT
+
+produces:application/x-www-form-urlencoded,application/json
+
+consumes:*/*
+
+Note:
+
+Example:
+
+{
+  "deviceOpenId": "",
+  "audioName": "001/002/testAudio",
+  "selfDefined": false,
+  "loop": false,
+  "timeout": 0,
+  "interval": 0
+}
+
+Params:
+
+name	description	in	require	type	schema
+X-Api-Key	Key	header	true	string	
+X-Api-timestamp	timestamp	header	true	string	
+X-Api-signature	signature	header	true	string	
+playAudioRequest	PlayAudioRequest	body	true	PlayAudioRequest	PlayAudioRequest
+  deviceOpenId	device open id		true	string	
+  audioName	system audio name : 001/002.., or self-defined audio name. Please refer to operation platform to obtain audio name		true	string	
+  selfDefined	play system or self-defined audio		true	boolean	
+  loop	loop play or not		true	boolean	
+  timeout	timeout in seconds, required when play loop		false	integer(int32)	
+  interval	interval time in seconds between each play, required when play loop		false	integer(int32)	
+
+Status:
+
+code	description	schema
+200	OK	ResponseString
+
+Response Params:
+
+name	description	type	schema
+data	dataset	string	
+success	used to determine whether the call is successful	boolean	
+code	response status code	integer(int32)	integer(int32)
+info	response description	string	
+rid	traceId is used to trace the records of API calls	string	
+
+Response Example:
+
+{
+	"data": "",
+	"success": true,
+	"code": 0,
+	"info": "",
+	"rid": ""
+}
+Get current volume from device
+
+url:/app/openapi/v1/audio/volume/{deviceOpenId}
+
+method:GET
+
+produces:application/x-www-form-urlencoded
+
+consumes:*/*
+
+Note:
+
+Params:
+
+name	description	in	require	type	schema
+deviceOpenId	device open id	path	true	string	
+X-Api-Key	Key	header	true	string	
+X-Api-timestamp	timestamp	header	true	string	
+X-Api-signature	signature	header	true	string	
+
+Status:
+
+code	description	schema
+200	OK	ResponseInteger
+
+Response Params:
+
+name	description	type	schema
+data	dataset	integer(int32)	integer(int32)
+success	used to determine whether the call is successful	boolean	
+code	response status code	integer(int32)	integer(int32)
+info	response description	string	
+rid	traceId is used to trace the records of API calls	string	
+
+Response Example:
+
+{
+	"data": 0,
+	"success": true,
+	"code": 0,
+	"info": "",
+	"rid": ""
+}
+Mission
+Create new temporary mission
+
+url:/app/openapi/v1/mission
+
+method:POST
+
+produces:application/x-www-form-urlencoded,application/json
+
+consumes:*/*
+
+Note:
+
+If cleanEveryWhere is false, at least one of userDefinedArea or areaIds is required. Scrubbers(L series) can only create SWEEP missions. Vacuums(S series) can create both PATROL and SWEEP missions.
+If sweepMode is PATROL, subSweepMode can be one of: SPOT_CLEAN, LOW, MEDIUM, HIGH.
+If sweepMode is SWEEP, subSweepMode can be one of: LOW, MEDIUM, HIGH. Scrubbers can also set subSweepMode to VERY_QUIET.
+
+Example:
+
+{
+  "duration": 60,
+  "mapId": 1100011697639116,
+  "mapVersion": "map.1111699509667377.20230616-2.20240115-10",
+  "cleanEveryWhere": false,
+  "sweepMode": "PATROL",
+  "subSweepMode": "HIGH",
+  "edgeMode": "ON",
+  "windMode": "LOW",
+  "areaIds": [
+    "0bfae0a2-2d74-400a-abcc-a43fb66895df",
+    "c5ace709-97bf-47d0-a4fd-4ca3c6ff3802"
+  ],
+  "fixedLaps": 1,
+  "backPointId": "a4d37e64-b390-408b-8ad6-894c4bbcccf9"
+  "deviceOpenId": "2WEXXKE33F",
+  "userDefinedArea": [
+    {
+      "x": 0,
+      "y": 1
+    },
+    {
+      "x": 0,
+      "y": 2
+    },
+    {
+      "x": 1,
+      "y": 1
+    }
+  ]
+}
+
+Params:
+
+name	description	in	require	type	schema
+X-Api-Key	Key	header	true	string	
+X-Api-timestamp	timestamp	header	true	string	
+X-Api-signature	signature	header	true	string	
+createTmpMissionOpenRequest	CreateTmpMissionOpenRequest	body	true		
+  deviceOpenId	your device open id		true	string	
+  duration	task time limit, unit(minutes), [1, 1440].		false	integer(int32)	
+  fixedLaps	fixed laps, required when duration is null, [1,3].		false	integer(int32)	
+  mapId	map id that task will use		true	integer(int64)	
+  mapVersion	map id version that task will use		true	string	
+  cleanEveryWhere	option to enable/disable cleaning of the entire place. If this is false at least one of userDefinedArea or areaIds is required.
+default value: false		false	boolean	
+  sweepMode	clean mode,values:PATROL,SWEEP		true	string	
+  subSweepMode	sweep intensity,values:VERY_QUIET, LOW,MEDIUM,HIGH,SPOT_CLEAN
+default value: LOW		false	string	
+  edgeMode	edge cleaning(OFF/ON),Avalible:OFF,ON		false	string	
+  windMode	Absorption strength for L series(scrubber), Suction Power for S/SP series(vacuum). Avalible:LOW,MEDIUM,HIGH
+Must match subSweepMode: LOW -> LOW/MEDIUM/HIGH, MEDIUM -> MEDIUM/HIGH, HIGH -> HIGH		false	string	
+  areaIds	clean areas, required when cleanEveryWhere is false		false	array	string
+  backPointId	1. null or empty string is default behavior go back to station
+2. a valid back point id specify a customize back point. created by  POST /openapi/v1/map/backPoint		false	string	
+  userDefinedArea	Custom area, please ensure that the area is closed and within the map range		false	array	Point
+    x	x		false	number(double)	
+    y	y		false	number(double)	
+
+Status:
+
+code	description	schema
+200	OK	ResponseString
+
+Response Params:
+
+name	description	type	schema
+data	mission id	string	
+success	used to determine whether the call is successful	boolean	
+code	response status code	integer(int32)	integer(int32)
+info	response description	string	
+rid	traceId is used to trace the records of API calls	string	
+
+Response Example:
+
+{
+	"data": "1700000000",
+	"success": true,
+	"code": 0,
+	"info": "",
+	"rid": ""
+}
+Get mission summary
+
+url:/app/openapi/v1/mission/summary
+
+method:POST
+
+produces:application/x-www-form-urlencoded,application/json
+
+consumes:*/*
+
+Note:
+
+Example:
+
+{
+  "deviceOpenId": "111",
+  "startTimestamp": 1712725202000,
+  "endTimestamp": 1712725202000
+}
+
+Params:
+
+name	description	in	require	type	schema
+X-Api-Key	Key	header	true	string	
+X-Api-timestamp	timestamp	header	true	string	
+X-Api-signature	signature	header	true	string	
+queryMissionOpenRequest	QueryMissionOpenRequest	body	true	QueryMissionOpenRequest	QueryMissionOpenRequest
+  deviceOpenId	your device open id		true	string	
+  startTimestamp	mission query start timestamp, unit(ms)		false	integer(int64)	
+  endTimestamp	mission query end timestamp, unit(ms), if it is not set, current date will be used		false	integer(int64)	
+
+Status:
+
+code	description	schema
+200	OK	ResponseMissionSummaryVO
+
+Response Params:
+
+name	description	type	schema
+data		MissionSummaryVO	MissionSummaryVO
+  model		string	
+  totalJobs	total jobs	integer(int64)	
+  totalWorkingTime	total working time (min)	integer(int64)	
+  totalCleanedArea	total cleaned area (m²)	number(double)	
+  totalWater	total water (L)	number(double)	
+  totalCleaningSolution	total cleaning solution (ML)	number(double)	
+success	used to determine whether the call is successful	boolean	
+code	response status code	integer(int32)	integer(int32)
+info	response description	string	
+rid	traceId is used to trace the records of API calls	string	
+
+Response Example:
+
+{
+	"data": {
+		"model": "",
+		"totalJobs": 0,
+		"totalWorkingTime": 0,
+		"totalCleanedArea": 0,
+		"totalWater": 0,
+		"totalCleaningSolution": 0
+	},
+	"success": true,
+	"code": 0,
+	"info": "",
+	"rid": ""
+}
+Navigate to [x, y, yaw] in the given map which can constraint angle
+
+url:/app/openapi/v1/mission/strict_navigation
+
+method:POST
+
+produces:application/x-www-form-urlencoded,application/json
+
+consumes:*/*
+
+Note:
+
+Example:
+
+{
+  "deviceOpenId": "",
+  "point": {
+    "x": 0,
+    "y": 0,
+    "yaw": 0
+  }
+}
+
+Params:
+
+name	description	in	require	type
+X-Api-Key	Key	header	true	string
+X-Api-timestamp	timestamp	header	true	string
+X-Api-signature	signature	header	true	string
+navigationOpenRequest	NavigationOpenRequest	body	true	NavigationRequest
+  deviceOpenId	device open id		true	string
+  point	user defined areas		true	Point
+    x	x		false	number(double)
+    y	y		false	number(double)
+    yaw	The robot's heading angle in radians. Range: [-π, π]		false	number(double)
+
+Status:
+
+code	description	schema
+200	OK	ResponseString
+
+Response Params:
+
+name	description	type	schema
+data	dataset	string	
+success	used to determine whether the call is successful	boolean	
+code	response status code	integer(int32)	integer(int32)
+info	response description	string	
+rid	traceId is used to trace the records of API calls	string	
+
+Response Example:
+
+{
+	"data": "",
+	"success": true,
+	"code": 0,
+	"info": "",
+	"rid": ""
+}
+Navigate to [x, y] in the given map
+
+url:/app/openapi/v1/mission/navigation
+
+method:POST
+
+produces:application/x-www-form-urlencoded,application/json
+
+consumes:*/*
+
+Note:
+
+Example:
+
+{
+  "deviceOpenId": "",
+  "point": {
+    "x": 0,
+    "y": 0
+  }
+}
+
+Params:
+
+name	description	in	require	type
+X-Api-Key	Key	header	true	string
+X-Api-timestamp	timestamp	header	true	string
+X-Api-signature	signature	header	true	string
+navigationOpenRequest	NavigationOpenRequest	body	true	NavigationOpenRequest
+  deviceOpenId	device open id		true	string
+  point	user defined areas		true	Point
+    x	x		false	number(double)
+    y	y		false	number(double)
+
+Status:
+
+code	description	schema
+200	OK	ResponseString
+
+Response Params:
+
+name	description	type	schema
+data	mission id	string	
+success	used to determine whether the call is successful	boolean	
+code	response status code	integer(int32)	integer(int32)
+info	response description	string	
+rid	traceId is used to trace the records of API calls	string	
+
+Response Example:
+
+{
+	"data": "1700000000",
+	"success": true,
+	"code": 0,
+	"info": "",
+	"rid": ""
+}
+Query history missions by page
+
+url:/app/openapi/v1/mission/list
+
+method:POST
+
+produces:application/x-www-form-urlencoded,application/json
+
+consumes:*/*
+
+Note:
+
+Example:
+
+{
+  "pageIndex": 0,
+  "pageLength": 0,
+  "requestData": {
+    "deviceOpenId": "111",
+    "startTimestamp": 1712725202000,
+    "endTimestamp": 1712725203000,
+    "isShowNavigationMission": false
+  }
+}
+
+Params:
+
+name	description	in	require	type	
+X-Api-Key	Key	header	true	string	
+X-Api-timestamp	timestamp	header	true	string	
+X-Api-signature	signature	header	true	string	
+pageQueryRequestQueryMissionOpenRequest	search by page	body	true		
+  pageIndex	page index		false	integer(int32)	
+  pageLength	page length		false	integer(int32)	
+  requestData			true		
+    deviceOpenId	your device open id		true	string	
+    startTimestamp	mission query start timestamp, unit(ms)		false	integer(int64)	
+    endTimestamp	mission query end timestamp, unit(ms), if it is not set, current date will be used		false	integer(int64)	
+    isShowNavigationMission	whether show navigation mission
+(SpecLocation or GoPoint) in result set		false	bool	
+
+Status:
+
+code	description	schema
+200	OK	ResponsePageDataMissionDetailOpenResp
+
+Response Params:
+
+name	description	type	schema
+data			
+  data		array	
+    id	id	integer	
+    missionId	mission id	string	
+    startTime	mission start time (formatted date based on device time zone)	string	
+    startTimeStamp	mission start timestamp	integer	
+    endTime	mission end time (formatted date based on device time zone)	string	
+    endTimeStamp	mission end timestamp	integer	
+    duration	mission duration	integer	
+    status	- STOP: Cancelled by user on pad or phone
+- DONE: Completed successfully
+- ABEND: Abnormal end	string	
+    errDesc	Populated on ABEND; may also be populated on STOP, but not guaranteed.	string	
+    taskSummaryPictureUrl	the picture url of task summary	String	
+    totalTime	total working time (min)	integer	
+    cleanedArea	cleaned area (m2)	integer	
+    coverage	coverage	string	
+    cleaningTime	duration of cleaning	integer	
+    chargingTime	duration of charging	integer	
+    pauseTime	duration of pause	integer	
+    sceneName	scene name	string	
+    mapVersion	map version	string	
+    mapId	map id	integer	
+    areaList	list of areas	array	Area
+      id	user defined area id, required when creating mission/schedule(the name of the parameter is 'areaIds')	string	
+      name	area name	string	
+      type	area type	string	
+      geo	user defined areas	array	Point
+        x	x	number	
+        y	y	number	
+    sweepType	sweep type
+- SweepModeSweep: Full Cleaning
+- SweepModeP atrol: Patrol Cleaning
+- SweepModeDeepClean: Deep Cleaning
+- SweepModeSpecLocation: Go to Point(x, y)
+- SweepModeGoPoint: Go to Point(x, y and yaw)
+	string	
+    fixedLaps	fixed laps	integer	
+    deviceType	device type, eg:'SP50'	string	
+    water	amount of water used in mission (L)	number	
+    cleaningSolution	amount of cleaning solution used in mission (mL)	integer	
+    startBattery	Starting battery level(relative)	integer	
+    endBattery	Ending battery level(relative)	integer	
+    taskSourceTypeEnum	Task source
+ -   APP_TEMP: Temporary task created via mobile application
+ -   APP_TIMING: Scheduled task created via mobile application
+ -   APP_FAV: Favorite task launched on a mobile application
+ -   PAD_TEMP: Temporary task launched on the robot's tablet
+ -   PAD_TIMING: Scheduled task created on the robot's tablet
+ -   PAD_FAV: Favorite task launched on the robot's tablet
+ -   SCAN_CODE: QR Code task
+ -   OPEN_API:  Scheduled task created via open api or temporary task launched via open api	string	
+    taskEndReasonEnum	Task end reason
+ -   TIME_OUT: Time limit reached
+ -   LAPS_REACHED: Completed set rounds
+ -   APP_MANUAL: Manually stopped on APP
+ -   PAD_MANUAL: Manually stopped on PAD
+ -   PAD_TIMING: Scheduled task created on the robot's tablet
+ -   SYSTEM_ABEND: Favorite task launched on the robot's tablet
+ -   SYSTEM_PREEMPT: Preempted by new task
+ -   JOINT_CLEAN_SRC_END:  Preceding sweep not finished.	string	
+    abendSubReasonEnum	error enum, corresponding to field errDesc 
+- EMERGE_STOP: Extended emergency stop 
+- MANUAL_MODE: Extended manual mode 
+- LONGTIME_MANUALCHARGE: Extended manual charging mode 
+- WAIT_MANUAL_HANDLE: Extended waiting for manual assistance 
+- WAIT_MANUAL_HANDLE_WATER: Extended waiting for water assistance 
+- SYSTEM_STATUS_ERROR: Extended system errors 
+- ABNORMAL_TIMEOUT: Maximum time for task exceeded 
+- CHASSIS_TO_STATION_SIG: Cleaning mechanism malfunction 
+- CHARGING_TIME_UNREASONABLE: Overextended charging time 
+- LOW_CLEAN_EFFICIENCY: Low cleaning efficiency 
+- SUB_SYSTEM_PREEMPT: Preempted by new task 
+- NOT_RUNNING_TIMEOUT: Task ended due to system errors 
+- ROBOT_SHUTDOWN_TIMEOUT: Prolonged shutdown 
+- HIGH_AIR_PRESSURE: Air pressure too high 
+- LOW_AIR_PRESSURE: Air pressure too low 
+- PREEMPTED_NOT_EXECUTED: Skipped due to high-priority task running 
+- LIDAR_OBSTRUCTED: Lidar is blocked 
+- FRONT_DEPTH_OBSTRUCTED: The front depth camera is blocked 
+- BACK_DEPTH_OBSTRUCTED: The rear depth camera is blocked 
+- MAP_MISMATCH_NOT_EXECUTED: The map does not match and the task is not executed 
+- WIRING_ENTANGLEMENT: The brush may be tangled with debris or cables 
+- WHEEL_STUCK: The robot's wheels are stuck 
+- DISC_BRUSH_FELL_OFF: The brush may fall off from the machine 
+- ROLLED_CARPET: The robot may be stuck in the carpet and can't move forward 
+- VACUUM_HOSE_DROP: The vacuum hose is not properly connected or fixed 
+- SQUEEGEE_DROP: The squeegee is not properly connected or fixed 
+- STATION_ADD_WATER_ERROR: Water refilling has timed out at the workstation 
+- ROLL_BRUSH_MOTOR_OVERLOAD: Roller brush motor overload 
+- LEFT_SIDE_MOTOR_OVERLOAD: Left side brush motor overload 
+- RIGHT_SIDE_MOTOR_OVERLOAD: Right side brush motor overload 
+- ABNORMAL_DISCHARGE_SEWAGE: Recovery tank drain timeout 
+- CHARGING_FAILED: Recharging failed 
+- CHARGING_FAILED_FAULT_CHARGER: Charging Failed: Faulty charger/contactors or a dirty auto-charging plate 
+- CHARGING_FAILED_COMM_ERROR: Charging Failed: Unstable communication between robot and docking station 
+- CHARGING_FAILED_NO_TOUCH: Charging Failed: Communication error between the robot and docking station 
+- CHARGING_FAILED_NO_STATION: Charging Failed: Unable to detect docking station 
+- DOOR_BLOCKING: Unable to pass through due to the door being closed or obstructed 
+- ABNORMAL_TIMEOUT_PAUSED: Long periods of inactivity, preempted by scheduled tasks 
+- LEAVE_DOCKING_FAILED: Failed to leave the docking station 
+- DIRTY_BOX_SIG_ERROR: Recovery tank float sensor malfunction 
+- RIGHT_MOTOR_OVERLOAD: Right wheel motor overload 
+- LEFT_MOTOR_OVERLOAD: Left wheel motor overload 
+- WORKER_STATION_EMERGE_STOP: The workstation has its emergency stop button pressed 
+- BACK_DEPTH_CAMERA_ERROR: Rear Depth Camera Malfunction 
+- FRONT_DEPTH_CAMERA_ERROR: Front Depth Camera Malfunction 
+- DISC_BRUSH_DAMAGE: The disc brush motor is damaged 
+- OBSTACLE_BLOCKING: Robot was blocked by an obstacle 
+- LONGTIME_BEPREEMPTED: Task start delayed by prolonged high-priority task 
+- LONGTIME_WAIT_WATER_FINISH: Prolonged water refill or drainage 
+- JOINT_CLEAN_MAP_VERSION_NOT_EQUAL: TeamClean cannot start because the map between the two robots is inconsistent 
+- JOINT_CLEAN_SRC_END: Preceding sweep not finished	string	
+    cumulativeDistance	Distance traveled for the task, unit: meter	integer	
+    meanVel	Average speed, unit: m/s	number	
+    missionInitiator	Mission Initiator		Operator
+     source	source	string	
+     user	user	string	
+    missionCanceller	Mission Canceller		Operator
+     source	source	string	
+     user	user	string	
+  pageIndex		integer(int64)	
+  pageLength		integer(int64)	
+  totalCnt		integer(int64)	
+success	used to determine whether the call is successful	boolean	
+code	response status code	integer(int32)	
+info	response description	string	
+rid	traceId is used to trace the records of API calls	string	
+
+Response Example:
+
+{
+	"data": {
+		"data": [
+			{
+				"id": 0,
+				"missionId": "",
+				"startTime": "",
+				"startTimeStamp": 0,
+				"endTime": "",
+				"endTimeStamp": 0,
+				"duration": 0,
+				"status": "success/canceled/error",
+        "taskSummaryPictureUrl": "https://xxx.webp",
+				"totalTime": 0,
+				"cleanedArea": 0,
+				"coverage": "",
+				"cleaningTime": 0,
+				"chargingTime": 0,
+				"pauseTime": 0,
+				"sceneName": "",
+				"mapVersion": "",
+				"mapId": 0,
+				"areaList": [
+					{
+						"id": "",
+						"name": "",
+						"type": "",
+						"geo": [
+							{
+								"x": 0,
+								"y": 0
+							}
+						]
+					}
+				],
+				"sweepType": "",
+				"fixedLaps": 0,
+				"deviceType": "",
+				"water": 0,
+				"cleaningSolution": 0,
+				"errDesc": "Not running for a long time",
+        "startBattery": 60,
+        "endBattery": 81,
+        "taskSourceTypeEnum": "PAD_FAV",
+        "taskEndReasonEnum": "SYSTEM_ABEND",
+        "abendSubReasonEnum": "EMERGE_STOP"
+        "cumulativeDistance": 123,
+        "meanVel": 3.1415,
+        "missionInitiator": {
+          "source": "pad",
+          "user": "Jane Doe"
+        },
+				"missionCanceller": {
+          "source": "app",
+          "user": "Alice"
+        },
+			}
+		],
+		"pageIndex": 0,
+		"pageLength": 0,
+		"totalCnt": 0
+	},
+	"success": true,
+	"code": 0,
+	"info": "",
+	"rid": ""
+}
+Go home
+
+url:/app/openapi/v1/mission/home/{deviceOpenId}
+
+method:POST
+
+produces:application/x-www-form-urlencoded
+
+consumes:*/*
+
+Note:
+
+Params:
+
+name	description	in	require	type	schema
+deviceOpenId	device open id	path	true	string	
+X-Api-Key	Key	header	true	string	
+X-Api-timestamp	timestamp	header	true	string	
+X-Api-signature	signature	header	true	string	
+
+Status:
+
+code	description	schema
+200	OK	ResponseString
+
+Response Params:
+
+name	description	type	schema
+data	dataset	string	
+success	used to determine whether the call is successful	boolean	
+code	response status code	integer(int32)	integer(int32)
+info	response description	string	
+rid	traceId is used to trace the records of API calls	string	
+
+Response Example:
+
+{
+	"data": "",
+	"success": true,
+	"code": 0,
+	"info": "",
+	"rid": ""
+}
+Stop current mission
+
+url:/app/openapi/v1/mission/current/stop/{deviceOpenId}
+
+method:POST
+
+produces:application/x-www-form-urlencoded
+
+consumes:*/*
+
+Note:
+
+Params:
+
+name	description	in	require	type	schema
+deviceOpenId	device open id	path	true	string	
+X-Api-Key	Key	header	true	string	
+X-Api-timestamp	timestamp	header	true	string	
+X-Api-signature	signature	header	true	string	
+
+Status:
+
+code	description	schema
+200	OK	ResponseVoid
+
+Response Params:
+
+name	description	type	schema
+data	dataset	object	
+success	used to determine whether the call is successful	boolean	
+code	response status code	integer(int32)	integer(int32)
+info	response description	string	
+rid	traceId is used to trace the records of API calls	string	
+
+Response Example:
+
+{
+	"data": {},
+	"success": true,
+	"code": 0,
+	"info": "",
+	"rid": ""
+}
+Pause current mission
+
+url:/app/openapi/v1/mission/current/pause/{deviceOpenId}
+
+method:POST
+
+produces:application/x-www-form-urlencoded
+
+consumes:*/*
+
+Note:
+
+Params:
+
+name	description	in	require	type	schema
+deviceOpenId	device open id	path	true	string	
+X-Api-Key	Key	header	true	string	
+X-Api-timestamp	timestamp	header	true	string	
+X-Api-signature	signature	header	true	string	
+
+Status:
+
+code	description	schema
+200	OK	ResponseVoid
+
+Response Params:
+
+name	description	type	schema
+data	dataset	object	
+success	used to determine whether the call is successful	boolean	
+code	response status code	integer(int32)	integer(int32)
+info	response description	string	
+rid	traceId is used to trace the records of API calls	string	
+
+Response Example:
+
+{
+	"data": {},
+	"success": true,
+	"code": 0,
+	"info": "",
+	"rid": ""
+}
+Continue current mission
+
+url:/app/openapi/v1/mission/current/continue/{deviceOpenId}
+
+method:POST
+
+produces:application/x-www-form-urlencoded
+
+consumes:*/*
+
+Note:
+
+Params:
+
+name	description	in	require	type	schema
+deviceOpenId	device open id	path	true	string	
+X-Api-Key	Key	header	true	string	
+X-Api-timestamp	timestamp	header	true	string	
+X-Api-signature	signature	header	true	string	
+
+Status:
+
+code	description	schema
+200	OK	ResponseVoid
+
+Response Params:
+
+name	description	type	schema
+data	dataset	object	
+success	used to determine whether the call is successful	boolean	
+code	response status code	integer(int32)	integer(int32)
+info	response description	string	
+rid	traceId is used to trace the records of API calls	string	
+
+Response Example:
+
+{
+	"data": {},
+	"success": true,
+	"code": 0,
+	"info": "",
+	"rid": ""
+}
+Map
+Change map
+
+url:/app/openapi/v1/map/changeMap
+
+method:POST
+
+produces:application/x-www-form-urlencoded,application/json
+
+consumes:*/*
+
+Note:
+
+Example:
+
+{
+  "deviceOpenId": "",
+  "mapId": ""
+}
+
+Params:
+
+name	description	in	require	type	schema
+X-Api-Key	Key	header	true	string	
+X-Api-timestamp	timestamp	header	true	string	
+X-Api-signature	signature	header	true	string	
+changeMapOpenRequest	ChangeMapOpenRequest	body	true	ChangeMapOpenRequest	ChangeMapOpenRequest
+  deviceOpenId	device open id		true	string	
+  mapId	map id		true	string	
+
+Status:
+
+code	description	schema
+200	OK	ResponseBoolean
+
+Response Params:
+
+name	description	type	schema
+data	dataset	boolean	
+success	used to determine whether the call is successful	boolean	
+code	response status code	integer(int32)	integer(int32)
+info	response description	string	
+rid	traceId is used to trace the records of API calls	string	
+
+Response Example:
+
+{
+	"data": true,
+	"success": true,
+	"code": 0,
+	"info": "",
+	"rid": ""
+}
+List all areas by device
+
+url:/app/openapi/v1/map/area
+
+method:GET
+
+produces:application/x-www-form-urlencoded
+
+consumes:*/*
+
+Note:
+
+Params:
+
+name	description	in	require	type	schema
+mapId	map id	query	true	long	
+deviceOpenId	device open id	query	true	string	
+X-Api-Key	Key	header	true	string	
+X-Api-timestamp	timestamp	header	true	string	
+X-Api-signature	signature	header	true	string	
+
+Status:
+
+code	description	schema
+200	OK	ResponseAreaOpenResp
+
+Response Params:
+
+name	description	type	schema
+data		AreaOpenResp	AreaOpenResp
+  mapId	map id	integer(int64)	
+  areaList	list of areas	array	Area
+    id	user defined area id, required when creating mission/schedule(the name of the parameter is 'areaIds')	string	
+    name	area name	string	
+    type	area type	string	
+    geo	user defined areas	array	Point
+      x	x	number	
+      y	y	number	
+success	used to determine whether the call is successful	boolean	
+code	response status code	integer(int32)	integer(int32)
+info	response description	string	
+rid	traceId is used to trace the records of API calls	string	
+
+Response Example:
+
+{
+	"data": {
+		"mapId": 0,
+		"areaList": [
+			{
+				"id": "",
+				"name": "",
+				"type": "",
+				"geo": [
+					{
+						"x": 0,
+						"y": 0
+					}
+				]
+			}
+		]
+	},
+	"success": true,
+	"code": 0,
+	"info": "",
+	"rid": ""
+}
+Create back point
+
+url:/app/openapi/v1/map/backPoint
+
+method:POST
+
+produces:application/x-www-form-urlencoded,application/json
+
+consumes:*/*
+
+Note:
+
+Create back point, the robot must be online, and the input point should be within the map.
+
+Example:
+
+{
+  "deviceOpenId": "GVXCC05JPA",
+  "mapId": 1721645647269112,
+  "name": "bp name",
+  "x": 2,
+  "y": 2,
+  "yaw": 1.28
+}
+
+Params:
+
+name	description	in	require	type
+X-Api-Key	Key	header	true	string
+X-Api-timestamp	timestamp	header	true	string
+X-Api-signature	signature	header	true	string
+createBackPointOpenRequest	CreateBackPointOpenRequest	body	true	CreateBackPointOpenRequest
+  deviceOpenId	robot open id		true	string
+  mapId	map id		true	integer(int64)
+  name	back point name,length should less than 20		true	string
+  x	x-coordinate		true	number(double)
+  y	y-coordinate		true	number(double)
+  yaw	The robot's heading angle in radians. Range: [-π, π]		true	number(double)
+
+Status:
+
+code	description	schema
+200	OK	ResponseString
+
+Response Params:
+
+name	description	type	schema
+data	back point id	string	
+success	used to determine whether the call is successful	boolean	
+code	response status code	integer(int32)	integer(int32)
+info	response description	string	
+rid	traceId is used to trace the records of API calls	string	
+
+Response Example:
+
+{
+	"data": "b87acfde-51ca-4839-897c-1b94d9159a77",
+	"success": true,
+	"code": 0,
+	"info": "",
+	"rid": ""
+}
+Update back point
+
+url:/app/openapi/v1/map/backPoint
+
+method:PUT
+
+produces:application/x-www-form-urlencoded,application/json
+
+consumes:*/*
+
+Note:
+
+Update the robot's back point on a map by back point id, the robot must be online
+
+Example:
+
+{
+  "deviceOpenId": "GVXCC05JPA",
+  "mapId": 1721645647269112,
+  "name": "new name",
+  "x": 1,
+  "y": 1,
+  "yaw": 1,
+  "backPointId": "b87acfde-51ca-4839-897c-1b94d9159a77"
+}
+
+Params:
+
+name	description	in	require	type	
+X-Api-Key	Key	header	true	string	
+X-Api-timestamp	timestamp	header	true	string	
+X-Api-signature	signature	header	true	string	
+updateBackPointOpenRequest	UpdateBackPointOpenRequest	body	true		
+  deviceOpenId	robot open id		true	string	
+  mapId	map id		true	integer(int64)	
+  name	back point name,length should less than 20		true	string	
+  x	x-coordinate		true	number(double)	
+  y	y-coordinate		true	number(double)	
+  yaw	The robot's heading angle in radians. Range: [-π, π]		true	number(double)	
+  backPointId	back point id		true	string	
+
+Status:
+
+code	description	schema
+200	OK	ResponseVoid
+
+Response Params:
+
+name	description	type	schema
+data	dataset	object	
+success	used to determine whether the call is successful	boolean	
+code	response status code	integer(int32)	integer(int32)
+info	response description	string	
+rid	traceId is used to trace the records of API calls	string	
+
+Response Example:
+
+{
+	"data": {},
+	"success": true,
+	"code": 0,
+	"info": "",
+	"rid": ""
+}
+List Back points
+
+url:/app/openapi/v1/map/backPoint
+
+method:GET
+
+produces:application/x-www-form-urlencoded
+
+consumes:*/*
+
+Note:
+
+List the robot's all back points on a map, the robot must be online
+
+Example:
+
+curl -H  "X-Api-Key:XXX" -H  "X-Api-timestamp:YYY" -H  "X-Api-signature:ZZZ"  -H  "Content-Type:application/x-www-form-urlencoded" "$HOST/app/openapi/v1/map/backPoint?deviceOpenId=GVXCC05JPA&mapId=1721645647269112"
+
+Params:
+
+name	description	in	require	type	schema
+deviceOpenId		query	true	string	
+mapId		query	true	integer(int64)	
+X-Api-Key	Key	header	true	string	
+X-Api-timestamp	timestamp	header	true	string	
+X-Api-signature	signature	header	true	string	
+
+Status:
+
+code	description	schema
+200	OK	ResponseListBackPointDTO
+
+Response Params:
+
+name	description	type	schema
+data	dataset	array	BackPointDTO
+  mapId		integer(int64)	
+  name		string	
+  pointId		string	
+  pose	back point	Point	Point
+    x	x	number	
+    y	y	number	
+    z	z	number	
+    yaw	The robot's heading angle in radians. Range: [-π, π]	number(double)	
+success	used to determine whether the call is successful	boolean	
+code	response status code	integer(int32)	integer(int32)
+info	response description	string	
+rid	traceId is used to trace the records of API calls	string	
+
+Response Example:
+
+{
+	"data": [
+		{
+			"mapId": 1721645647269112,
+			"name": "bp name",
+			"pointId": "b87acfde-51ca-4839-897c-1b94d9159a77",
+			"pose": {
+				"x": 2,
+				"y": 2,
+				"yaw": 1
+			}
+		}
+	],
+	"success": true,
+	"code": 0,
+	"info": "",
+	"rid": ""
+}
+Delete Back Point
+
+url:/app/openapi/v1/map/backPoint
+
+method:DELETE
+
+produces:application/x-www-form-urlencoded,application/json
+
+consumes:*/*
+
+Note:
+
+Delete the robot's back point on a map by back point id, the robot must be online
+
+Example:
+
+{
+  "deviceOpenId": "GVXCC05JPA",
+  "mapId": 1721645647269112,
+  "pointId": "b87acfde-51ca-4839-897c-1b94d9159a77"
+}
+
+Params:
+
+name	description	in	require	type	
+X-Api-Key	Key	header	true	string	
+X-Api-timestamp	timestamp	header	true	string	
+X-Api-signature	signature	header	true	string	
+deleteBackPointOpenRequest	DeleteBackPointOpenRequest	body	true		
+  deviceOpenId	robot open id		true	string	
+  mapId			true	integer(int64)	
+  pointId			true	string	
+
+Status:
+
+code	description	schema
+200	OK	ResponseString
+
+Response Params:
+
+name	description	type	schema
+data	dataset	string	
+success	used to determine whether the call is successful	boolean	
+code	response status code	integer(int32)	integer(int32)
+info	response description	string	
+rid	traceId is used to trace the records of API calls	string	
+
+Response Example:
+
+{
+	"data": "",
+	"success": true,
+	"code": 0,
+	"info": "",
+	"rid": ""
+}
+List all current maps of device
+
+url:/app/openapi/v1/map
+
+method:GET
+
+produces:application/x-www-form-urlencoded
+
+consumes:*/*
+
+Note:
+
+Params:
+
+name	description	in	require	type	schema
+deviceOpenId	device open id	query	true	string	
+X-Api-Key	Key	header	true	string	
+X-Api-timestamp	timestamp	header	true	string	
+X-Api-signature	signature	header	true	string	
+
+Status:
+
+code	description	schema
+200	OK	ResponseListMapInfoOpenResp
+
+Response Params:
+
+name	description	type	schema
+data	dataset	array	MapInfoOpenResp
+  mapName	map name	string	
+  mapId	map id	integer(int64)	
+  mapVersion	map version: once map is updated, map version is updated while map id and map name keep unchanged	string	
+  inUse	map is chosen and used on pad	boolean	
+  valid	map is valid for preview	boolean	
+success	used to determine whether the call is successful	boolean	
+code	response status code	integer(int32)	integer(int32)
+info	response description	string	
+rid	traceId is used to trace the records of API calls	string	
+
+Response Example:
+
+{
+	"data": [
+		{
+			"mapName": "",
+			"mapId": 0,
+			"mapVersion": "",
+			"inUse": true,
+			"valid": true
+		}
+	],
+	"success": true,
+	"code": 0,
+	"info": "",
+	"rid": ""
+}
+Get screenshot of map
+
+url:/app/openapi/v1/map/pic
+
+method:GET
+
+produces:application/x-www-form-urlencoded
+
+consumes:*/*
+
+Note:
+
+Params:
+
+name	description	in	require	type	schema
+mapVersion	map version	query	true	string	
+X-Api-Key	Key	header	true	string	
+X-Api-timestamp	timestamp	header	true	string	
+X-Api-signature	signature	header	true	string	
+
+Status:
+
+code	description	schema
+200	OK	
+
+Response Params:
+
+None
+
+Response Example:
+
+undefined
+Get screenshot of map with four coordinate points
+
+url:/app/openapi/v1/map/pic-with-points
+
+method:GET
+
+produces:application/x-www-form-urlencoded
+
+consumes:*/*
+
+Note:
+
+Params:
+
+name	description	in	require	type	schema
+mapVersion	map version	query	true	string	
+X-Api-Key	Key	header	true	string	
+X-Api-timestamp	timestamp	header	true	string	
+X-Api-signature	signature	header	true	string	
+
+Status:
+
+code	description	schema
+200	OK	ResponseMapPicOpenResp
+
+Response Params:
+
+name	description	type	schema
+data		MapPicOpenResp	MapPicOpenResp
+  width	pic width	integer(int64)	
+  height	pic height	integer(int64)	
+  vertexCoordinates	Four points, arrange in the following order: bottom left, top left, top right, bottom right. The coordinate aligns with the robot pose point coordinate system.
+Value could be None if map is too old	array	Point
+    x	x	number	
+    y	y	number	
+    z	z	number	
+    yaw	yaw	number	
+  picUrl	url	string	
+success	used to determine whether the call is successful	boolean	
+code	response status code	integer(int32)	integer(int32)
+info	response description	string	
+rid	traceId is used to trace the records of API calls	string	
+
+Response Example:
+
+{
+	"data": {
+		"width": 0,
+		"height": 0,
+		"vertexCoordinates": [
+			{
+				"x": 0,
+				"y": 0,
+				"z": 0,
+				"yaw": 0
+			}
+		],
+		"picUrl": ""
+	},
+	"success": true,
+	"code": 0,
+	"info": "",
+	"rid": ""
+}
+Favorite
+Create new favorite mission
+
+url:/app/openapi/v1/fav
+
+method:POST
+
+produces:application/x-www-form-urlencoded,application/json
+
+consumes:*/*
+
+Note:
+
+Example:
+
+{
+  "deviceOpenId": "1234",
+  "timeLimit": 60,
+  "fixedLaps": 0,
+  "cleanEveryWhere": false,
+  "sweepMode": "PATROL",
+  "subSweepMode": "HIGH",
+  "edgeMode": "ON",
+  "windMode": "LOW",
+  "areaIds": [
+    "0",
+    "3"
+  ],
+  "userDefinedArea": [
+    {
+      "x": 0,
+      "y": 1
+    },
+    {
+      "x": 0,
+      "y": 2
+    },
+    {
+      "x": 1,
+      "y": 1
+    }
+  ],
+  "cleanAreasInOrder": true,
+  "missionName": "",
+  "backPointId": "",
+  "mapId": 0
+}
+
+Params:
+
+name	description	in	require	type
+X-Api-Key	Key	header	true	string
+X-Api-timestamp	timestamp	header	true	string
+X-Api-signature	signature	header	true	string
+createFavoriteOpenRequest	CreateFavoriteOpenRequest	body	true	
+  deviceOpenId	your device open id		true	string
+  timeLimit	task time limit, unit(minutes), [1, 1440]. Will be ignored if HOMING		false	integer(int32)
+  fixedLaps	fixed laps, required when duration is null, [1,3]. Will be ignored if HOMING		false	integer(int32)
+  cleanEveryWhere	option to enable/disable cleaning of the entire place. if false,areaIds should not empty. Will be ignored if HOMING		false	boolean
+  sweepMode	only PATROL and SWEEP can allow in the favorite,Avalible:PATROL,HOMING,SWEEP		true	string
+  subSweepMode	sweep intensity,Avalible:VERY_QUITE,LOW,MEDIUM,HIGH,SPOT_CLEAN
+default value: LOW		false	string
+  edgeMode	edge cleaning(OFF/ON),Avalible:OFF,ON		false	string
+  windMode	Absorption strength for L series(scrubber, required), Suction Power for S/SP series(vacuum). Avalible:LOW,MEDIUM,HIGH
+Must match subSweepMode: LOW -> LOW/MEDIUM/HIGH, MEDIUM -> MEDIUM/HIGH, HIGH -> HIGH		false	string
+  areaIds	clean areas, required when cleanEveryWhere is false		false	array
+  userDefinedArea	user defined areas		false	array
+    x	x		false	number
+    y	y		false	number
+  cleanAreasInOrder	Whether to clean in the order of the area		false	boolean
+  missionName	mission name		true	string
+  backPointId	1. null or empty string is default behavior go back to station; 2. a valid back point id specify a customize back point. created by  POST /openapi/v1/map/backPoint		false	string
+  mapId	map id		true	integer(int64)
+
+Status:
+
+code	description	schema
+200	OK	ResponseVoid
+
+Response Params:
+
+name	description	type	schema
+data	dataset	object	
+success	used to determine whether the call is successful	boolean	
+code	response status code	integer(int32)	integer(int32)
+info	response description	string	
+rid	traceId is used to trace the records of API calls	string	
+
+Response Example:
+
+{
+	"data": {},
+	"success": true,
+	"code": 0,
+	"info": "",
+	"rid": ""
+}
+Update favorite mission
+
+url:/app/openapi/v1/fav
+
+method:PUT
+
+produces:application/x-www-form-urlencoded,application/json
+
+consumes:*/*
+
+Note:
+
+Example:
+
+{
+  "deviceOpenId": "1234",
+  "timeLimit": 60,
+  "fixedLaps": 0,
+  "cleanEveryWhere": false,
+  "sweepMode": "PATROL",
+  "subSweepMode": "HIGH",
+  "edgeMode": "ON",
+  "windMode": "LOW",
+  "areaIds": [
+    "0",
+    "3"
+  ],
+  "userDefinedArea": [
+    {
+      "x": 0,
+      "y": 1
+    },
+    {
+      "x": 0,
+      "y": 2
+    },
+    {
+      "x": 1,
+      "y": 1
+    }
+  ],
+  "cleanAreasInOrder": true,
+  "missionName": "",
+  "backPointId": "id",
+  "missionId": ""
+}
+
+Params:
+
+name	description	in	require	type	schema
+X-Api-Key	Key	header	true	string	
+X-Api-timestamp	timestamp	header	true	string	
+X-Api-signature	signature	header	true	string	
+updateFavoriteOpenRequest	UpdateFavoriteOpenRequest	body	true		
+  deviceOpenId	your device open id		true	string	
+  timeLimit	task time limit, unit(minutes), [1, 1440]. Will be ignored if HOMING		false	integer(int32)	
+  fixedLaps	fixed laps, required when duration is null, [1,3]. Will be ignored if HOMING		false	integer(int32)	
+  cleanEveryWhere	option to enable/disable cleaning of the entire place. if false,areaIds should not empty. Will be ignored if HOMING		false	boolean	
+  sweepMode	only PATROL and SWEEP can allow in the favorite,Avalible:PATROL,HOMING,SWEEP		true	string	
+  subSweepMode	sweep intensity,Avalible:VERY_QUITE,LOW,MEDIUM,HIGH,SPOT_CLEAN		false	string	
+  edgeMode	edge cleaning(OFF/ON),Avalible:OFF,ON		false	string	
+  windMode	Absorption strength for L series(scrubber, required), Suction Power for S/SP series(vacuum). Avalible:LOW,MEDIUM,HIGH
+Must match subSweepMode: LOW -> LOW/MEDIUM/HIGH, MEDIUM -> MEDIUM/HIGH, HIGH -> HIGH		false	string	
+  areaIds	clean areas, required when cleanEveryWhere is false		false	array	string
+  userDefinedArea	user defined areas		false	array	Point
+    x	x		false	number	
+    y	y		false	number	
+  cleanAreasInOrder	Whether to clean in the order of the area		false	boolean	
+  missionName	mission name		true	string	
+  backPointId	1. null or empty string is default behavior go back to station 2. a valid back point id specify a customize back point. created by  POST /openapi/v1/map/backPoint		false	string	
+  missionId	mission id		true	string	
+
+Status:
+
+code	description	schema
+200	OK	ResponseVoid
+
+Response Params:
+
+name	description	type	schema
+data	dataset	object	
+success	used to determine whether the call is successful	boolean	
+code	response status code	integer(int32)	integer(int32)
+info	response description	string	
+rid	traceId is used to trace the records of API calls	string	
+
+Response Example:
+
+{
+	"data": {},
+	"success": true,
+	"code": 0,
+	"info": "",
+	"rid": ""
+}
+Delete favorite mission
+
+url:/app/openapi/v1/fav
+
+method:DELETE
+
+produces:application/x-www-form-urlencoded,application/json
+
+consumes:*/*
+
+Note:
+
+Example:
+
+{
+  "deviceOpenId": "1234",
+  "missionId": ""
+}
+
+Params:
+
+name	description	in	require	type	schema
+X-Api-Key	Key	header	true	string	
+X-Api-timestamp	timestamp	header	true	string	
+X-Api-signature	signature	header	true	string	
+favoriteLiteOpenRequest	FavoriteLiteOpenRequest	body	true	FavoriteLiteOpenRequest	FavoriteLiteOpenRequest
+  deviceOpenId	your device open id		true	string	
+  missionId	mission id		false	string	
+
+Status:
+
+code	description	schema
+200	OK	ResponseVoid
+
+Response Params:
+
+name	description	type	schema
+data	dataset	object	
+success	used to determine whether the call is successful	boolean	
+code	response status code	integer(int32)	integer(int32)
+info	response description	string	
+rid	traceId is used to trace the records of API calls	string	
+
+Response Example:
+
+{
+	"data": {},
+	"success": true,
+	"code": 0,
+	"info": "",
+	"rid": ""
+}
+Run favorite mission
+
+url:/app/openapi/v1/fav/run
+
+method:POST
+
+produces:application/x-www-form-urlencoded,application/json
+
+consumes:*/*
+
+Note:
+
+Example:
+
+{
+  "deviceOpenId": "1234",
+  "missionId": ""
+}
+
+Params:
+
+name	description	in	require	type	schema
+X-Api-Key	Key	header	true	string	
+X-Api-timestamp	timestamp	header	true	string	
+X-Api-signature	signature	header	true	string	
+favoriteLiteOpenRequest	FavoriteLiteOpenRequest	body	true	FavoriteLiteOpenRequest	FavoriteLiteOpenRequest
+  deviceOpenId	your device open id		true	string	
+  missionId	mission id		false	string	
+
+Status:
+
+code	description	schema
+200	OK	ResponseVoid
+
+Response Params:
+
+name	description	type	schema
+data	dataset	object	
+success	used to determine whether the call is successful	boolean	
+code	response status code	integer(int32)	integer(int32)
+info	response description	string	
+rid	traceId is used to trace the records of API calls	string	
+
+Response Example:
+
+{
+	"data": {},
+	"success": true,
+	"code": 0,
+	"info": "",
+	"rid": ""
+}
+List favorite missions
+
+url:/app/openapi/v1/fav/list
+
+method:GET
+
+produces:application/x-www-form-urlencoded
+
+consumes:*/*
+
+Note:
+
+Params:
+
+name	description	in	require	type	schema
+deviceOpenId		query	true	string	
+X-Api-Key	Key	header	true	string	
+X-Api-timestamp	timestamp	header	true	string	
+X-Api-signature	signature	header	true	string	
+mapId		query	false	integer(int64)	
+
+Status:
+
+code	description	schema
+200	OK	ResponseListFavoriteOpenResp
+
+Response Params:
+
+name	description	type	schema
+data	dataset	array	FavoriteOpenResp
+  missionId	mission id	string	
+  mapId	map id	integer(int64)	
+  sceneName	scene name	string	
+  needModify	if the map is deleted in the mission, the mission can be blocked	boolean	
+  reason	reasons to block mission execute	string	
+  cleanEveryWhere	option to enable/disable cleaning of the entire place. if false,areaIds should not empty. Will be ignored if HOMING	boolean	
+  sweepMode	clean mode,Avalible:PATROL,HOMING,SWEEP	string	
+  subSweepMode	sweep intensity,Avalible:VERY_QUITE,LOW,MEDIUM,HIGH,SPOT_CLEAN	string	
+  edgeMode	edge cleaning(OFF/ON),Avalible:OFF,ON	string	
+  windMode	L series: Absorption strength, S/SP series: Suction Power. Avalible:LOW,MEDIUM,HIGH	string	
+  areaIds	clean areas, required when cleanEveryWhere is false	array	string
+  userDefinedArea	user defined areas	array	Point
+    x	x	number	
+    y	y	number	
+  missionName	mission name	string	
+  backPointId	1. null or empty string is default behavior go back to station; 2. a valid back point id specify a customize back point. created by  POST /openapi/v1/map/backPoint	string	
+  backPoint		Point	Point
+    x	x	number	
+    y	y	number	
+    yaw	The robot's heading angle in radians. Range: [-π, π]	number(double)	
+  timeLimit	time limit	integer(int64)	
+  newAreaDisplay	area display	string	
+  cleanAreasInOrder	Whether to clean in the order of the area	boolean	
+  fixedLaps	fixed laps, required when duration is null, [1,3]. Will be ignored if HOMING	integer(int64)	
+success	used to determine whether the call is successful	boolean	
+code	response status code	integer(int32)	integer(int32)
+info	response description	string	
+rid	traceId is used to trace the records of API calls	string	
+
+Response Example:
+
+{
+	"data": [
+		{
+			"missionId": "",
+			"mapId": 0,
+			"sceneName": "",
+			"needModify": true,
+			"reason": "",
+			"cleanEveryWhere": false,
+			"sweepMode": "PATROL",
+			"subSweepMode": "HIGH",
+			"edgeMode": "ON",
+			"windMode": "LOW",
+			"areaIds": "[\"0\",\"3\"]",
+			"userDefinedArea": "[{\"x\":0,\"y\":1,\"z\":0},{\"x\":0,\"y\":2,\"z\":0},{\"x\":1,\"y\":1,\"z\":0}]",
+			"missionName": "",
+			"backPointId": "",
+			"backPoint": {
+				"x": 0,
+				"y": 0,
+				"yaw": 0
+			},
+			"timeLimit": 0,
+			"newAreaDisplay": "",
+			"cleanAreasInOrder": true,
+			"fixedLaps": 0
+		}
+	],
+	"success": true,
+	"code": 0,
+	"info": "",
+	"rid": ""
+}
+Device
+Get device status
+
+url:/app/openapi/v1/device/status/{deviceOpenId}
+
+method:GET
+
+produces:application/x-www-form-urlencoded
+
+consumes:*/*
+
+Note:
+
+Params:
+
+name	description	in	require	type	schema
+deviceOpenId	device open id	path	true	string	
+X-Api-Key	Key	header	true	string	
+X-Api-timestamp	timestamp	header	true	string	
+X-Api-signature	signature	header	true	string	
+
+Status:
+
+code	description	schema
+200	OK	ResponseDeviceStatusDetailOpenResp
+
+Response Params:
+
+name	description	type	schema
+data			
+  online	whether the device is online	boolean	
+  soc	remaining battery power	integer(int32)	
+  running	whether the device is operating	boolean	
+  charging	whether the device is charging	boolean	
+  chargingMode	charging mode, AUTO or MANUAL,
+values:AUTO,MANUAL,PROBABLY_MANUAL	string	
+  currentMapVersion	current map version	string	
+  currentMapId	current map id	integer(int64)	
+  currentMapName	current map name	string	
+  vehicleTime	last online time of device	string	
+  licensePlate	licensePlate	string	
+  remark	robot remark on Operation platform	string	
+  isEmergency	whether the emergency mode is enabled	boolean	
+  isManual	whether the manual mode is enabled	boolean	
+  pose	posture signifies different meanings offline and online. 
+online, it denotes the current real-time position,
+ and offline implies the most recently reported position	Pose	Pose
+    x	x	number	
+    y	y	number	
+    yaw	The robot's heading angle in radians. Range: [-π, π]	number	
+  dirtyBox	dirty water level	array	integer(int32)
+  waterBox	clean water level	array	integer(int32)
+  dockingStationDetail	docking station detail		
+    isDocked	is docked	boolean	
+    type	docking station type,values:CCS_01,CCS_02,CWS_01	string	
+    dirtyWaterStatus	dirty water status,values:IDLE,DRAINING_SEWAGE,FINISHED,ERROR	string	
+    cleanWaterStatus	clean water status,values:IDLE,ADDING_WATER,
+ADDING_CLEANING_SOLUTION,FINISHED,ERROR	string	
+  missionTaskDetail	mission task detail		
+    currentMissionId	mission's id that device is running	string	
+    sweepMode	current task sweep mode,
+values:NoTask,Sweep,Patrol,Charge,Homing,ReplaceWater	string	
+    taskStatus	current task status,values:READY,ON_GOING,PAUSE,
+DONE,STOP,ROUTING,ABEND,CHARGING,
+ABSORBS_WATER,BACK_TO_STATION,MANUAL_HANDLING,
+CHARGING_BROKEN,WARNING,UNKNOWN	string	
+    taskProgress	task progress	number	
+    cleanedAreaSize	cleaned area size(m²)	number	
+    remainingAreaSize	remaining area size(m²)	number	
+    remainingTime	remaining time(second)	integer	
+    currentLap	current lap	integer	
+    currentAreaIds	current area ids	array	string
+  consumablesStatistics	consumables statistics, only for SP50	array	
+    name	consumables name	string	
+    validityTime	duration of validity (hour)	integer	
+    remainingPercentage	remaining percentage	string	
+success	used to determine whether the call is successful	boolean	
+code	response status code	integer(int32)	integer(int32)
+info	response description	string	
+rid	traceId is used to trace the records of API calls	string	
+
+Response Example:
+
+{
+	"data": {
+		"online": true,
+		"soc": 0,
+		"running": true,
+		"charging": true,
+		"chargingMode": "",
+		"currentMapVersion": "",
+		"currentMapId": 0,
+		"currentMapName": "",
+		"vehicleTime": "",
+		"licensePlate": "",
+    "remark": "User Defined Remark",
+		"isEmergency": true,
+		"isManual": true,
+		"pose": {
+			"x": 0,
+			"y": 0,
+			"yaw": 0
+		},
+		"dirtyBox": [],
+		"waterBox": [],
+		"dockingStationDetail": {
+			"isDocked": true,
+			"type": "",
+			"dirtyWaterStatus": "",
+			"cleanWaterStatus": ""
+		},
+		"missionTaskDetail": {
+			"currentMissionId": "",
+			"sweepMode": "",
+			"taskStatus": "",
+			"taskProgress": 0,
+			"cleanedAreaSize": 0,
+			"remainingAreaSize": 0,
+			"remainingTime": 0
+		},
+		"consumablesStatistics": [
+			{
+				"name": "",
+				"validityTime": 0,
+				"remainingPercentage": ""
+			}
+		]
+	},
+	"success": true,
+	"code": 0,
+	"info": "",
+	"rid": ""
+}
+Get robot info
+
+url:/app/openapi/v1/device/info/{deviceOpenId}
+
+method:GET
+
+produces:application/x-www-form-urlencoded
+
+consumes:*/*
+
+Note:
+
+Params:
+
+name	description	in	require	type
+deviceOpenId	device open id	path	true	string
+X-Api-Key	Key	header	true	string
+X-Api-timestamp	timestamp	header	true	string
+X-Api-signature	signature	header	true	string
+
+Status:
+
+code	description	schema
+200	OK	ResponseDeviceInfoOpenResp
+
+Response Params:
+
+name	description	type
+data		DeviceInfoOpenResp
+  licensePlate	licensePlate	string
+  remark	robot remark on Operation platform	string
+  buildingName	building name	string
+  serialNumber	serial number	string
+  softwareVersion	software version	string
+  activated	activated or not	boolean
+  activateTimestamp	active timestamp	integer(int64)
+success	used to determine whether the call is successful	boolean
+code	response status code	integer(int32)
+info	response description	string
+rid	traceId is used to trace the records of API calls	string
+
+Response Example:
+
+{
+	"data": {
+		"licensePlate": "",
+		"remark": "",
+		"buildingName": "",
+		"serialNumber": "",
+		"softwareVersion": "",
+		"activated": true,
+		"activateTimestamp": 0
+	},
+	"success": true,
+	"code": 0,
+	"info": "",
+	"rid": ""
+}
+Get robot's maintenance detail
+
+url:/app/openapi/v1/device/maintenance-detail/{deviceOpenId}
+
+method:GET
+
+produces:application/x-www-form-urlencoded
+
+consumes:*/*
+
+Note:
+
+Params:
+
+name	description	in	require	type
+deviceOpenId		path	true	string
+X-Api-Key	Key	header	true	string
+X-Api-timestamp	timestamp	header	true	string
+X-Api-signature	signature	header	true	string
+
+Status:
+
+code	description	schema
+200	OK	ResponseMaintenanceDetailOpenResp
+
+Response Params:
+
+name	description	type
+data		MaintenanceDetailOpenResp
+  maintenanceItems	Consumables	array 
+    name	Consumable Name	string
+    remainPercent	Remaining Life Percentage	string
+    remainHours	Shows Est. Remaining Hours if life remains	integer
+    overDueHours	Shows Overdue Hours if consumable is overdue	integer
+    life	Consumable life	integer
+    history	Maintenance History	array 
+      resetTimestamp	Reset timestamp	integer
+      resetTime	String format of reset time at the robot's time zone	string
+      user	Reset user	string
+      source	Reset source	string
+success	used to determine whether the call is successful	boolean
+code	response status code	integer(int32)
+info	response description	string
+rid	traceId is used to trace the records of API calls	
+
+Response Example:
+
+{
+  "code": 200,
+  "data": {
+    "maintenanceItems": [
+      {
+        "name": "Squeegee Blade",
+        "history": [
+          {
+            "resetTimestamp": 1772586706000,
+            "source": "pad",
+            "resetTime": "Wed, Mar 04, 2026 9:11",
+            "user": "Admin"
+          },
+          {
+            "resetTimestamp": 1772586704000,
+            "source": "pad",
+            "resetTime": "Wed, Mar 04, 2026 9:11",
+            "user": "Admin"
+          }
+        ],
+        "overDueHours": 2,
+        "life": 150,
+        "remainPercent": "0%"
+      }
+      {
+        "remainHours": 480,
+        "name": "Detergent",
+        "history": [
+          {
+            "resetTimestamp": 1743144231000,
+            "source": "pad",
+            "resetTime": "Fri, Mar 28, 2025 14:43",
+            "user": "Admin"
+          }
+        ],
+        "life": 480,
+        "remainPercent": "100%"
+      }
+    ]
+  },
+  "success": true,
+  "rid": "ec8edcf921e041a09054b8ac28f3479d.668.17750218761290019"
+}
+Get robot setting
+
+url:/app/openapi/v1/device/setting/{deviceOpenId}
+
+method:GET
+
+produces:application/x-www-form-urlencoded
+
+consumes:*/*
+
+Note:
+
+Params:
+
+name	description	in	require	type	schema
+deviceOpenId		path	true	string	
+X-Api-Key	Key	header	true	string	
+X-Api-timestamp	timestamp	header	true	string	
+X-Api-signature	signature	header	true	string	
+
+Status:
+
+code	description	schema
+200	OK	ResponseRobotSettingData
+
+Response Params:
+
+name	description	type	schema
+data		RobotSettingData	RobotSettingData
+  runDebug	Is the debug mode enabled for the robot	boolean	
+success	used to determine whether the call is successful	boolean	
+code	response status code	integer(int32)	integer(int32)
+info	response description	string	
+rid	traceId is used to trace the records of API calls	string	
+
+Response Example:
+
+{
+	"data": {
+		"runDebug": true
+	},
+	"success": true,
+	"code": 200,
+	"info": "",
+	"rid": ""
+}
+Update robot setting
+
+url:/app/openapi/v1/device/setting/{deviceOpenId}
+
+method:PUT
+
+produces:application/x-www-form-urlencoded,application/json
+
+consumes:*/*
+
+Note:
+
+Example:
+
+{
+  "runDebug": true
+}
+
+Params:
+
+name	description	in	require	type
+deviceOpenId		path	true	string
+X-Api-Key	Key	header	true	string
+X-Api-timestamp	timestamp	header	true	string
+X-Api-signature	signature	header	true	string
+updateRobotSettingOpenReq	UpdateRobotSettingOpenReq	body	true	
+  runDebug	true - enable the robot's debug mode		false	
+
+Status:
+
+code	description	schema
+200	OK	ResponseVoid
+
+Response Params:
+
+name	description	type	schema
+data	dataset	object	
+success	used to determine whether the call is successful	boolean	
+code	response status code	integer(int32)	integer(int32)
+info	response description	string	
+rid	traceId is used to trace the records of API calls	string	
+
+Response Example:
+
+{
+	"data": null,
+	"success": true,
+	"code": 200,
+	"info": "",
+	"rid": ""
+}
+List device system errors
+
+url:/app/openapi/v1/device/{deviceOpenId}/sys-error/list
+
+method:GET
+
+produces:application/x-www-form-urlencoded
+
+consumes:*/*
+
+Note:
+
+Params:
+
+name	description	in	require	type	schema
+deviceOpenId	device open id	path	true	string	
+X-Api-Key	Key	header	true	string	
+X-Api-timestamp	timestamp	header	true	string	
+X-Api-signature	signature	header	true	string	
+
+Status:
+
+code	description	schema
+200	OK	ResponseListSystemErrorOpenResp
+
+Response Params:
+
+name	description	type	schema
+data	dataset	array	SystemErrorOpenResp
+  code		integer(int32)	
+  name		string	
+  description		string	
+success	used to determine whether the call is successful	boolean	
+code	response status code	integer(int32)	integer(int32)
+info	response description	string	
+rid	traceId is used to trace the records of API calls	string	
+
+Response Example:
+
+{
+	"data": [
+		{
+			"code": 703903,
+			"name": "Charging Failed",
+			"description": "Charging Failed: Outbound adjustment failed in precise recharge operation"
+		}
+	],
+	"success": true,
+	"code": 0,
+	"info": "",
+	"rid": ""
+}
+Get device open-id list
+
+url:/app/openapi/v1/device/deviceOpenIds
+
+method:GET
+
+produces:application/x-www-form-urlencoded
+
+consumes:*/*
+
+Note:
+
+Params:
+
+name	description	in	require	type	schema
+X-Api-Key	Key	header	true	string	
+X-Api-timestamp	timestamp	header	true	string	
+X-Api-signature	signature	header	true	string	
+
+Status:
+
+code	description	schema
+200	OK	ResponseListDeviceOpenIdResp
+
+Response Params:
+
+name	description	type	schema
+data	dataset	array	DeviceOpenIdResp
+  licensePlate	license plate	string	
+  deviceOpenId	device open id	string	
+success	used to determine whether the call is successful	boolean	
+code	response status code	integer(int32)	integer(int32)
+info	response description	string	
+rid	traceId is used to trace the records of API calls	string	
+
+Response Example:
+
+{
+	"data": [
+		{
+			"licensePlate": "",
+			"deviceOpenId": ""
+		}
+	],
+	"success": true,
+	"code": 0,
+	"info": "",
+	"rid": ""
+}
+Webhook
+List supported webhook event types
+
+url:/app/openapi/v1/webhook-subscriptions/event-types
+
+method:GET
+
+Response Content-Type:application/json
+
+Note:
+
+Returns all currently supported subscription event types as a string array in data. Use this endpoint to populate event type options for creating or updating subscriptions instead of maintaining a fixed list. New supported event types are included automatically. The order of the returned event types is not part of the API contract.
+
+Uses the existing Open API signature authentication. No query parameters or request body are required. Rate limit: 10 requests per second per API Key.
+
+Params:
+
+name	description	in	require	type	schema
+X-Api-Key	Key	header	true	string	
+X-Api-timestamp	timestamp	header	true	string	
+X-Api-signature	signature	header	true	string	
+
+Status:
+
+code	description	schema
+200	OK	ResponseSetString
+
+Response Params:
+
+name	description	type	schema
+data	supported subscription event types	array	string
+success	used to determine whether the call is successful	boolean	
+code	response status code	integer(int32)	integer(int32)
+info	response description	string	
+rid	traceId is used to trace the records of API calls	string	
+
+Response Example:
+
+{
+  "data": [
+    "robot.error.changed",
+    "robot.task.status_changed",
+    "robot.maintenance.changed",
+    "robot.need_help_door_call"
+  ],
+  "success": true,
+  "code": 200,
+  "info": null,
+  "rid": ""
+}
+Create webhook subscription
+
+url:/app/openapi/v1/webhook-subscriptions
+
+method:POST
+
+produces:application/json
+
+consumes:*/*
+
+Note:
+
+Create a pending webhook subscription for the company bound to the API Key. The response includes the signing secret.
+
+Example:
+
+{
+  "callbackUrl": "https://example.com/hook",
+  "eventTypes": [
+    "robot.task.status_changed"
+  ]
+}
+
+Params:
+
+name	description	in	require	type	schema
+X-Api-Key	Key	header	true	string	
+X-Api-timestamp	timestamp	header	true	string	
+X-Api-signature	signature	header	true	string	
+createWebhookSubscriptionOpenRequest	CreateWebhookSubscriptionOpenRequest	body	true	CreateWebhookSubscriptionOpenRequest	CreateWebhookSubscriptionOpenRequest
+  callbackUrl	callback url, must be https and reachable		true	string	
+  eventTypes	subscribed event types, values: robot.error.changed, robot.task.status_changed, robot.maintenance.changed, robot.need_help_door_call		true	array	
+
+Status:
+
+code	description	schema
+200	OK	ResponseWebhookSubscriptionOpenResp
+
+Response Params:
+
+name	description	type	schema
+data	dataset	object	WebhookSubscriptionOpenResp
+  id	subscription id	integer(int64)	
+  callbackUrl	callback url	string	
+  eventTypes	subscribed event types	array	
+  status	subscription status	string	
+  verifiedAt	verified timestamp in milliseconds	integer(int64)	
+  verificationFailureReason	verification failure reason when the last verification failed	string	
+  secret	signing secret, returned on create, list and rotate	string	
+  gmtCreate	create timestamp in milliseconds	integer(int64)	
+  gmtModified	modify timestamp in milliseconds	integer(int64)	
+success	used to determine whether the call is successful	boolean	
+code	response status code	integer(int32)	integer(int32)
+info	response description	string	
+rid	traceId is used to trace the records of API calls	string	
+
+Response Example:
+
+{
+	"data": {
+		"id": 0,
+		"callbackUrl": "",
+		"eventTypes": [],
+		"status": "PENDING",
+		"verifiedAt": 0,
+		"verificationFailureReason": "",
+		"secret": "",
+		"gmtCreate": 0,
+		"gmtModified": 0
+	},
+	"success": true,
+	"code": 0,
+	"info": "",
+	"rid": ""
+}
+List webhook subscriptions
+
+url:/app/openapi/v1/webhook-subscriptions
+
+method:GET
+
+produces:application/x-www-form-urlencoded
+
+consumes:*/*
+
+Note:
+
+List all webhook subscriptions of the company bound to the API Key. The signing secret is included.
+
+Params:
+
+name	description	in	require	type	schema
+X-Api-Key	Key	header	true	string	
+X-Api-timestamp	timestamp	header	true	string	
+X-Api-signature	signature	header	true	string	
+
+Status:
+
+code	description	schema
+200	OK	ResponseListWebhookSubscriptionOpenResp
+
+Response Params:
+
+name	description	type	schema
+data	dataset	array	WebhookSubscriptionOpenResp
+  id	subscription id	integer(int64)	
+  callbackUrl	callback url	string	
+  eventTypes	subscribed event types	array	
+  status	subscription status	string	
+  verifiedAt	verified timestamp in milliseconds	integer(int64)	
+  verificationFailureReason	verification failure reason when the last verification failed	string	
+  secret	signing secret, returned on create, list and rotate	string	
+  gmtCreate	create timestamp in milliseconds	integer(int64)	
+  gmtModified	modify timestamp in milliseconds	integer(int64)	
+success	used to determine whether the call is successful	boolean	
+code	response status code	integer(int32)	integer(int32)
+info	response description	string	
+rid	traceId is used to trace the records of API calls	string	
+
+Response Example:
+
+{
+	"data": [
+		{
+			"id": 0,
+			"callbackUrl": "",
+			"eventTypes": [],
+			"status": "ACTIVE",
+			"verifiedAt": 0,
+			"verificationFailureReason": "",
+			"secret": "",
+			"gmtCreate": 0,
+			"gmtModified": 0
+		}
+	],
+	"success": true,
+	"code": 0,
+	"info": "",
+	"rid": ""
+}
+Update webhook subscription
+
+url:/app/openapi/v1/webhook-subscriptions/{id}
+
+method:PUT
+
+produces:application/json
+
+consumes:*/*
+
+Note:
+
+Update a webhook subscription. Changing callbackUrl moves the subscription back to PENDING and clears verification state. enabled is optional; when omitted the current state is kept.
+
+Example:
+
+{
+  "callbackUrl": "https://example.com/hook",
+  "eventTypes": [
+    "robot.task.status_changed"
+  ],
+  "enabled": true
+}
+
+Params:
+
+name	description	in	require	type	schema
+X-Api-Key	Key	header	true	string	
+X-Api-timestamp	timestamp	header	true	string	
+X-Api-signature	signature	header	true	string	
+id	subscription id	path	true	integer(int64)	
+updateWebhookSubscriptionOpenRequest	UpdateWebhookSubscriptionOpenRequest	body	true	UpdateWebhookSubscriptionOpenRequest	UpdateWebhookSubscriptionOpenRequest
+  callbackUrl	callback url, must be https and reachable		true	string	
+  eventTypes	subscribed event types		true	array	
+  enabled	enable or disable the subscription; when omitted the current state is kept		false	boolean	
+
+Status:
+
+code	description	schema
+200	OK	ResponseWebhookSubscriptionOpenResp
+
+Response Params:
+
+name	description	type	schema
+data	dataset	object	WebhookSubscriptionOpenResp
+  id	subscription id	integer(int64)	
+  callbackUrl	callback url	string	
+  eventTypes	subscribed event types	array	
+  status	subscription status	string	
+  verifiedAt	verified timestamp in milliseconds	integer(int64)	
+  verificationFailureReason	verification failure reason when the last verification failed	string	
+  secret	signing secret, returned on create, list and rotate	string	
+  gmtCreate	create timestamp in milliseconds	integer(int64)	
+  gmtModified	modify timestamp in milliseconds	integer(int64)	
+success	used to determine whether the call is successful	boolean	
+code	response status code	integer(int32)	integer(int32)
+info	response description	string	
+rid	traceId is used to trace the records of API calls	string	
+
+Response Example:
+
+{
+	"data": {
+		"id": 0,
+		"callbackUrl": "",
+		"eventTypes": [],
+		"status": "PENDING",
+		"verifiedAt": 0,
+		"verificationFailureReason": "",
+		"secret": "",
+		"gmtCreate": 0,
+		"gmtModified": 0
+	},
+	"success": true,
+	"code": 0,
+	"info": "",
+	"rid": ""
+}
+Delete webhook subscription
+
+url:/app/openapi/v1/webhook-subscriptions/{id}
+
+method:DELETE
+
+produces:application/x-www-form-urlencoded,application/json
+
+consumes:*/*
+
+Note:
+
+Params:
+
+name	description	in	require	type	schema
+X-Api-Key	Key	header	true	string	
+X-Api-timestamp	timestamp	header	true	string	
+X-Api-signature	signature	header	true	string	
+id	subscription id	path	true	integer(int64)	
+
+Status:
+
+code	description	schema
+200	OK	ResponseVoid
+
+Response Params:
+
+name	description	type	schema
+data	dataset	object	
+success	used to determine whether the call is successful	boolean	
+code	response status code	integer(int32)	integer(int32)
+info	response description	string	
+rid	traceId is used to trace the records of API calls	string	
+
+Response Example:
+
+{
+	"data": {},
+	"success": true,
+	"code": 0,
+	"info": "",
+	"rid": ""
+}
+Verify webhook subscription
+
+url:/app/openapi/v1/webhook-subscriptions/{id}/verify
+
+method:POST
+
+produces:application/x-www-form-urlencoded,application/json
+
+consumes:*/*
+
+Note:
+
+Send an encrypted challenge to the callback url and mark the subscription ACTIVE on success, or VERIFICATION_FAILED otherwise.
+
+Params:
+
+name	description	in	require	type	schema
+X-Api-Key	Key	header	true	string	
+X-Api-timestamp	timestamp	header	true	string	
+X-Api-signature	signature	header	true	string	
+id	subscription id	path	true	integer(int64)	
+
+Status:
+
+code	description	schema
+200	OK	ResponseWebhookVerificationOpenResp
+
+Response Params:
+
+name	description	type	schema
+data	dataset	object	WebhookVerificationOpenResp
+  verified	whether the callback address passed verification	boolean	
+  status	subscription status after verification	string	
+  failureReason	failure reason when verification failed	string	
+success	used to determine whether the call is successful	boolean	
+code	response status code	integer(int32)	integer(int32)
+info	response description	string	
+rid	traceId is used to trace the records of API calls	string	
+
+Response Example:
+
+{
+	"data": {
+		"verified": true,
+		"status": "ACTIVE",
+		"failureReason": ""
+	},
+	"success": true,
+	"code": 0,
+	"info": "",
+	"rid": ""
+}
+Rotate webhook subscription secret
+
+url:/app/openapi/v1/webhook-subscriptions/{id}/rotate-secret
+
+method:POST
+
+produces:application/x-www-form-urlencoded,application/json
+
+consumes:*/*
+
+Note:
+
+Generate a new secret, return it, and put the subscription back to PENDING.
+
+Params:
+
+name	description	in	require	type	schema
+X-Api-Key	Key	header	true	string	
+X-Api-timestamp	timestamp	header	true	string	
+X-Api-signature	signature	header	true	string	
+id	subscription id	path	true	integer(int64)	
+
+Status:
+
+code	description	schema
+200	OK	ResponseWebhookSubscriptionOpenResp
+
+Response Params:
+
+name	description	type	schema
+data	dataset	object	WebhookSubscriptionOpenResp
+  id	subscription id	integer(int64)	
+  callbackUrl	callback url	string	
+  eventTypes	subscribed event types	array	
+  status	subscription status	string	
+  verifiedAt	verified timestamp in milliseconds	integer(int64)	
+  verificationFailureReason	verification failure reason when the last verification failed	string	
+  secret	signing secret, returned on create, list and rotate	string	
+  gmtCreate	create timestamp in milliseconds	integer(int64)	
+  gmtModified	modify timestamp in milliseconds	integer(int64)	
+success	used to determine whether the call is successful	boolean	
+code	response status code	integer(int32)	integer(int32)
+info	response description	string	
+rid	traceId is used to trace the records of API calls	string	
+
+Response Example:
+
+{
+	"data": {
+		"id": 0,
+		"callbackUrl": "",
+		"eventTypes": [],
+		"status": "PENDING",
+		"verifiedAt": 0,
+		"verificationFailureReason": "",
+		"secret": "",
+		"gmtCreate": 0,
+		"gmtModified": 0
+	},
+	"success": true,
+	"code": 0,
+	"info": "",
+	"rid": ""
+}
+CZ Robots Webhook Integration Guide
+
+This guide explains how company administrators configure webhook subscriptions and how receiving systems verify and process webhook requests.
+
+1. Overview
+
+CZ Robots sends webhook events when one of the following robot states changes:
+
+Event type	Description
+robot.error.changed	The robot's active error-code set changed.
+robot.pose.changed	The robot's reported position (x, y) or heading (yaw) changed.
+robot.task.status_changed	A task started, ended, changed identity, or changed status.
+robot.maintenance.changed	One or more V2 maintenance items changed.
+robot.need_help_door_call	The robot requested assistance opening a door.
+
+Subscriptions are scoped to the administrator's current company. Only company administrators can create, view, update, verify, rotate, or delete subscriptions.
+
+The examples below use these placeholders:
+
+OPERATION_BASE_URL: the Operation service URL, including the /opt context path.
+ADMIN_TOKEN: an authenticated company administrator token.
+SUBSCRIPTION_ID: the subscription ID returned by the API.
+WEBHOOK_SECRET: the secret returned with the subscription.
+2. Callback Endpoint Requirements
+
+The callback URL must:
+
+Use HTTPS.
+Have a publicly resolvable host.
+Not resolve to a loopback, private, link-local, multicast, carrier-grade NAT, or reserved address.
+Not include URL user information such as https://user:password@example.com/hook.
+Not include a URL fragment.
+Accept HTTP POST requests with Content-Type: application/json.
+Complete the connection within 3 seconds and return a response within 5 seconds.
+
+Redirects are not followed. Configure the final HTTPS URL as the callback URL.
+
+3. Authentication and API Response Format
+
+All subscription-management requests require the company administrator token in the token header:
+
+token: <ADMIN_TOKEN>
+Content-Type: application/json
+
+Successful Operation API responses use this envelope:
+
+{
+  "success": true,
+  "code": 200,
+  "data": {},
+  "rid": "trace-id"
+}
+
+Timestamps in subscription responses, including verifiedAt, gmtCreate, and gmtModified, are Unix timestamps in milliseconds.
+
+4. Create and Activate a Subscription
+4.1 Create the subscription
+POST <OPERATION_BASE_URL>/v1/webhook-subscriptions
+token: <ADMIN_TOKEN>
+Content-Type: application/json
+{
+  "callbackUrl": "https://example.com/webhooks/czrobots",
+  "eventTypes": [
+    "robot.error.changed",
+    "robot.pose.changed",
+    "robot.task.status_changed",
+    "robot.maintenance.changed",
+    "robot.need_help_door_call"
+  ]
+}
+
+The event list must contain at least one supported event type. Duplicate event types are removed automatically.
+
+Example response data:
+
+{
+  "id": 42,
+  "companyId": 2,
+  "callbackUrl": "https://example.com/webhooks/czrobots",
+  "eventTypes": [
+    "robot.error.changed",
+    "robot.maintenance.changed",
+    "robot.task.status_changed"
+  ],
+  "status": "PENDING",
+  "secret": "AabHnFvuKE54rMbS5Gafsw9fD0ja4mefAlRtv3THAM4",
+  "gmtCreate": 1784640000000,
+  "gmtModified": 1784640000000
+}
+
+The service generates the secret. It is a 32-byte random value encoded as unpadded Base64 URL text, normally 43 characters long. Store it as sensitive credentials.
+
+A company cannot create two subscriptions with the exact same callback URL. Different callback URLs may be configured as separate subscriptions.
+
+4.2 Implement endpoint verification
+
+A newly created subscription remains PENDING and does not receive business events until verification succeeds.
+
+During verification, CZ Robots sends an encrypted request like this:
+
+POST /webhooks/czrobots
+Content-Type: application/json
+Accept: application/json
+X-Webhook-Id: evt_verify_7cd841d9a0494cddaf06a25f13cbd802
+X-Webhook-Timestamp: 1784640000
+{
+  "iv": "base64url-encoded-12-byte-iv",
+  "encrypt": "base64url-encoded-ciphertext-and-tag"
+}
+
+After AES-GCM decryption, the plaintext is:
+
+{
+  "messageType": "challenge",
+  "data": {
+    "challenge": "generated-challenge-value"
+  }
+}
+
+Return the same challenge in a JSON response with any 2xx status:
+
+HTTP/1.1 200 OK
+Content-Type: application/json
+{
+  "challenge": "generated-challenge-value"
+}
+
+The value must match exactly. A missing, modified, or non-JSON challenge response fails verification.
+
+4.3 Request verification
+
+After the receiver is ready, call:
+
+POST <OPERATION_BASE_URL>/v1/webhook-subscriptions/<SUBSCRIPTION_ID>/verify
+token: <ADMIN_TOKEN>
+
+Successful verification response data:
+
+{
+  "verified": true,
+  "status": "ACTIVE"
+}
+
+Failed verification response data:
+
+{
+  "verified": false,
+  "status": "VERIFICATION_FAILED",
+  "failureReason": "callback did not return the expected challenge"
+}
+
+Verification may be requested again after correcting the receiving endpoint.
+
+5. Decrypt Requests
+
+Every verification and business-event request includes:
+
+Header	Meaning
+X-Webhook-Id	Request trace identifier. For business idempotency, use the authenticated data.id after decryption.
+X-Webhook-Timestamp	Time at which the HTTP request was created, in Unix seconds.
+
+The request body is encrypted as follows:
+
+key = SHA-256(WEBHOOK_SECRET as UTF-8)
+iv = 12 cryptographically random bytes
+algorithm = AES-256-GCM with a 128-bit authentication tag
+encrypt = AES-GCM(key, iv, plaintext JSON)
+
+iv and encrypt use unpadded Base64 URL encoding. The 16-byte GCM authentication tag is appended to the ciphertext in encrypt. Decryption must fail closed if the key, IV, ciphertext, or authentication tag is invalid. Plaintext webhook bodies are not supported.
+
+The following Node.js example uses only built-in cryptography:
+
+import crypto from "node:crypto";
+import express from "express";
+
+const app = express();
+const secret = process.env.CZ_ROBOTS_WEBHOOK_SECRET;
+
+app.post(
+  "/webhooks/czrobots",
+  express.raw({ type: "application/json" }),
+  (req, res) => {
+    const traceId = req.get("X-Webhook-Id");
+    const timestamp = req.get("X-Webhook-Timestamp");
+    const rawBody = req.body.toString("utf8");
+
+    if (!traceId || !timestamp || !secret) {
+      return res.status(401).json({ error: "missing webhook credentials" });
+    }
+
+    const requestTime = Number(timestamp);
+    const now = Math.floor(Date.now() / 1000);
+    if (!Number.isFinite(requestTime) || Math.abs(now - requestTime) > 300) {
+      return res.status(401).json({ error: "stale webhook request" });
+    }
+
+    let message;
+    try {
+      const envelope = JSON.parse(rawBody);
+      const key = crypto.createHash("sha256").update(secret, "utf8").digest();
+      const iv = Buffer.from(envelope.iv, "base64url");
+      const encrypted = Buffer.from(envelope.encrypt, "base64url");
+      const ciphertext = encrypted.subarray(0, encrypted.length - 16);
+      const authTag = encrypted.subarray(encrypted.length - 16);
+      const decipher = crypto.createDecipheriv("aes-256-gcm", key, iv);
+      decipher.setAuthTag(authTag);
+      const plaintext = Buffer.concat([
+        decipher.update(ciphertext),
+        decipher.final(),
+      ]).toString("utf8");
+      message = JSON.parse(plaintext);
+    } catch {
+      return res.status(401).json({ error: "unable to decrypt webhook message" });
+    }
+
+    if (message.messageType === "challenge") {
+      return res.status(200).json({ challenge: message.data.challenge });
+    }
+
+    const eventId = message.data.id;
+    // Persist the event ID before processing so duplicate deliveries are safe.
+    console.log("CZ Robots webhook", eventId, message.data);
+    return res.status(200).json({ received: true });
+  }
+);
+ public static JSONObject decrypt(String key, String encryptedBody) {
+        try {
+            JSONObject envelope = JSON.parseObject(encryptedBody);
+            byte[] iv = Base64.getUrlDecoder().decode(envelope.getString("iv"));
+            byte[] encrypted = Base64.getUrlDecoder().decode(envelope.getString("encrypt"));
+            if (iv.length != IV_LENGTH) {
+                throw new IllegalArgumentException("invalid webhook IV");
+            }
+            Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+            cipher.init(Cipher.DECRYPT_MODE, keySpec(key), new GCMParameterSpec(TAG_LENGTH_BITS, iv));
+            byte[] plaintext = cipher.doFinal(encrypted);
+            return JSON.parseObject(new String(plaintext, StandardCharsets.UTF_8));
+        } catch (Exception e) {
+            throw new IllegalArgumentException("Unable to decrypt webhook message", e);
+        }
+    }
+
+For replay protection, store processed event IDs and reject duplicate business events. AES-GCM authentication ensures modified ciphertext cannot be processed as a valid message.
+
+6. Manage Subscriptions
+List subscriptions
+GET <OPERATION_BASE_URL>/v1/webhook-subscriptions
+token: <ADMIN_TOKEN>
+
+The data field is an array of subscription objects ordered by creation time, newest first.
+
+The secret is returned only when a subscription is created or its secret is rotated. Store it immediately; list and update responses do not expose it. Never write the secret to client-side logs, analytics, or error reports.
+
+Update a subscription
+PUT <OPERATION_BASE_URL>/v1/webhook-subscriptions/<SUBSCRIPTION_ID>
+token: <ADMIN_TOKEN>
+Content-Type: application/json
+{
+  "callbackUrl": "https://example.com/webhooks/czrobots",
+  "eventTypes": [
+    "robot.error.changed",
+    "robot.task.status_changed"
+  ],
+  "enabled": true
+}
+
+callbackUrl and eventTypes are required on every update. enabled is optional.
+
+Setting enabled to false changes the status to DISABLED.
+Changing the callback URL changes an enabled subscription to PENDING; verify it again.
+Explicitly setting enabled to true on a non-active subscription changes it to PENDING; verify it again.
+Changing only event types on an active subscription keeps it active.
+Rotate the secret
+POST <OPERATION_BASE_URL>/v1/webhook-subscriptions/<SUBSCRIPTION_ID>/rotate-secret
+token: <ADMIN_TOKEN>
+
+Rotation immediately replaces the old secret and changes the subscription status to PENDING. Update the receiving system with the returned secret, then call the verification endpoint. Business events are not delivered while the subscription is pending.
+
+Delete a subscription
+DELETE <OPERATION_BASE_URL>/v1/webhook-subscriptions/<SUBSCRIPTION_ID>
+token: <ADMIN_TOKEN>
+
+Deletion is permanent.
+
+Subscription statuses
+Status	Meaning
+PENDING	The endpoint must be verified before business events are delivered.
+ACTIVE	Verification succeeded and subscribed events can be delivered.
+VERIFICATION_FAILED	The most recent verification attempt failed.
+DISABLED	Delivery is disabled by an administrator.
+7. Business Event Envelope
+
+After decryption, business messages contain the common event envelope in data:
+
+{
+  "messageType": "event",
+  "data": {
+    "id": "evt_bc401d00661a46aaab26c76295291287",
+    "type": "robot.error.changed"
+  }
+}
+
+The complete data event envelope uses this structure:
+
+{
+  "id": "evt_bc401d00661a46aaab26c76295291287",
+  "type": "robot.error.changed",
+  "apiVersion": "2026-07-01",
+  "occurredAt": 1784640226709,
+  "device": {
+    "openId": "98HZRK5SQF",
+    "licensePlate": "CZ-001"
+  },
+  "data": {}
+}
+Field	Description
+id	Unique event ID.
+type	Event type.
+apiVersion	Payload contract version. The current version is 2026-07-01.
+occurredAt	Event occurrence time as a Unix timestamp in milliseconds.
+device.openId	Public robot identifier.
+device.licensePlate	Robot license plate. This field may be absent when no value is registered.
+data	Event-specific payload.
+
+Receivers should ignore unknown JSON fields to remain forward-compatible.
+
+8. Error Change Event
+
+Event type: robot.error.changed
+
+{
+  "id": "evt_bc401d00661a46aaab26c76295291287",
+  "type": "robot.error.changed",
+  "apiVersion": "2026-07-01",
+  "occurredAt": 1784640226709,
+  "device": {
+    "openId": "98HZRK5SQF",
+    "licensePlate": "CZ-001"
+  },
+  "data": {
+    "codes": [
+      {
+        "code": 204801,
+        "desc": "Emergency stop button is pressed"
+      },
+      {
+        "code": 204898,
+        "desc": "English error description"
+      }
+    ],
+    "addedCodes": [204801, 204898],
+    "removedCodes": [],
+    "previousCodes": []
+  }
+}
+Field	Description
+codes	Complete current error state. Each item contains the numeric code and its English description.
+codes[].desc	English description. It is an empty string when no description is registered.
+addedCodes	Numeric codes added by this change.
+removedCodes	Numeric codes removed by this change.
+previousCodes	Complete numeric error-code state before this change.
+
+Use codes as the authoritative current state. Use the other arrays when change-level processing is required.
+
+9. Task Status Change Event
+
+Event type: robot.task.status_changed
+
+The same event type represents task start, task status changes, a transition to a different task, and task end.
+
+{
+    "occurredAt": 1785891434020,
+    "apiVersion": "2026-07-01",
+    "data": {
+        "coverage": 0.95,
+        "previousTaskId": "1775699698077_1785880800000",
+        "previousIsRunning": true,
+        "isRunning": true,
+        "changeType": "STATUS_CHANGED",
+        "progress": 0.98,
+        "previousSweepType": "Sweep",
+        "sweepType": "Sweep",
+        "taskId": "1775699698077_1785880800000",
+        "status": {
+            "code": 8,
+            "name": "ABSORBS_WATER"
+        },
+        "previousStatus": {
+            "code": 1,
+            "name": "ON_GOING"
+        }
+    },
+    "id": "evt_58d7885ac3ad47479bab16802a3a5b25",
+    "type": "robot.task.status_changed",
+    "device": {
+        "licensePlate": "L3-15048",
+        "openId": "VLSBGG57HG"
+    }
+}
+Field	Description
+changeType	Currently always STATUS_CHANGED.
+previousIsRunning	Whether a task was running before the change.
+isRunning	Whether a task is running after the change.
+previousTaskId	Previous task ID when the previous state was running.
+taskId	Current task ID when the current state is running.
+previousStatus	Previous task status object when available.
+status	Current task status object when a task is running.
+progress	Current task progress reported by the robot.
+coverage	Current task coverage reported by the robot.
+previousSweepType	Previous sweep-mode enum name when the previous state was running and the value was available.
+sweepType	Current sweep-mode enum name.
+
+Interpret the task lifecycle as follows:
+
+Condition	Meaning
+previousIsRunning=false, isRunning=true	A task started.
+Both values are true and taskId changed	A different task started.
+Both values are true and the status changed	The current task status changed.
+Both values are true and sweepType changed	The current task sweep mode changed.
+previousIsRunning=true, isRunning=false	The task ended.
+
+Fields that are not meaningful for a non-running task may be absent.
+
+Known task status values are:
+
+Code	Name	English Description
+-10	WAITING	Waiting
+-2	DEEP_CLEAN_WAITING	Waiting
+-1	UNKNOWN	Unknown
+0	READY	Ready
+1	ON_GOING	OnGoing
+2	PAUSE	Pause
+3	DONE	Done
+4	STOP	Stop
+5	ROUTING	Preparing
+6	ABEND	Abend
+7	CHARGING	Charging
+8	ABSORBS_WATER	Absorbs Water
+9	BACK_TO_STATION	Back to Station
+10	MANUAL_HANDLING	Waiting Manual Handling
+11	CHARGING_BROKEN	Charging Broken
+12	TAKE_ELEVATOR	Riding Elevator
+13	TAKE_ELEVATOR_DONE	Elevator Ride Completed
+14	PASS_THROUGH	Heading to Elevator
+15	WARNING	Warning
+16	TAKE_ELEVATOR_PRE	Waiting for Elevator
+17	IGNORE	Ignore
+18	WIFI_MAP_AUTO_CHECKING	Confirming The Map
+19	PULL_NEW_VERSION_MAP	Pulling new version map
+
+Unknown status codes are represented with the name UNKNOWN.
+
+Known task sweep values are (sweepType contains the enum name, not the numeric code):
+
+Code	Name	English Description
+-1	NoTask	No Task
+0	Sweep	Full Cleaning
+3	Patrol	Patrol Cleaning
+4	Charge	Charge
+5	Homing	Homing
+6	DustPushing	Dust Mopping
+9	ReplaceWater	Replace Water
+10	PassThrough	Elevator ride
+11	SpecLocation	Go to Point
+12	GoPoint	Go to Point
+13	ToSafeArea	To Safe Area
+14	DeepClean	Deep Cleaning
+15	Mapping	Mapping Mode
+16	Tracking	Follow-Me Mode
+
+Unknown or missing sweep codes are represented as NoTask for a running task.
+
+10. Pose Change Event
+
+Event type: robot.pose.changed
+
+The first valid pose report establishes a baseline without emitting an event. Subsequent reports emit an event whenever the numeric value of x, y, or yaw changes, with no distance or angle threshold. Numeric formatting differences such as 38.82 and 38.820 do not count as changes. Reports with missing or null pose coordinates are ignored. Changes to other report fields do not trigger this event.
+
+Example decrypted event data:
+
+{
+  "id": "evt_pose_example",
+  "type": "robot.pose.changed",
+  "apiVersion": "2026-07-01",
+  "occurredAt": 1791948771875,
+  "device": {
+    "openId": "98HZRK5SQF",
+    "licensePlate": "CZ-001"
+  },
+  "data": {
+    "previousPose": { "x": 38.80, "y": 1.65, "yaw": -3.11 },
+    "pose": { "x": 38.82, "y": 1.65, "yaw": -3.11 }
+  }
+}
+Field	Description
+previousPose	Previous valid reported pose, containing x, y, and yaw.
+pose	Current reported pose, containing only x, y, and yaw.
+11. Maintenance Change Event
+
+Event type: robot.maintenance.changed
+
+Only changed V2 maintenance items are included.
+
+{
+  "id": "evt_3e958cd895cf4bf4ba44f51e2da6fee8",
+  "type": "robot.maintenance.changed",
+  "apiVersion": "2026-07-01",
+  "occurredAt": 1784625005254,
+  "device": {
+    "openId": "M2QE0VTH4W",
+    "licensePlate": "CZ-002"
+  },
+  "data": {
+    "previousLastUpdate": 1784624959,
+    "lastUpdate": 1784624991,
+    "changedItems": [
+      {
+        "changeType": "UPDATED",
+        "code": 103,
+        "type": "Side Brushes",
+        "previous": {
+          "left": 698,
+          "max": 720
+        },
+        "current": {
+          "left": 697,
+          "max": 720
+        }
+      }
+    ]
+  }
+}
+Field	Description
+previousLastUpdate	Previous robot maintenance update marker.
+lastUpdate	Current robot maintenance update marker.
+changedItems	Only items whose underlying maintenance data changed.
+changedItems[].changeType	ADDED, UPDATED, or REMOVED.
+changedItems[].code	Maintenance item code.
+changedItems[].type	English maintenance item name.
+previous	Previous values, or absent when the item was added.
+current	Current values, or absent when the item was removed.
+left	Remaining maintenance life reported by the robot. Unit: hours
+max	Maximum maintenance life reported by the robot. Unit: hours
+12. Door Assistance Event
+
+Event type: robot.need_help_door_call
+
+This event is emitted when the robot reports that it needs help opening a door.
+
+{
+  "id": "evt_924c7c4ed7c54439b8d6a90d50397885",
+  "type": "robot.need_help_door_call",
+  "apiVersion": "2026-07-01",
+  "occurredAt": 1784640400123,
+  "device": {
+    "openId": "98HZRK5SQF",
+    "licensePlate": "CZ-001"
+  },
+  "data": {}
+}
+
+This is a discrete notification event rather than a replaceable robot state. Handle each unique event ID once.
+
+13. Delivery Responses and Retries
+
+Return a response as soon as the event has been durably accepted. Perform slow business processing asynchronously.
+
+Receiver result	Delivery behavior
+Any 2xx status	Delivery succeeds and is not retried.
+408, 429, or 5xx	Delivery is retried when attempts remain.
+Connection or timeout failure	Delivery is retried when attempts remain.
+Other non-2xx status, including most 4xx responses	Delivery fails permanently without retry.
+3xx status	Redirects are not followed and the delivery fails permanently.
+
+The normal delivery flow allows at most two attempts: the initial attempt and one retry. After the first retryable failure, the retry is scheduled for 1 minute later. Actual delivery may occur later because of scheduling, queue load, or an earlier pending delivery for the same subscription. If the second attempt fails, the delivery is marked DEAD and no further failure retry is scheduled.
+
+Worker recovery can cause additional requests when an attempt did not finish recording its result. The attempt limit is not a guarantee that a receiver will see at most two HTTP requests.
+
+Deliveries can be repeated when a receiver accepts a request but the response is lost. Store and deduplicate by the decrypted event's data.id before applying business effects.
+
+Task status events are state-collapsed: an older failed task-state delivery may be skipped when a newer task state exists. Receivers should still compare occurredAt with the latest applied state and avoid replacing newer state with older state.
+
+14. Receiver Checklist
+
+Delivery order is not guaranteed, including for events of the same type. Pending events can be sent while an earlier event is waiting for retry or being processed. Receivers should use occurredAt to avoid applying stale state and deduplicate discrete notifications by event ID.
+
+Expose a public HTTPS endpoint without redirects.
+Decrypt every request with AES-256-GCM and reject authentication failures.
+Return the exact challenge from a decrypted challenge message.
+Deduplicate business events by the decrypted event's data.id.
+Use occurredAt to protect state from stale events.
+Return 2xx only after durable acceptance.
+Return 408, 429, or 5xx only when retrying the same request may succeed.
+Return another 4xx status for permanent request rejection.
+Ignore unknown JSON fields.
+Store the webhook secret securely and update it immediately after rotation.

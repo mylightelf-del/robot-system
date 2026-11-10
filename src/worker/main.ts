@@ -10,6 +10,8 @@ import { purgeExpiredSessions } from "@/lib/auth/session";
 import { simulationTick } from "./simulation";
 import { processPuduEvents, puduLiveEnabled, PUDU_WINDOW_HOURS, syncPuduCatalog, syncPuduErrors, syncPuduPlannedRuns, syncPuduReports, syncPuduStatus } from "./pudu";
 import { createPuduApi } from "@/lib/vendors/pudu/puduAdapter";
+import { cenobotsDryRun, cenobotsEnabled, processCenobotsEvents, syncCenobotsCatalog, syncCenobotsErrors, syncCenobotsPlannedRuns, syncCenobotsReports, syncCenobotsStatus } from "./cenobots";
+import { createCenobotsApi } from "@/lib/vendors/cenobots/cenobotsAdapter";
 import { vendorModes } from "@/lib/vendors";
 import { purgeOldVendorEvents, writeHeartbeat } from "@/lib/ops/heartbeat";
 import { autoCreateScheduledDrafts } from "@/lib/services/reports";
@@ -76,7 +78,31 @@ async function main() {
       }),
     );
   } else if (vendorMode !== "sample") {
-    log("live 모드이지만 PUDU 키가 설정되지 않았습니다(PUDU_API_APP_KEY/SECRET/CLUSTER). CenoBots 는 3단계에서 구현됩니다.");
+    log("live 모드이지만 PUDU 키가 설정되지 않았습니다(PUDU_API_APP_KEY/SECRET/CLUSTER).");
+  }
+  // CENOBOTS(CZ Robots) — 조회 전용. CENOBOTS_MODE=mock 이면 픽스처(운영 서버에서는 dry-run), unconfigured 면 끔.
+  if (cenobotsEnabled()) {
+    const api = createCenobotsApi();
+    const statusSec = Number(process.env.CENOBOTS_POLL_STATUS_SECONDS ?? 60);
+    const reportsMin = Number(process.env.CENOBOTS_POLL_REPORTS_MINUTES ?? 10);
+    const catalogMin = Number(process.env.CENOBOTS_POLL_CATALOG_MINUTES ?? 60);
+    log(`CENOBOTS ${vendorModes().CENOBOTS}${cenobotsDryRun() ? "(dry-run: 운영 DB 적재 안 함)" : ""}: 상태 ${statusSec}s · 작업 이력/장애 ${reportsMin}m · 장비/예약/소모품 ${catalogMin}m · 웹훅 처리 5s`);
+    const report = (r: { job: string; ok: boolean; detail: string }) => log(`CENOBOTS ${r.job}: ${r.ok ? "OK" : "실패"} — ${r.detail}`);
+    jobs.push(loop("cenobots-catalog", catalogMin * 60_000, async () => report(await syncCenobotsCatalog(api))));
+    jobs.push(loop("cenobots-status", statusSec * 1000, async () => report(await syncCenobotsStatus())));
+    jobs.push(
+      loop("cenobots-reports", reportsMin * 60_000, async () => {
+        report(await syncCenobotsReports(api));
+        report(await syncCenobotsErrors(api));
+        report(await syncCenobotsPlannedRuns());
+      }),
+    );
+    jobs.push(
+      loop("cenobots-events", 5000, async () => {
+        const r = await processCenobotsEvents();
+        if (r.counts?.events) report(r);
+      }),
+    );
   }
   jobs.push(
     loop("sessions", 60_000, async () => {

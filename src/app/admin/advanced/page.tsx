@@ -2,6 +2,8 @@ import Link from "next/link";
 import { getCurrentUser } from "@/lib/auth/session";
 import { getAdminData, getVendorStatus } from "@/lib/services/admin";
 import { PuduPanel } from "@/components/VendorPanel";
+import { CenobotsPanel } from "@/components/CenobotsPanel";
+import { cenobotsStatusInfo, cenobotsWebhookStats } from "@/lib/services/cenobotsAdmin";
 import { NewSiteForm, SiteCard } from "@/components/SitePanels";
 import { AppError } from "@/lib/util/errors";
 import { Card, KV, PageTitle } from "@/components/ui";
@@ -21,6 +23,11 @@ export default async function AdvancedAdminPage() {
     return <AccessDenied reason={e instanceof AppError ? e.message : "접근할 수 없습니다."} />;
   }
   const vendor = await getVendorStatus(user);
+  const cz = cenobotsStatusInfo();
+  const czHook = await cenobotsWebhookStats();
+  const czRobots = d.robots
+    .filter((r) => r.vendor === "CENOBOTS" && r.vendorMeta?.source === "api")
+    .map((r) => ({ id: r.id, name: r.name, plate: String(r.vendorMeta?.licensePlate ?? ""), openId: (r.vendorMeta?.deviceOpenId as string | undefined) ?? null, active: r.active, boundMode: (r.vendorMeta?.boundMode as string | undefined) ?? null, placement: `${d.sites.find((s) => s.id === r.siteId)?.name ?? r.siteId} · ${d.floors.find((f) => f.id === r.floorId)?.name ?? r.floorId}` }));
   const activeSites = d.sites.filter((s) => !s.retiredAt);
   const floors = d.floors.filter((f) => activeSites.some((s) => s.id === f.siteId)).map((f) => ({ id: f.id, siteId: f.siteId, name: f.name, siteName: d.sites.find((s) => s.id === f.siteId)?.name ?? f.siteId }));
   const sitesOrdered = [...activeSites, ...d.sites.filter((s) => s.retiredAt)];
@@ -31,7 +38,7 @@ export default async function AdvancedAdminPage() {
 
   return (
     <>
-      <PageTitle title="고급 설정" subtitle="사업장·층·구역·로봇 배치 · 지도 가져오기 · 제조사 연결(PUDU)" right={<Link href="/admin" className="text-sm underline">관리 설정으로</Link>} />
+      <PageTitle title="고급 설정" subtitle="사업장·층·구역·로봇 배치 · 지도 가져오기 · 제조사 연결(PUDU · CENOBOTS)" right={<Link href="/admin" className="text-sm underline">관리 설정으로</Link>} />
       <AdvancedGate>
         <div className="space-y-4">
         <Card title="사업장 · 층 · 구역 · 로봇 배치">
@@ -96,6 +103,11 @@ export default async function AdvancedAdminPage() {
               )}
             </div>
           </div>
+        </Card>
+
+        <Card title="제조사 연결 — CENOBOTS Open API (조회 전용)">
+          <CenobotsPanel mode={cz.mode} dryRun={cz.dryRun} host={cz.host} keyConfigured={cz.keyConfigured} allowed={cz.allowed} webhookUrl={cz.webhookUrl} webhookConfigured={cz.webhookConfigured} webhookPublic={cz.webhookPublic} lastWebhookAt={czHook.lastAt} webhooksLast24h={czHook.last24h} robots={czRobots} floors={floors} />
+          <p className="text-xs text-gray-500 mt-2">동기화 상태·최근 콜백 이벤트는 위 PUDU 카드의 표에 제조사별(CENOBOTS:…)로 함께 나옵니다. BIB 는 업체 문서·키를 받은 뒤 같은 방식으로 붙입니다.</p>
         </Card>
 
         <Card title="제조사 연결 목록">

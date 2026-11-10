@@ -1,5 +1,5 @@
 import { and, eq, inArray, isNull, sql } from "drizzle-orm";
-import type { Incident, Robot, Schedule } from "@/lib/domain/types";
+import type { Incident, Robot, Schedule, Severity, Vendor } from "@/lib/domain/types";
 import { getDb, schema } from "@/lib/db/client";
 import { getNotificationSetting, getSite, getStatus, listZonesByFloor, siteAt } from "@/lib/db/repo";
 import { storeRunImage } from "@/lib/services/coverage";
@@ -29,21 +29,26 @@ export interface SyncResult {
 }
 
 async function recordSync(job: string, fn: () => Promise<{ detail: string; counts?: Record<string, number> }>): Promise<SyncResult> {
+  return recordVendorSync("PUDU", job, fn);
+}
+
+/** 동기화 결과 기록(vendor_sync_state, id "<제조사>:<작업>"). CENOBOTS 워커도 같은 함수를 쓴다. */
+export async function recordVendorSync(vendor: Vendor, job: string, fn: () => Promise<{ detail: string; counts?: Record<string, number> }>): Promise<SyncResult> {
   const db = getDb();
-  const id = `PUDU:${job}`;
+  const id = `${vendor}:${job}`;
   const now = nowIso();
   try {
     const r = await fn();
     await db
       .insert(schema.vendorSyncState)
-      .values({ id, vendor: "PUDU", job, lastRunAt: now, lastOkAt: now, lastError: null, stats: r.counts ?? {} })
+      .values({ id, vendor, job, lastRunAt: now, lastOkAt: now, lastError: null, stats: r.counts ?? {} })
       .onConflictDoUpdate({ target: schema.vendorSyncState.id, set: { lastRunAt: now, lastOkAt: now, lastError: null, stats: r.counts ?? {} } });
     return { job, ok: true, detail: r.detail, counts: r.counts };
   } catch (e) {
     const msg = (e as Error).message ?? String(e);
     await db
       .insert(schema.vendorSyncState)
-      .values({ id, vendor: "PUDU", job, lastRunAt: now, lastOkAt: null, lastError: msg })
+      .values({ id, vendor, job, lastRunAt: now, lastOkAt: null, lastError: msg })
       .onConflictDoUpdate({ target: schema.vendorSyncState.id, set: { lastRunAt: now, lastError: msg } });
     return { job, ok: false, detail: msg };
   }
@@ -216,13 +221,16 @@ export async function syncPuduErrors(api: PuduApi = createPuduApi(), windowHours
   });
 }
 
-async function upsertIncidentFromError(robot: Robot, e: { code: string; level: string; detail: string; key: string; occurredAt: string; payload: unknown; notify: boolean; touchStatus: boolean; historical?: boolean }): Promise<boolean> {
+/**
+ * 제조사 장애 → 장애 적재(중복 키·6시간 묶음·코드별 등급·통보). PUDU 가 기준이며 CENOBOTS 는 baseSeverity·customerMessage 를 넘긴다.
+ */
+export async function upsertIncidentFromError(robot: Robot, e: { code: string; level: string; detail: string; key: string; occurredAt: string; payload: unknown; notify: boolean; touchStatus: boolean; historical?: boolean; baseSeverity?: Severity; customerMessage?: string }): Promise<boolean> {
   const db = getDb();
   const dup = await db.query.incidents.findFirst({ where: eq(schema.incidents.vendorEventId, e.key) });
   if (dup) return false;
   const grouped = await db.select({ id: schema.incidents.id }).from(schema.incidents).where(sql`${schema.incidents.groupedEventIds} ? ${e.key}`);
   if (grouped.length) return false; // 이미 묶음으로 집계된 발생
-  const severity = await effectiveSeverity(e.code, mapErrorLevel(e.level), db); // 관리자가 코드별 등급을 정했으면 그 등급
+  const severity = await effectiveSeverity(e.code, e.baseSeverity ?? mapErrorLevel(e.level), db); // 관리자가 코드별 등급을 정했으면 그 등급
   // 묶음: 같은 로봇·같은 코드의 미해결 장애가 최근 INCIDENT_GROUP_HOURS 안에 있으면 새로 만들지 않고 횟수·최근 발생 시각만 갱신한다.
   const open = await db
     .select()
@@ -245,7 +253,7 @@ async function upsertIncidentFromError(robot: Robot, e: { code: string; level: s
     code: e.code,
     severity,
     rawMessage: `[${e.level}] ${e.code}: ${e.detail}`,
-    customerMessage: customerMessageFor(e.code),
+    customerMessage: e.customerMessage ?? customerMessageFor(e.code),
     occurredAt: e.occurredAt,
     status: e.historical ? "RESOLVED" : "OPEN",
     acknowledgedAt: null,
@@ -351,9 +359,13 @@ export const PLAN_RELINK_DAYS = 14;
  * - 예정 시각이 PLAN_SETTLE_HOURS 지난 회차는 같은 로봇의 실적(±PLAN_MATCH_MINUTES)과 맞춰 수행(DONE) 또는 미실행(MISSED)으로 정리한다.
  */
 export async function syncPuduPlannedRuns(now: string = nowIso()): Promise<SyncResult> {
-  return recordSync("plan", async () => {
+  return recordSync("plan", async () => settlePlannedRuns(await puduRobots(), now));
+}
+
+/** 제조사 예약(executor VENDOR) → 오늘·내일 계획 회차 생성, 지난 회차 수행/미실행 판정. PUDU·CENOBOTS 공통. */
+export async function settlePlannedRuns(robots: Robot[], now: string = nowIso()): Promise<{ detail: string; counts: Record<string, number> }> {
+  {
     const db = getDb();
-    const robots = await puduRobots();
     let created = 0;
     let done = 0;
     let missed = 0;
@@ -418,7 +430,7 @@ export async function syncPuduPlannedRuns(now: string = nowIso()): Promise<SyncR
       }
     }
     return { detail: `계획 회차 신규 ${created} · 수행 ${done} · 미실행 ${missed}`, counts: { created, done, missed } };
-  });
+  }
 }
 
 /** 콜백 이벤트 처리(비동기). 순서 보장이 없으므로 발생 시각이 기존 데이터보다 과거면 상태를 덮지 않는다. */

@@ -28,6 +28,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
   const modes = vendorModes();
   const sampleMode = Object.values(modes).every((m) => m !== "live");
   const liveVendors = (Object.keys(modes) as (keyof typeof modes)[]).filter((v) => modes[v] === "live");
+  const mockVendors = (Object.keys(modes) as (keyof typeof modes)[]).filter((v) => modes[v] === "mock");
   const envLabel = process.env.APP_ENV && process.env.APP_ENV !== "production" ? process.env.APP_ENV : null;
 
   return (
@@ -43,7 +44,9 @@ export default async function RootLayout({ children }: { children: React.ReactNo
         )}
         {!sampleMode && (
           <div className="no-print bg-blue-50 text-blue-900 text-xs sm:text-sm px-4 py-1.5 border-b border-blue-200 text-center">
-            <strong>실제 연동 중: {liveVendors.join(", ")}</strong> — 나머지 제조사 로봇은 샘플/미설정입니다. 명령은 실제 로봇에 전송됩니다.
+            <strong>실제 연동 중: {liveVendors.join(", ")}</strong>
+            {mockVendors.length ? <> · 모의 연동(mock): {mockVendors.join(", ")}</> : null}
+            {" "}— {liveVendors.length + mockVendors.length < 3 ? "나머지 제조사는 미설정입니다. " : ""}PUDU 원격 제어는 사업장 스위치가 켜진 곳만, CenoBots·BIB 는 조회 전용입니다.
             {envLabel ? <span className="ml-2 rounded bg-blue-200 px-1.5 text-[11px]">{envLabel}</span> : null}
           </div>
         )}

@@ -362,6 +362,47 @@ export async function puduSyncNowAction(job: "status" | "reports" | "catalog" | 
   });
 }
 
+// ---- 제조사 연동(CENOBOTS, 조회 전용) ----
+import * as czAdmin from "@/lib/services/cenobotsAdmin";
+export async function cenobotsTestConnectionAction(): Promise<ActionResult & { devices?: czAdmin.CenobotsDeviceRow[] }> {
+  try {
+    const r = await czAdmin.cenobotsTestConnection(await getCurrentUser());
+    revalidatePath("/admin/advanced");
+    return r.ok ? { ok: true, message: r.message, devices: r.devices } : { ok: false, error: r.message };
+  } catch (e) {
+    if (!(e instanceof AppError)) console.error("[action] CENOBOTS 연결 확인 오류:", e);
+    return { ok: false, error: errorMessage(e) };
+  }
+}
+export async function cenobotsImportRobotsAction(siteId: string, floorId: string, openIds: string[]): Promise<ActionResult> {
+  return run(async () => {
+    const n = await czAdmin.cenobotsImportRobots(await getCurrentUser(), siteId, floorId, openIds);
+    revalidatePath("/admin/advanced");
+    return { message: `CENOBOTS 로봇 ${n}대를 등록·연결했습니다. 첫 상태는 워커 조회 후 표시됩니다.` };
+  });
+}
+export async function cenobotsSyncNowAction(job: "status" | "reports" | "catalog" | "events"): Promise<ActionResult> {
+  return run(async () => {
+    const user = await getCurrentUser();
+    if (user.role !== "HQ_ADMIN") throw new ForbiddenError("본사 관리자만 실행할 수 있습니다.");
+    const w = await import("@/worker/cenobots");
+    if (!w.cenobotsEnabled()) throw new AppError("CENOBOTS 연동이 꺼져 있습니다(CENOBOTS_MODE).", "UNSUPPORTED");
+    const api = (await import("@/lib/vendors/cenobots/cenobotsAdapter")).createCenobotsApi();
+    const results = job === "status" ? [await w.syncCenobotsStatus()] : job === "reports" ? [await w.syncCenobotsReports(api), await w.syncCenobotsErrors(api), await w.syncCenobotsPlannedRuns()] : job === "catalog" ? [await w.syncCenobotsCatalog(api)] : [await w.processCenobotsEvents()];
+    revalidatePath("/admin/advanced");
+    const bad = results.find((r) => !r.ok);
+    if (bad) throw new AppError(`${bad.job} 실패: ${bad.detail}`, "UNSUPPORTED");
+    return { message: results.map((r) => `${r.job}: ${r.detail}`).join(" / ") };
+  });
+}
+export async function cenobotsWebhookSelfTestAction(): Promise<ActionResult> {
+  return run(async () => {
+    const r = await czAdmin.cenobotsWebhookSelfTest(await getCurrentUser());
+    if (!r.ok) throw new AppError(r.message, "UNSUPPORTED");
+    return { message: r.message };
+  });
+}
+
 // ---- 사업장·층·지도 (본사 관리자) ----
 import * as sitesSvc from "@/lib/services/sites";
 export async function alignFloorMapsAction(apply = false, floorIds: string[] = []): Promise<ActionResult & { rows?: sitesSvc.AlignRow[] }> {

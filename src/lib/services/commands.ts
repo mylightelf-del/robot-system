@@ -1,4 +1,4 @@
-import { isLiveRobot } from "@/lib/vendors";
+import { isLiveRobot, READ_ONLY_VENDORS } from "@/lib/vendors";
 import { and, desc, eq, gt, inArray, notInArray } from "drizzle-orm";
 import type { Command, CommandOrigin, CommandType, User } from "@/lib/domain/types";
 import { ALLOWED_BY_STATUS } from "@/lib/domain/commands";
@@ -75,6 +75,11 @@ export async function issueCommand(user: User, input: IssueCommandInput): Promis
     throw new ForbiddenError("사용 중지된 로봇입니다. 고급 설정에서 다시 사용 처리한 뒤 명령할 수 있습니다.");
   }
   const site = await db.query.sites.findFirst({ where: eq(schema.sites.id, robot.siteId) });
+  // 조회 전용 제조사(CENOBOTS·BIB): 운영 사업장에서는 원격 제어 스위치가 켜져 있어도 명령을 만들지 않는다(요청 범위 docs/22). 샘플 사업장의 가상 로봇만 시뮬레이션 허용.
+  if (READ_ONLY_VENDORS.has(robot.vendor) && !site?.isSample) {
+    await audit(user, { siteId: robot.siteId, robotId: robot.id, action: `COMMAND:${type}`, params: auditParams(input.params ?? {}), result: "DENIED", detail: "조회 전용 제조사", vendorTraceId: null }, db);
+    throw new ForbiddenError("이 제조사 로봇은 조회 전용으로 연동되어 있어 명령을 보낼 수 없습니다.");
+  }
   if (!site?.remoteControlEnabled) {
     await audit(user, { siteId: robot.siteId, robotId: robot.id, action: `COMMAND:${type}`, params: auditParams(input.params ?? {}), result: "DENIED", detail: "사업장 원격 제어 꺼짐", vendorTraceId: null }, db);
     throw new ForbiddenError("이 사업장은 원격 제어가 꺼져 있습니다. 본사 관리자가 관리 설정 → 원격 제어에서 켤 수 있습니다.");

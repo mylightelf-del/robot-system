@@ -337,6 +337,15 @@ export async function getVendorStatus(user: User) {
   };
 }
 
+/**
+ * 다음 내부 관리번호(PW-R-NNN). 기존 '로봇 수 + 1' 은 중간 번호를 먼저 쓰면(예: CENOBOT·BIB 를 PW-R-010~013 으로 미리 등록) 충돌한다 → 가장 큰 번호 + 1.
+ */
+export async function nextRobotId(db: Pick<Tx, "select"> = getDb()): Promise<string> {
+  const ids = (await db.select({ id: schema.robots.id }).from(schema.robots)).map((r) => r.id);
+  const max = ids.reduce((m, id) => Math.max(m, Number(id.match(/^PW-R-(\d+)$/)?.[1] ?? 0)), 0);
+  return `PW-R-${String(Math.max(max, ids.length) + 1).padStart(3, "0")}`;
+}
+
 export type PuduRobotRow = { sn: string; productCode: string; model: string | null; shopId: string; shopName: string; nickname: string; registered: boolean };
 
 /**
@@ -399,8 +408,7 @@ export async function puduImportRobots(user: User, siteId: string, floorId: stri
       product = null;
     }
     product = product ?? productParamFor(r.product_code);
-    const seq = (await db.select({ id: schema.robots.id }).from(schema.robots)).length + 1;
-    const id = `PW-R-${String(seq).padStart(3, "0")}`;
+    const id = await nextRobotId(db);
     const now = nowIso();
     await db.transaction(async (tx) => {
       await tx.insert(schema.robots).values({ id, vendor: "PUDU", model, vendorRobotId: sn, siteId, floorId, name: r.nickname || `${model} ${sn.slice(-4)}`, serial: sn, firmware: "", active: true, supportedCommands: PUDU_SUPPORTED_COMMANDS, internalNote: "", vendorMeta: { source: "api", shopId: String(r.shop_id), shopName: r.shop_name, productCode: r.product_code, product, mac: r.mac } });

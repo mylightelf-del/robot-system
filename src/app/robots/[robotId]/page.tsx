@@ -14,6 +14,7 @@ import { formatDateTime, relativeFromNow } from "@/lib/util/time";
 import { MODEL_LABEL, VENDOR_LABEL } from "@/lib/domain/commands";
 import { COMMAND_LABEL, RUN_RESULT_LABEL } from "@/lib/domain/status";
 import { canRetry } from "@/lib/services/commands";
+import { READ_ONLY_VENDORS } from "@/lib/vendors";
 
 export default async function RobotPage({ params }: { params: Promise<{ robotId: string }> }) {
   const { robotId } = await params;
@@ -79,7 +80,9 @@ export default async function RobotPage({ params }: { params: Promise<{ robotId:
           </Card>
 
           <Card title="원격 작업 지시" right={d.isSimulation ? <SimTag /> : null}>
-            {!d.site.remoteControlEnabled ? (
+            {READ_ONLY_VENDORS.has(d.robot.vendor) && !d.site.isSample ? (
+              <p className="text-sm text-gray-600">이 제조사({VENDOR_LABEL[d.robot.vendor]})는 <b>조회 전용</b>으로 연동되어 있습니다. 상태·작업 이력·장애·소모품만 받고, 로봇에는 명령을 보내지 않습니다. 작업 지시는 제조사 앱·PAD 에서 하세요.</p>
+            ) : !d.site.remoteControlEnabled ? (
               <p className="text-sm text-gray-600">이 사업장은 원격 제어가 꺼져 있습니다. {customer ? "필요하면 본사에 요청하세요." : "본사 관리자가 관리 설정 → 원격 제어(사업장별)에서 켤 수 있습니다."}</p>
             ) : (
             <CommandPanel
@@ -218,7 +221,7 @@ export default async function RobotPage({ params }: { params: Promise<{ robotId:
                 ))}
               </tbody>
             </table>
-            {d.robot.vendor === "CENOBOTS" && <p className="text-xs text-gray-500 mt-2">L4 의 잔여 수명은 maintenance-detail API 를 실기에서 시험한 뒤 사용합니다. consumablesStatistics 는 SP50 전용이라 근거로 쓰지 않습니다.</p>}
+            {d.robot.vendor === "CENOBOTS" && <p className="text-xs text-gray-500 mt-2">L4 의 잔여 수명은 CZ Robots maintenance-detail API 값입니다(실기 값 확인 전). consumablesStatistics 는 SP50 전용이라 쓰지 않습니다.</p>}
           </Card>
 
           <Card title="점검표">
