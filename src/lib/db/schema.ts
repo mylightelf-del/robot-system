@@ -699,3 +699,94 @@ export const vendorSyncState = pgTable(
     stats: jsonb().$type<Record<string, unknown>>().notNull().default({}),
   },
 );
+
+// ---- 배송로봇(PUDU FlashBot, 에이전트 연동) — 청소 테이블과 분리(docs/23) ----
+
+/** 배송로봇. 에이전트(PUDU SDK 마이크로서비스)의 로봇 목록에서 발견해 등록한다. 청소 로봇 테이블·집계와 섞지 않는다. */
+export const deliveryRobots = pgTable("delivery_robots", {
+  id: text().primaryKey(), // `DR-<agentRobotId>`
+  agentRobotId: text().notNull().unique(),
+  groupId: text().notNull().default(""),
+  deviceId: text().notNull().default(""),
+  /** 배치 사업장. 처음 발견했을 때는 null(관리자가 배송 화면에서 지정). */
+  siteId: text().references(() => sites.id),
+  name: text().notNull(),
+  shopName: text().notNull().default(""),
+  active: boolean().notNull().default(true),
+  /** 마지막 상태(robotState FREE/BUSY, moveState, chargeStage, robotPower, robotPose). */
+  lastState: jsonb().$type<Record<string, unknown> | null>(),
+  lastSeenAt: isoTimestamp(),
+  /** 지도 목적지 목록(수신자 설정 화면용 캐시). */
+  destinations: jsonb().$type<{ name: string; type: string }[]>().notNull().default([]),
+  createdAt: isoTimestamp().notNull(),
+});
+
+/** 목적지 → 수신자(직원). 같은 사업장·목적지는 한 행. destination '*' 은 그 사업장의 기본 수신자(목적지 행이 없을 때). */
+export const deliveryRecipients = pgTable(
+  "delivery_recipients",
+  {
+    id: text().primaryKey(),
+    siteId: text()
+      .notNull()
+      .references(() => sites.id),
+    destination: text().notNull(),
+    userIds: jsonb().$type<string[]>().notNull().default([]),
+    /** 보낼 채널(PUSH·EMAIL·KAKAO). 사용자별로 가능한 채널만 실제로 보낸다. */
+    channels: jsonb().$type<("PUSH" | "EMAIL" | "KAKAO")[]>().notNull().default(["PUSH", "EMAIL"]),
+    enabled: boolean().notNull().default(true),
+    note: text().notNull().default(""),
+    updatedBy: text().notNull(),
+    updatedAt: isoTimestamp().notNull(),
+  },
+  (t) => [uniqueIndex("delivery_recipients_site_dest").on(t.siteId, t.destination)],
+);
+
+/** 배송 한 구간(트레이 하나의 목적지 하나). 에이전트의 배송 임무 알림으로 만들고 갱신한다. */
+export const deliveryLegs = pgTable(
+  "delivery_legs",
+  {
+    id: text().primaryKey(),
+    robotId: text()
+      .notNull()
+      .references(() => deliveryRobots.id),
+    siteId: text().references(() => sites.id),
+    destination: text().notNull(),
+    trayIndex: integer().notNull().default(0),
+    /** 우리 시스템이 보낸 임무의 ID(로봇 화면에서 시작한 배송은 없음). */
+    taskRef: text(),
+    mode: text().notNull().default(""), // General/Direct/Birthday/Special
+    source: text().notNull().default(""), // remote/manual
+    status: text().$type<"Await" | "OnTheWay" | "Arrived" | "Complete" | "Cancel">().notNull(),
+    firstSeenAt: isoTimestamp().notNull(),
+    onTheWayAt: isoTimestamp(),
+    arrivedAt: isoTimestamp(),
+    completedAt: isoTimestamp(),
+    cancelledAt: isoTimestamp(),
+    completeType: text(),
+    estimatedMs: integer(),
+    spendMs: integer(),
+    lastEventAt: isoTimestamp().notNull(),
+    notifiedAt: isoTimestamp(),
+    remindedAt: isoTimestamp(),
+    /** 알림 결과 요약(수신자 수·채널별 상태). */
+    notifyResult: text(),
+  },
+  (t) => [index("delivery_legs_robot_dest_idx").on(t.robotId, t.destination), index("delivery_legs_arrived_idx").on(t.arrivedAt)],
+);
+
+/** 에이전트 알림 원문(notifyDeliveryTask·notifyRobotMoveState 등). msgId 로 중복 제거하고 워커가 비동기로 처리한다. */
+export const deliveryEvents = pgTable(
+  "delivery_events",
+  {
+    id: text().primaryKey(),
+    msgId: text().notNull().unique(),
+    msgType: text().notNull(),
+    agentRobotId: text(),
+    receivedAt: isoTimestamp().notNull(),
+    occurredAt: isoTimestamp(),
+    payload: jsonb().notNull(),
+    processedAt: isoTimestamp(),
+    processError: text(),
+  },
+  (t) => [index("delivery_events_pending_idx").on(t.processedAt, t.receivedAt)],
+);

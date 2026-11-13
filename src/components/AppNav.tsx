@@ -11,6 +11,7 @@ const ITEMS: { href: string; label: string; staffOnly?: boolean; adminOnly?: boo
   { href: "/tasks", label: "작업·일정" },
   { href: "/incidents", label: "장애·조치" },
   { href: "/reports", label: "실적·보고서" },
+  { href: "/delivery", label: "배송", staffOnly: true },
   { href: "/admin", label: "관리 설정", adminOnly: true },
 ];
 
@@ -19,7 +20,7 @@ export function AppNav({ role, isCustomer }: { role: Role; isCustomer: boolean }
   return (
     <nav className="border-t border-white/10">
       <div className="max-w-7xl mx-auto px-2 sm:px-3 flex gap-0.5 overflow-x-auto text-sm py-1.5 [scrollbar-width:none]">
-        {ITEMS.filter((i) => !(i.adminOnly && role !== "HQ_ADMIN")).map((i) => {
+        {ITEMS.filter((i) => !(i.adminOnly && role !== "HQ_ADMIN") && !(i.staffOnly && isCustomer)).map((i) => {
           const active = i.href === "/" ? pathname === "/" : pathname.startsWith(i.href);
           return (
             <Link

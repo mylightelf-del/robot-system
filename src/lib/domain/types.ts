@@ -500,9 +500,10 @@ export interface User {
 }
 
 /** 통보 종류: 장애 발생·복구 / 미조치 확대 / 예정 작업 미실행 / 장기간 무실적 / 보고서 발행 */
-export type NotifyKind = "INCIDENT" | "ESCALATION" | "MISSED_RUN" | "NO_ACTIVITY" | "REPORT" | "CONSUMABLE";
+/** DELIVERY(배송 도착)는 목적지별 수신자에게만 가며 사업장 수신자 구독 목록(NOTIFY_KINDS)에는 넣지 않는다. */
+export type NotifyKind = "INCIDENT" | "ESCALATION" | "MISSED_RUN" | "NO_ACTIVITY" | "REPORT" | "CONSUMABLE" | "DELIVERY";
 export const NOTIFY_KINDS: NotifyKind[] = ["INCIDENT", "ESCALATION", "MISSED_RUN", "NO_ACTIVITY", "REPORT", "CONSUMABLE"];
-export const NOTIFY_KIND_LABEL: Record<NotifyKind, string> = { INCIDENT: "장애 발생·복구", ESCALATION: "미조치 확대 통보", MISSED_RUN: "예정 작업 미실행", NO_ACTIVITY: "장기간 무실적", REPORT: "보고서 발행", CONSUMABLE: "소모품·점검" };
+export const NOTIFY_KIND_LABEL: Record<NotifyKind, string> = { INCIDENT: "장애 발생·복구", ESCALATION: "미조치 확대 통보", MISSED_RUN: "예정 작업 미실행", NO_ACTIVITY: "장기간 무실적", REPORT: "보고서 발행", CONSUMABLE: "소모품·점검", DELIVERY: "배송 도착" };
 
 export interface NotificationRecipient {
   id: string;

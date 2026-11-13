@@ -12,6 +12,8 @@ import { processPuduEvents, puduLiveEnabled, PUDU_WINDOW_HOURS, syncPuduCatalog,
 import { createPuduApi } from "@/lib/vendors/pudu/puduAdapter";
 import { cenobotsDryRun, cenobotsEnabled, processCenobotsEvents, syncCenobotsCatalog, syncCenobotsErrors, syncCenobotsPlannedRuns, syncCenobotsReports, syncCenobotsStatus } from "./cenobots";
 import { createCenobotsApi } from "@/lib/vendors/cenobots/cenobotsAdapter";
+import { agentMode } from "@/lib/delivery/agent";
+import { createAgentClient, processDeliveryEvents, sendDeliveryReminders, syncDeliveryCatalog, syncDeliveryState } from "@/lib/services/delivery";
 import { vendorModes } from "@/lib/vendors";
 import { purgeOldVendorEvents, writeHeartbeat } from "@/lib/ops/heartbeat";
 import { autoCreateScheduledDrafts } from "@/lib/services/reports";
@@ -101,6 +103,31 @@ async function main() {
       loop("cenobots-events", 5000, async () => {
         const r = await processCenobotsEvents();
         if (r.counts?.events) report(r);
+      }),
+    );
+  }
+  // 배송로봇(PUDU 에이전트) — 도착 알림. PUDU_AGENT_MODE=mock|live, unconfigured 면 끔(docs/23).
+  if (agentMode() !== "unconfigured") {
+    const client = createAgentClient();
+    log(`배송 에이전트 ${agentMode()}: 목록 10m · 상태 60s · 알림 처리 3s · 재알림 30s`);
+    const dlog = (r: { job: string; ok: boolean; detail: string }) => log(`DELIVERY ${r.job}: ${r.ok ? "OK" : "실패"} — ${r.detail}`);
+    jobs.push(loop("delivery-catalog", 10 * 60_000, async () => dlog(await syncDeliveryCatalog(client))));
+    jobs.push(
+      loop("delivery-state", 60_000, async () => {
+        const r = await syncDeliveryState(client);
+        if (!r.ok) dlog(r);
+      }),
+    );
+    jobs.push(
+      loop("delivery-events", 3000, async () => {
+        const r = await processDeliveryEvents();
+        if (r.counts.events) dlog(r);
+      }),
+    );
+    jobs.push(
+      loop("delivery-remind", 30_000, async () => {
+        const n = await sendDeliveryReminders();
+        if (n) log(`배송 재알림 ${n}건`);
       }),
     );
   }

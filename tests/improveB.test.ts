@@ -152,7 +152,11 @@ describe("개선 B: 청소 범위 증빙 · 조치 가이드/분석 · 소모품
     expect(logs.some((l) => l.refId === `cons:${robotId}:시험 필터 잔여 수명`)).toBe(true);
     expect(logs.some((l) => l.refId === "insp:insp-test-overdue")).toBe(true);
     expect(await notifyConsumables(nowIso())).toBe(0); // 반복 억제
-    expect(await notifyConsumables(new Date(Date.now() + 8 * 86400_000).toISOString())).toBe(1); // 소모품만 7일 뒤 다시, 점검은 1회
+    // 7일 뒤: 이 시험의 소모품은 다시 통보, 점검은 1회만. (샘플 데이터의 다른 점검도 그때쯤 기한이 지나므로 전체 건수가 아니라 이 시험 항목만 본다 — 달력에 따라 결과가 달라지던 문제)
+    await notifyConsumables(new Date(Date.now() + 8 * 86400_000).toISOString());
+    const later = await db().select().from(schema.notificationLogs).where(eq(schema.notificationLogs.kind, "CONSUMABLE"));
+    expect(later.filter((l) => l.refId === `cons:${robotId}:시험 필터 잔여 수명`).length).toBe(logs.filter((l) => l.refId === `cons:${robotId}:시험 필터 잔여 수명`).length * 2);
+    expect(later.filter((l) => l.refId === "insp:insp-test-overdue").length).toBe(logs.filter((l) => l.refId === "insp:insp-test-overdue").length);
   });
 
   it("오픈 API 토큰: 발급(한 번만 노출)·범위·인증·분당 제한·폐기, 응답은 고객 기준 필드", async () => {

@@ -509,3 +509,39 @@ export async function puduCallbackSelfTestAction(): Promise<ActionResult> {
     return { message: r.message };
   });
 }
+
+// ---- 배송로봇 도착 알림(docs/23) ----
+import * as deliverySvc from "@/lib/services/delivery";
+export async function setDeliveryRobotSiteAction(robotId: string, siteId: string | null): Promise<ActionResult> {
+  return run(async () => {
+    await deliverySvc.setDeliveryRobotSite(await getCurrentUser(), robotId, siteId);
+    revalidatePath("/delivery");
+    return { message: siteId ? "로봇의 사업장을 지정했습니다." : "사업장 지정을 해제했습니다." };
+  });
+}
+export async function saveDeliveryRecipientsAction(input: { siteId: string; destination: string; userIds: string[]; channels: ("PUSH" | "EMAIL" | "KAKAO")[]; enabled?: boolean }): Promise<ActionResult> {
+  return run(async () => {
+    await deliverySvc.saveDeliveryRecipients(await getCurrentUser(), input);
+    revalidatePath("/delivery");
+    return { message: `'${input.destination}' 수신자를 저장했습니다.` };
+  });
+}
+export async function deleteDeliveryRecipientsAction(id: string): Promise<ActionResult> {
+  return run(async () => {
+    await deliverySvc.deleteDeliveryRecipients(await getCurrentUser(), id);
+    revalidatePath("/delivery");
+    return { message: "삭제했습니다." };
+  });
+}
+export async function deliverySyncNowAction(): Promise<ActionResult> {
+  return run(async () => {
+    const user = await getCurrentUser();
+    if (user.role !== "HQ_ADMIN") throw new ForbiddenError("본사 관리자만 실행할 수 있습니다.");
+    const client = deliverySvc.createAgentClient();
+    const a = await deliverySvc.syncDeliveryCatalog(client);
+    const b = await deliverySvc.syncDeliveryState(client);
+    revalidatePath("/delivery");
+    if (!a.ok || !b.ok) throw new AppError(`${a.ok ? "" : `목록: ${a.detail} `}${b.ok ? "" : `상태: ${b.detail}`}`, "UNSUPPORTED");
+    return { message: `목록: ${a.detail} / 상태: ${b.detail}` };
+  });
+}

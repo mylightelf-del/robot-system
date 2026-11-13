@@ -61,6 +61,20 @@ services:
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-robot}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-robot_control}
 
+  # 배송로봇 에이전트(PUDU SDK 마이크로서비스, docs/23). 기본으로는 뜨지 않는다: `docker compose --profile delivery up -d pudu-agent`
+  # 실행 파일은 저장소에 넣지 않는다 — 서버 /opt/robot-system/agent/ 에 업체가 준 리눅스 실행 파일을 두고 PUDU_AGENT_BIN 에 이름을 적는다.
+  # 인증이 없는 API 라 포트를 밖으로 열지 않는다(ports 없음, 내부 네트워크에서 http://pudu-agent:9050 으로만 접근).
+  pudu-agent:
+    profiles: ["delivery"]
+    image: debian:bookworm-slim
+    restart: unless-stopped
+    working_dir: /agent
+    volumes:
+      - ./agent:/agent
+    command: ["sh", "-c", "chmod +x ./$${PUDU_AGENT_BIN:?PUDU_AGENT_BIN 을 .env 에} && exec ./$${PUDU_AGENT_BIN} -p 9050 -outl /agent/log -outc /agent"]
+    environment:
+      PUDU_AGENT_BIN: ${PUDU_AGENT_BIN:-}
+
   # HTTPS 리버스 프록시. 도메인을 Cloudflare 에 연결한 뒤 DOMAIN 을 .env 에 넣는다.
   caddy:
     image: caddy:2-alpine
