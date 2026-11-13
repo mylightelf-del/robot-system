@@ -13,7 +13,7 @@ import { createPuduApi } from "@/lib/vendors/pudu/puduAdapter";
 import { cenobotsDryRun, cenobotsEnabled, processCenobotsEvents, syncCenobotsCatalog, syncCenobotsErrors, syncCenobotsPlannedRuns, syncCenobotsReports, syncCenobotsStatus } from "./cenobots";
 import { createCenobotsApi } from "@/lib/vendors/cenobots/cenobotsAdapter";
 import { agentMode } from "@/lib/delivery/agent";
-import { createAgentClient, processDeliveryEvents, sendDeliveryReminders, syncDeliveryCatalog, syncDeliveryState } from "@/lib/services/delivery";
+import { checkStuckRobots, createAgentClient, processDeliveryEvents, sendDeliveryReminders, syncDeliveryCatalog, syncDeliveryState } from "@/lib/services/delivery";
 import { vendorModes } from "@/lib/vendors";
 import { purgeOldVendorEvents, writeHeartbeat } from "@/lib/ops/heartbeat";
 import { autoCreateScheduledDrafts } from "@/lib/services/reports";
@@ -127,7 +127,8 @@ async function main() {
     jobs.push(
       loop("delivery-remind", 30_000, async () => {
         const n = await sendDeliveryReminders();
-        if (n) log(`배송 재알림 ${n}건`);
+        const st = await checkStuckRobots();
+        if (n || st) log(`배송 재알림 ${n}건 · 막힘 알림 ${st}건`);
       }),
     );
   }

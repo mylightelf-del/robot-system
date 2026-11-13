@@ -2,7 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
 import { AgentClient } from "@/lib/delivery/agent";
 import { agentMockState, agentMockTransport, MOCK_DEVICE_ID, MOCK_ROBOT } from "@/lib/delivery/mock";
-import { getDeliveryView, ingestAgentNotify, processDeliveryEvents, saveDeliveryRecipients, sendDeliveryReminders, setDeliveryRobotSite, syncDeliveryCatalog, syncDeliveryState } from "@/lib/services/delivery";
+import { callDeliveryRobot, checkStuckRobots, dispatchDelivery, getDeliveryView, ingestAgentNotify, processDeliveryEvents, saveDeliveryRecipients, sendDeliveryReminders, setDeliveryRobotSite, syncDeliveryCatalog, syncDeliveryState } from "@/lib/services/delivery";
 import { POST as notifyPOST } from "@/app/api/webhooks/pudu-agent/route";
 import { getDb, resetAndSeed, schema, user } from "./helpers";
 
@@ -124,5 +124,86 @@ describe("배송 도착 알림(모의 에이전트)", () => {
     const siteView = await getDeliveryView(await user("u-site-a"));
     expect(siteView.robots.length).toBe(0);
     expect(siteView.admin).toBe(false);
+  });
+
+  describe("배송 지시·주문별 수신자·취소/막힘/오류 알림", () => {
+    const setup = async () => {
+      const hq = await user("u-hq");
+      await syncDeliveryCatalog(client());
+      await syncDeliveryState(client());
+      await setDeliveryRobotSite(hq, "DR-MOCKFLASH01", "site-01");
+      agentMockState.commands.length = 0;
+      return hq;
+    };
+
+    it("배송 보내기: 트레이별 목적지·ID 로 전송, 지시한 받는 사람에게 도착 알림, 취소되면 취소 알림", async () => {
+      const hq = await setup();
+      await saveDeliveryRecipients(hq, { siteId: "site-01", destination: "2601", userIds: ["u-hq"], channels: ["EMAIL"] });
+      const r = await dispatchDelivery(hq, { robotId: "DR-MOCKFLASH01", trays: [{ destination: "2601", recipientUserIds: ["u-site-a"] }, { destination: "2602" }] });
+      expect(agentMockState.commands.length).toBe(1);
+      const body = agentMockState.commands[0].body as { robotId: string; type: string; deliverySort: string; executeTask: boolean; trays: { destinations: { destination: string; id: string }[] }[] };
+      expect(body).toMatchObject({ robotId: MOCK_ROBOT.id, type: "new", deliverySort: "fixed", executeTask: true });
+      expect(body.trays.map((t) => t.destinations[0].destination)).toEqual(["2601", "2602"]);
+      const order = (await db().select().from(schema.deliveryOrders).where(eq(schema.deliveryOrders.id, r.id)))[0];
+      expect(order.status).toBe("ACCEPTED");
+      // 중복 클릭 방지
+      await expect(dispatchDelivery(hq, { robotId: "DR-MOCKFLASH01", trays: [{ destination: "2603" }] })).rejects.toThrow(/방금 보낸/);
+      // 도착: 지시할 때 고른 사람(u-site-a)에게 — 목적지 수신자(u-hq)가 아니라
+      const ref = body.trays[0].destinations[0].id;
+      await ingestAgentNotify(deliveryMsg("Arrived", Date.now() - 1000, "2601", { id: ref, type: "remote" }));
+      await processDeliveryEvents();
+      const leg = (await db().select().from(schema.deliveryLegs).where(eq(schema.deliveryLegs.taskRef, ref)))[0];
+      expect(leg.notifyResult).toContain("이현장");
+      expect(leg.notifyResult).not.toContain("김본사");
+      // 두 번째 트레이 취소 → 취소 알림(2602 는 목적지 수신자가 없으므로 기본 수신자도 없으면 안 감)
+      await saveDeliveryRecipients(hq, { siteId: "site-01", destination: "*", userIds: ["u-hq"], channels: ["EMAIL"] });
+      const ref2 = body.trays[1].destinations[0].id;
+      await ingestAgentNotify(deliveryMsg("OnTheWay", Date.now() - 900, "2602", { id: ref2 }));
+      await ingestAgentNotify(deliveryMsg("Cancel", Date.now() - 800, "2602", { id: ref2 }));
+      await processDeliveryEvents();
+      const c = (await db().select().from(schema.deliveryLegs).where(eq(schema.deliveryLegs.taskRef, ref2)))[0];
+      expect(c.status).toBe("Cancel");
+      expect(c.notifyResult).toContain("취소 알림");
+      expect((await db().select().from(schema.notificationLogs).where(eq(schema.notificationLogs.refId, `${c.id}:cancel`))).length).toBe(1);
+      // 취소·완료된 배송은 재알림하지 않고, 도착 알림 받은 미수령 건만 재알림
+      expect(await sendDeliveryReminders(new Date(Date.now() + 10 * 60_000).toISOString())).toBe(1);
+    });
+
+    it("거부: 고객·사업장 원격 제어 꺼짐(감사 DENIED)·없는 목적지·로봇 배송 중·에이전트 거부(실패 기록)", async () => {
+      const hq = await setup();
+      await expect(dispatchDelivery(await user("u-cust-1"), { robotId: "DR-MOCKFLASH01", trays: [{ destination: "2601" }] })).rejects.toThrow();
+      await expect(dispatchDelivery(hq, { robotId: "DR-MOCKFLASH01", trays: [{ destination: "없는곳" }] })).rejects.toThrow(/지도에 없는/);
+      await db().update(schema.sites).set({ remoteControlEnabled: false }).where(eq(schema.sites.id, "site-01"));
+      await expect(dispatchDelivery(hq, { robotId: "DR-MOCKFLASH01", trays: [{ destination: "2601" }] })).rejects.toThrow(/원격 제어/);
+      const denied = await db().select().from(schema.auditLogs).where(and(eq(schema.auditLogs.action, "DELIVERY:DELIVERY"), eq(schema.auditLogs.result, "DENIED")));
+      expect(denied.some((a) => a.detail === "사업장 원격 제어 꺼짐")).toBe(true);
+      await db().update(schema.sites).set({ remoteControlEnabled: true }).where(eq(schema.sites.id, "site-01"));
+      const r = (await db().query.deliveryRobots.findFirst({ where: eq(schema.deliveryRobots.id, "DR-MOCKFLASH01") }))!;
+      await db().update(schema.deliveryRobots).set({ lastState: { ...(r.lastState ?? {}), robotState: "BUSY" } }).where(eq(schema.deliveryRobots.id, r.id));
+      await expect(dispatchDelivery(hq, { robotId: "DR-MOCKFLASH01", trays: [{ destination: "2601" }] })).rejects.toThrow(/배송 중/);
+      // 호출은 배송 중에도 가능(끝난 뒤 수행). 에이전트가 거부하면 실패로 기록하고 오류
+      agentMockState.rejectNext = true;
+      await expect(callDeliveryRobot(hq, { robotId: "DR-MOCKFLASH01", destination: "2601" })).rejects.toThrow();
+      const failed = (await db().select().from(schema.deliveryOrders).where(eq(schema.deliveryOrders.status, "FAILED")))[0];
+      expect(failed.kind).toBe("CALL");
+      expect(agentMockState.commands.every((c) => c.path !== "/api/robot/action" && c.path !== "/api/robot/custom/call")).toBe(true);
+    });
+
+    it("막힘은 정해진 시간 넘게 이어질 때 한 번, 운행 오류는 바로 한 번 — 기본 수신자에게", async () => {
+      const hq = await setup();
+      await saveDeliveryRecipients(hq, { siteId: "site-01", destination: "*", userIds: ["u-hq"], channels: ["EMAIL"] });
+      const t = Date.now() - 5 * 60_000;
+      await ingestAgentNotify({ msgId: "mv1", msgType: "notifyRobotMoveState", robotId: MOCK_ROBOT.id, timestamp: t, data: { state: "Stuck", errors: [] } });
+      await processDeliveryEvents();
+      expect(await checkStuckRobots()).toBe(1);
+      expect(await checkStuckRobots()).toBe(0);
+      await ingestAgentNotify({ msgId: "mv2", msgType: "notifyRobotMoveState", robotId: MOCK_ROBOT.id, timestamp: t + 60_000, data: { state: "Moving" } });
+      await ingestAgentNotify({ msgId: "mv3", msgType: "notifyRobotMoveState", robotId: MOCK_ROBOT.id, timestamp: t + 120_000, data: { state: "Error", errors: [{ errorType: "LaserError", level: "Error", detail: "레이저 이상" }] } });
+      await ingestAgentNotify({ msgId: "mv4", msgType: "notifyRobotMoveState", robotId: MOCK_ROBOT.id, timestamp: t + 130_000, data: { state: "Error", errors: [] } });
+      await processDeliveryEvents();
+      const logs = await db().select().from(schema.notificationLogs).where(eq(schema.notificationLogs.kind, "DELIVERY"));
+      expect(logs.filter((l) => l.refId?.includes(":STUCK:")).length).toBe(1);
+      expect(logs.filter((l) => l.refId?.includes(":ERROR:")).length).toBe(1);
+    });
   });
 });

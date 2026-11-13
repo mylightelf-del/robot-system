@@ -545,3 +545,24 @@ export async function deliverySyncNowAction(): Promise<ActionResult> {
     return { message: `목록: ${a.detail} / 상태: ${b.detail}` };
   });
 }
+export async function dispatchDeliveryAction(input: { robotId: string; trays: { destination: string; recipientUserIds?: string[] }[]; sort?: "fixed" | "auto"; executeTask?: boolean }): Promise<ActionResult> {
+  return run(async () => {
+    const r = await deliverySvc.dispatchDelivery(await getCurrentUser(), input);
+    revalidatePath("/delivery");
+    return { message: `배송 지시 접수: ${input.trays.map((t) => t.destination).join(" → ")} (${r.message}). 출발·도착은 배송 기록에서 확인하세요.` };
+  });
+}
+export async function callDeliveryRobotAction(robotId: string, destination: string): Promise<ActionResult> {
+  return run(async () => {
+    const r = await deliverySvc.callDeliveryRobot(await getCurrentUser(), { robotId, destination });
+    revalidatePath("/delivery");
+    return { message: `${destination} 로 호출 접수(${r.message}).` };
+  });
+}
+export async function cancelDeliveryCallAction(robotId: string, destination: string): Promise<ActionResult> {
+  return run(async () => {
+    const r = await deliverySvc.cancelDeliveryCall(await getCurrentUser(), { robotId, destination });
+    revalidatePath("/delivery");
+    return { message: `${destination} 호출 취소 접수(${r.message}).` };
+  });
+}

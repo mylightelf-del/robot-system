@@ -790,3 +790,24 @@ export const deliveryEvents = pgTable(
   },
   (t) => [index("delivery_events_pending_idx").on(t.processedAt, t.receivedAt)],
 );
+
+/** Wide Bot 에서 보낸 배송 지시·호출(docs/23). 트레이별 목적지와 그 배송의 수신자(지정하면 목적지 수신자 대신 이 사람에게 알림). */
+export const deliveryOrders = pgTable(
+  "delivery_orders",
+  {
+    id: text().primaryKey(),
+    robotId: text()
+      .notNull()
+      .references(() => deliveryRobots.id),
+    siteId: text().references(() => sites.id),
+    kind: text().$type<"DELIVERY" | "CALL" | "CANCEL_CALL">().notNull(),
+    trays: jsonb().$type<{ destination: string; type?: string; taskRef: string; recipientUserIds: string[] }[]>().notNull().default([]),
+    sort: text().notNull().default("fixed"),
+    executeTask: boolean().notNull().default(true),
+    status: text().$type<"ACCEPTED" | "FAILED">().notNull(),
+    message: text().notNull().default(""),
+    requestedBy: text().notNull(),
+    requestedAt: isoTimestamp().notNull(),
+  },
+  (t) => [index("delivery_orders_robot_idx").on(t.robotId, t.requestedAt)],
+);

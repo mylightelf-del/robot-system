@@ -4,7 +4,7 @@ import { AppError } from "@/lib/util/errors";
 import { AccessDenied } from "@/components/AccessDenied";
 import { AutoRefresh } from "@/components/AutoRefresh";
 import { Card, Empty, Notice, PageTitle, Stat } from "@/components/ui";
-import { DeliverySyncButton, RecipientsEditor, RobotSiteSelect } from "@/components/DeliveryPanels";
+import { DeliverySyncButton, DispatchPanel, RecipientsEditor, RobotSiteSelect } from "@/components/DeliveryPanels";
 import { formatDateTime, formatDurationMin, formatTime, nowIso, relativeFromNow } from "@/lib/util/time";
 
 const STATUS_KO: Record<string, string> = { Await: "대기", OnTheWay: "이동 중", Arrived: "도착", Complete: "완료", Cancel: "취소" };
@@ -35,7 +35,7 @@ export default async function DeliveryPage({ searchParams }: { searchParams: Pro
   return (
     <>
       <AutoRefresh seconds={20} />
-      <PageTitle title="배송" subtitle="배송로봇 상태 · 배송 기록 · 도착 알림(조회 전용 — 배송 지시는 로봇 화면에서)" right={v.admin ? <DeliverySyncButton /> : null} />
+      <PageTitle title="배송" subtitle="배송로봇 상태 · 배송 보내기 · 배송 기록 · 도착 알림" right={v.admin ? <DeliverySyncButton /> : null} />
       {v.mode === "unconfigured" && <div className="mb-3"><Notice tone="warn">배송로봇 에이전트 연동이 꺼져 있습니다(PUDU_AGENT_MODE). 기록은 볼 수 있지만 새 도착 알림은 오지 않습니다.</Notice></div>}
       {v.mode === "mock" && <div className="mb-3"><Notice>모의(mock) 모드 — 에이전트 없이 시험 데이터로 동작합니다. 알림은 채널 설정에 따라 모의 발송될 수 있습니다.</Notice></div>}
 
@@ -100,7 +100,33 @@ export default async function DeliveryPage({ searchParams }: { searchParams: Pro
               </table>
             </div>
           )}
-          <p className="text-xs text-gray-500 mt-2">로봇이 목적지에 도착하면 그 목적지의 수신자에게 바로 알리고, {v.remindMinutes ? `${v.remindMinutes}분 안에 로봇 화면에서 확인(완료)이 없으면 한 번 더 알립니다.` : "재알림은 꺼져 있습니다."}</p>
+          <p className="text-xs text-gray-500 mt-2">도착하면 수신자(지시할 때 고른 사람 → 목적지 수신자 → 기본 수신자)에게 바로 알리고, {v.remindMinutes ? `${v.remindMinutes}분 안에 로봇 화면에서 확인(완료)이 없으면 한 번 더 알립니다(수령 알림만 재알림).` : "재알림은 꺼져 있습니다."} 배송이 취소되면 그 수신자에게, 로봇이 {v.stuckMinutes}분 넘게 막히거나 운행 오류로 멈추면 기본 수신자(*)에게 알립니다.</p>
+        </Card>
+      </div>
+
+      <div className="grid lg:grid-cols-3 gap-4 mt-4">
+        <Card title="배송 보내기 · 호출" className="lg:col-span-2">
+          <DispatchPanel robots={v.dispatchable.map((r) => ({ id: r.id, name: r.name, destinations: r.destinations.map((d) => d.name), busy: (r.lastState as { robotState?: string } | null)?.robotState === "BUSY" }))} users={v.users.map((u) => ({ id: u.id, name: u.name }))} />
+          {v.robots.some((r) => r.siteId && !v.dispatchable.some((x) => x.id === r.id)) && <p className="text-xs text-amber-700 mt-2">사업장의 원격 제어가 꺼져 있으면 지시할 수 없습니다(관리 설정 → 원격 제어).</p>}
+        </Card>
+        <Card title="최근 지시">
+          {v.orders.length === 0 ? (
+            <Empty>보낸 지시가 없습니다.</Empty>
+          ) : (
+            <ul className="divide-y text-xs">
+              {v.orders.map((o) => (
+                <li key={o.id} className="py-1.5">
+                  <div className="flex items-center gap-1">
+                    <span className="text-gray-500">{formatDateTime(o.requestedAt)}</span>
+                    <b>{o.kind === "DELIVERY" ? "배송" : o.kind === "CALL" ? "호출" : "호출 취소"}</b>
+                    <span className={o.status === "ACCEPTED" ? "text-emerald-700" : "text-red-700"}>{o.status === "ACCEPTED" ? "접수" : "실패"}</span>
+                  </div>
+                  <div>{robotName(o.robotId)} · {o.trays.map((t) => t.destination).join(" → ")}{o.kind === "DELIVERY" && !o.executeTask ? " · 출발은 현장에서" : ""}</div>
+                  {o.status === "FAILED" && <div className="text-red-700">{o.message}</div>}
+                </li>
+              ))}
+            </ul>
+          )}
         </Card>
       </div>
 
@@ -111,7 +137,7 @@ export default async function DeliveryPage({ searchParams }: { searchParams: Pro
           ) : (
             <RecipientsEditor sites={v.sites.map((s) => ({ id: s.id, name: s.name }))} users={v.users} rows={v.recipients.map((r) => ({ id: r.id, siteId: r.siteId, destination: r.destination, userIds: r.userIds, channels: r.channels, enabled: r.enabled }))} destinationsBySite={destinationsBySite} />
           )}
-          <p className="text-xs text-gray-500 mt-2">앱 푸시는 Wide Bot 앱에 로그인한 직원만, 카카오톡은 내 계정에서 카카오를 연결한 직원만 받습니다. 메일은 계정 메일 주소로 갑니다.</p>
+          <p className="text-xs text-gray-500 mt-2">「* 기본 수신자」는 목적지 설정이 없는 배송과 로봇 막힘·오류 알림을 받습니다. 앱 푸시는 Wide Bot 앱에 로그인한 직원만, 카카오톡은 내 계정에서 카카오를 연결한 직원만 받습니다. 메일은 계정 메일 주소로 갑니다.</p>
         </Card>
       ) : null}
     </>

@@ -15,7 +15,7 @@ export const MOCK_DESTINATIONS = [
   { name: "출발지", type: "dining_outlet" },
 ];
 
-export const agentMockState = { requests: [] as { method: string; path: string }[], online: true };
+export const agentMockState = { requests: [] as { method: string; path: string }[], online: true, commands: [] as { path: string; body: unknown }[], rejectNext: false };
 
 export const agentMockTransport: AgentTransport = {
   async send(req) {
@@ -35,6 +35,16 @@ export const agentMockTransport: AgentTransport = {
       case "/api/add/device":
       case "/api/notify/url":
         return ok({ success: true });
+      case "/api/robot/delivery/task":
+      case "/api/robot/call":
+      case "/api/robot/cancel/call": {
+        agentMockState.commands.push({ path: req.path, body: req.body });
+        if (agentMockState.rejectNext) {
+          agentMockState.rejectNext = false;
+          return ok({ success: false });
+        }
+        return ok({ success: true, taskId: `mock-task-${agentMockState.commands.length}` });
+      }
       default:
         return { status: 404, json: { code: "10005", msg: "mock: unknown path" } };
     }

@@ -1,5 +1,5 @@
 /**
- * PUDU 배송로봇 에이전트(SDK 마이크로서비스) 클라이언트 — **조회 전용**.
+ * PUDU 배송로봇 에이전트(SDK 마이크로서비스) 클라이언트. 이 AgentClient 는 조회 전용이고, 배송 지시는 아래 AgentCommander 가 따로 맡는다.
  * 문서: Google Drive PUDU/FLASHBOT/정의서(PUDU_Interface.pdf, PUDU_API정의서.pdf) 요약은 docs/23.
  * - 에이전트는 우리 서버 내부(docker 네트워크)에서 9050 포트로 돈다. 에이전트 API 에는 인증이 없으므로 외부에 절대 노출하지 않는다.
  * - 에이전트가 장치 ID·비밀키로 PUDU 클라우드에 접속한다. 비밀키는 에이전트 등록 스크립트만 쓰고(서버 .env), 여기서는 장치 ID 만 쓴다.
@@ -169,3 +169,56 @@ export interface DeliveryTrayDestination {
 export function isAgentNotify(x: unknown): x is AgentNotify {
   return !!x && typeof x === "object" && typeof (x as AgentNotify).msgType === "string";
 }
+
+/**
+ * 배송 지시 전용 클라이언트(사용자 결정 2026-11-13: Wide Bot 에서 배송 지시). 조회 클라이언트와 분리해,
+ * 이 클래스는 services/delivery.ts 의 지시 함수(권한·사업장 원격 제어 스위치·감사 기록 확인 후)에서만 만든다.
+ * 허용: 배송 임무 전송·호출·호출 취소. 그 밖의 조작(커스텀콜·기계 조작 지령 등)은 보내지 않는다.
+ */
+const COMMANDS = new Set(["/api/robot/delivery/task", "/api/robot/call", "/api/robot/cancel/call"]);
+
+export class AgentCommander {
+  constructor(
+    private readonly transport: AgentTransport,
+    readonly deviceId: string,
+  ) {}
+
+  private async post(path: string, body: Record<string, unknown>): Promise<{ success: boolean; taskId?: string }> {
+    if (!COMMANDS.has(path)) throw new AgentError(`허용되지 않은 에이전트 명령(${path})`, null);
+    let res: { status: number; json: unknown };
+    try {
+      res = await this.transport.send({ method: "POST", path, query: {}, body: { deviceId: this.deviceId, ...body } });
+    } catch (e) {
+      throw new AgentError(`에이전트 연결 실패: ${(e as Error).message}`, null);
+    }
+    const env = (res.json ?? {}) as { code?: unknown; msg?: unknown; mag?: unknown; data?: { success?: boolean; taskId?: string } };
+    const code = env.code === undefined || env.code === null ? null : String(env.code);
+    if (res.status !== 200 || (code !== null && code !== "0") || env.data?.success === false) {
+      const msg = String(env.msg ?? env.mag ?? "");
+      throw new AgentError(`${AGENT_COMMAND_FAIL[code ?? ""] ?? "에이전트 거부"}${code ? `(code ${code})` : ""}${msg ? ` ${msg}` : ""}`, code);
+    }
+    return { success: true, taskId: env.data?.taskId };
+  }
+
+  /** 배송 임무 전송. executeTask=false 면 로봇 화면에 임무만 넣고 출발은 사람이 누른다. */
+  delivery(robotId: string, trays: { destination: string; id: string }[][], opts: { sort: "fixed" | "auto"; executeTask: boolean }) {
+    return this.post("/api/robot/delivery/task", { robotId, type: "new", deliverySort: opts.sort, executeTask: opts.executeTask, trays: trays.map((ds) => ({ destinations: ds })) });
+  }
+  call(robotId: string, destination: { name: string; type: string }) {
+    return this.post("/api/robot/call", { robotId, destination });
+  }
+  cancelCall(robotId: string, destination: { name: string; type: string }) {
+    return this.post("/api/robot/cancel/call", { robotId, destination });
+  }
+}
+
+/** 문서의 오류 코드(호출 계열) */
+export const AGENT_COMMAND_FAIL: Record<string, string> = {
+  ...AGENT_CODES,
+  "20004": "호출기 오류",
+  "20006": "호출 취소 실패",
+  "20007": "호출 실패",
+  "20008": "호출 실패 — 목적지가 지도에 없음",
+  "20009": "호출 실패 — 로봇의 호출 기능이 꺼져 있음",
+  "20010": "호출 실패 — 다른 호출기가 이미 다른 지점으로 호출함",
+};
