@@ -1,3 +1,4 @@
+import { sendAlimtalk, solapiConfig } from "./solapi";
 import type { Incident, NotificationLog, NotificationRecipient, NotificationSetting, NotifyKind } from "@/lib/domain/types";
 import { SEVERITY_LABEL, SEVERITY_ORDER } from "@/lib/domain/status";
 import { formatDateTime, localHourMinute, minutesBetween } from "@/lib/util/time";
@@ -31,6 +32,8 @@ export interface Message {
   attachments?: EmailAttachment[];
   /** 푸시 딥링크용(통보 종류·대상 ID·사업장). notifyRecipients 가 채운다. */
   meta?: { kind: NotifyKind; refId: string | null; siteId: string };
+  /** 카카오 알림톡(전화번호로 보낼 때): 검수된 템플릿 키와 변수. 없으면 알림톡을 보내지 않는다(템플릿 밖 문구는 발송 불가). */
+  alimtalk?: { template: string; variables: Record<string, string> };
 }
 
 /** 수신자 한 명에게 실제/모의 발송. */
@@ -50,7 +53,14 @@ export async function deliver(r: Pick<NotificationRecipient, "channel" | "addres
     const res = await sendPushToUser(r.address.slice(KAKAO_USER_PREFIX.length), { title: m.title, body: m.lines.slice(0, 2).join(" · "), data });
     return { status: res.ok ? "SENT" : "FAILED", reason: res.reason };
   }
-  if (!r.address.startsWith(KAKAO_USER_PREFIX)) return { status: "MOCK_SENT", reason: "모의 발송(전화번호 알림톡 — 발송대행사 선정 전)" };
+  if (!r.address.startsWith(KAKAO_USER_PREFIX)) {
+    // 전화번호 → 카카오 알림톡(솔라피). 설정 전이면 모의 발송.
+    const cfg = solapiConfig();
+    if (!cfg) return { status: "MOCK_SENT", reason: "모의 발송(알림톡 — 솔라피 설정 전)" };
+    if (!m.alimtalk) return { status: "SUPPRESSED", reason: "알림톡 템플릿이 없는 알림 종류(앱 푸시·메일·카카오 나에게 보내기로 받으세요)" };
+    const res = await sendAlimtalk(cfg, r.address, m.alimtalk.template, m.alimtalk.variables);
+    return { status: res.ok ? "SENT" : "FAILED", reason: res.reason };
+  }
   if (modes.KAKAO === "mock") return { status: "MOCK_SENT", reason: "모의 발송(카카오 연동 설정 전 — 실제 전송 없음)" };
   const text = [m.title, ...m.lines].join("\n");
   const res = await sendKakaoToUser(r.address.slice(KAKAO_USER_PREFIX.length), text, m.url);

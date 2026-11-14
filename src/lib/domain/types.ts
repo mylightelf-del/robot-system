@@ -497,6 +497,8 @@ export interface User {
   active: boolean;
   /** 본사 관리자는 비어 있으면 전체 사업장. */
   sitePermissions: SitePermission[];
+  /** 휴대폰 번호(숫자만). 카카오 알림톡 수신용. 없으면 null. */
+  phone?: string | null;
 }
 
 /** 통보 종류: 장애 발생·복구 / 미조치 확대 / 예정 작업 미실행 / 장기간 무실적 / 보고서 발행 */

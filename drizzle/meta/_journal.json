@@ -134,6 +134,13 @@
       "when": 1794588954092,
       "tag": "0018_delivery_orders",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1794623927579,
+      "tag": "0019_user_phone",
+      "breakpoints": true
     }
   ]
 }

@@ -533,6 +533,8 @@ export const users = pgTable(
     lockedUntil: isoTimestamp(),
     lastLoginAt: isoTimestamp(),
     createdAt: isoTimestamp().notNull(),
+    /** 휴대폰 번호(숫자만, 카카오 알림톡 수신용). 직원 본인이 내 계정에서 입력. */
+    phone: text(),
   },
   (t) => [uniqueIndex("users_email_key").on(t.email), uniqueIndex("users_invite_token_key").on(t.inviteToken)],
 );

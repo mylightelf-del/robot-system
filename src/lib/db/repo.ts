@@ -82,7 +82,7 @@ export async function getUser(id: string, db: DbLike = getDb()): Promise<User | 
   const u = await db.query.users.findFirst({ where: eq(schema.users.id, id) });
   if (!u) return undefined;
   const perms = await db.select().from(schema.sitePermissions).where(eq(schema.sitePermissions.userId, id));
-  return { id: u.id, name: u.name, email: u.email, role: u.role, active: u.active, sitePermissions: perms.map((p) => ({ siteId: p.siteId, allowedCommands: p.allowedCommands })) };
+  return { id: u.id, name: u.name, email: u.email, role: u.role, active: u.active, phone: u.phone ?? null, sitePermissions: perms.map((p) => ({ siteId: p.siteId, allowedCommands: p.allowedCommands })) };
 }
 
 export async function listUsers(db: DbLike = getDb()): Promise<User[]> {
@@ -94,6 +94,7 @@ export async function listUsers(db: DbLike = getDb()): Promise<User[]> {
     email: u.email,
     role: u.role,
     active: u.active,
+    phone: u.phone ?? null,
     sitePermissions: perms.filter((p) => p.userId === u.id).map((p) => ({ siteId: p.siteId, allowedCommands: p.allowedCommands })),
   }));
 }

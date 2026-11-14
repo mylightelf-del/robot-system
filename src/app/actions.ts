@@ -566,3 +566,11 @@ export async function cancelDeliveryCallAction(robotId: string, destination: str
     return { message: `${destination} 호출 취소 접수(${r.message}).` };
   });
 }
+export async function setMyPhoneAction(phone: string): Promise<ActionResult> {
+  return run(async () => {
+    const { setMyPhone } = await import("@/lib/services/notify");
+    const p = await setMyPhone(await getCurrentUser(), phone);
+    revalidatePath("/account");
+    return { message: p ? "휴대폰 번호를 저장했습니다(카카오 알림톡 수신)." : "휴대폰 번호를 지웠습니다." };
+  });
+}

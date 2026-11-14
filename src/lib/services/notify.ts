@@ -152,3 +152,14 @@ export async function unsubscribeMe(user: User, recipientId: string): Promise<vo
   await getDb().delete(schema.notificationRecipients).where(eq(schema.notificationRecipients.id, recipientId));
   await audit(user, { siteId: mine.siteId, robotId: null, action: "NOTIFY:UNSUBSCRIBE_SELF", params: { recipientId, channel: mine.channel }, result: "OK", detail: null, vendorTraceId: null });
 }
+
+/** 내 휴대폰 번호(카카오 알림톡 수신용). 빈 값이면 지운다. */
+export async function setMyPhone(user: User, raw: string): Promise<string | null> {
+  const { normalizePhone } = await import("@/lib/notify/solapi");
+  const trimmed = raw.trim();
+  const phone = trimmed ? normalizePhone(trimmed) : null;
+  if (trimmed && !phone) throw new ValidationError("휴대폰 번호 형식을 확인하세요(예: 010-1234-5678).");
+  await getDb().update(schema.users).set({ phone }).where(eq(schema.users.id, user.id));
+  await audit(user, { siteId: null, robotId: null, action: "ACCOUNT:PHONE", params: { set: !!phone }, result: "OK", detail: null, vendorTraceId: null });
+  return phone;
+}
