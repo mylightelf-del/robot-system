@@ -531,3 +531,153 @@ export async function listDeliveryOrders(user: User, robotIds: string[]) {
   if (!robotIds.length) return [];
   return getDb().select().from(schema.deliveryOrders).where(inArray(schema.deliveryOrders.robotId, robotIds)).orderBy(desc(schema.deliveryOrders.requestedAt)).limit(30);
 }
+
+// ---------------------------------------------------------------- 연결 상태·통계·즐겨찾기(3차)
+
+/** 동기화 결과를 vendor_sync_state 에 남긴다(id PUDU:delivery-<작업>) — 고급 설정 동기화 표와 배송 화면 연결 상태에 쓴다. */
+export async function recordDeliverySync(r: DeliverySyncResult): Promise<void> {
+  const now = nowIso();
+  const id = `PUDU:delivery-${r.job}`;
+  const ok = { lastRunAt: now, lastOkAt: now, lastError: null, stats: { detail: r.detail } };
+  const bad = { lastRunAt: now, lastError: r.detail };
+  await getDb()
+    .insert(schema.vendorSyncState)
+    .values({ id, vendor: "PUDU", job: `delivery-${r.job}`, ...(r.ok ? ok : { ...bad, lastOkAt: null }) })
+    .onConflictDoUpdate({ target: schema.vendorSyncState.id, set: r.ok ? ok : bad });
+}
+
+/** 배송 연결 상태: 에이전트(목록 조회) → 로봇 응답(상태 조회) → 알림 수신. 어디서 막혔는지 화면에서 바로 보이게. */
+export async function getDeliveryHealth(user: User) {
+  assertStaff(user);
+  const db = getDb();
+  const sync = await db.select().from(schema.vendorSyncState).where(inArray(schema.vendorSyncState.id, ["PUDU:delivery-catalog", "PUDU:delivery-state"]));
+  const [ev] = await db
+    .select({ last: sql<string | null>`max(${schema.deliveryEvents.receivedAt})`, day: sql<number>`count(*) filter (where ${schema.deliveryEvents.receivedAt} > now() - interval '24 hours')::int`, total: sql<number>`count(*)::int` })
+    .from(schema.deliveryEvents);
+  const pick = (job: string) => sync.find((s) => s.id === `PUDU:delivery-${job}`) ?? null;
+  const robots = await db.select({ id: schema.deliveryRobots.id, name: schema.deliveryRobots.name, lastSeenAt: schema.deliveryRobots.lastSeenAt }).from(schema.deliveryRobots);
+  return {
+    mode: agentMode(),
+    catalog: pick("catalog"),
+    state: pick("state"),
+    lastEventAt: ev?.last ? new Date(ev.last).toISOString() : null,
+    events24h: ev?.day ?? 0,
+    eventsTotal: ev?.total ?? 0,
+    robots,
+  };
+}
+
+/** 배송 통계(최근 N일, 사업장 시간대 기준 날짜·시간). 구간(트레이·목적지) 단위. */
+export async function getDeliveryStats(user: User, opts: { siteId?: string; days?: number } = {}) {
+  assertStaff(user);
+  const db = getDb();
+  const days = Math.min(90, Math.max(7, opts.days ?? 30));
+  const ids = await accessibleSiteIds(user, db);
+  const admin = user.role === "HQ_ADMIN";
+  const robots = (await db.select().from(schema.deliveryRobots)).filter((r) => (r.siteId ? ids.includes(r.siteId) : admin) && (!opts.siteId || r.siteId === opts.siteId));
+  const since = new Date(Date.now() - days * 86400_000).toISOString();
+  const legs = robots.length ? await db.select().from(schema.deliveryLegs).where(and(inArray(schema.deliveryLegs.robotId, robots.map((r) => r.id)), gte(schema.deliveryLegs.firstSeenAt, since))) : [];
+  const tz = "Asia/Seoul";
+  const local = (iso: string) => new Date(new Date(iso).getTime() + 9 * 3600_000).toISOString(); // Asia/Seoul 고정(운영 사업장 모두 서울)
+  const byDay = new Map<string, number>();
+  const byHour = Array.from({ length: 24 }, () => 0);
+  const byDest = new Map<string, { count: number; waits: number[]; travels: number[]; cancels: number }>();
+  const waits: number[] = [];
+  const travels: number[] = [];
+  let completed = 0;
+  let cancelled = 0;
+  const completeTypes: Record<string, number> = {};
+  for (const l of legs) {
+    const t = local(l.firstSeenAt);
+    byDay.set(t.slice(0, 10), (byDay.get(t.slice(0, 10)) ?? 0) + 1);
+    byHour[Number(t.slice(11, 13))] += 1;
+    const d = byDest.get(l.destination) ?? { count: 0, waits: [], travels: [], cancels: 0 };
+    d.count += 1;
+    if (l.arrivedAt && l.completedAt) {
+      const w = (new Date(l.completedAt).getTime() - new Date(l.arrivedAt).getTime()) / 60000;
+      if (w >= 0) {
+        d.waits.push(w);
+        waits.push(w);
+      }
+    }
+    if (l.onTheWayAt && l.arrivedAt) {
+      const tr = (new Date(l.arrivedAt).getTime() - new Date(l.onTheWayAt).getTime()) / 60000;
+      if (tr >= 0) {
+        d.travels.push(tr);
+        travels.push(tr);
+      }
+    }
+    if (l.completedAt) {
+      completed += 1;
+      if (l.completeType) completeTypes[l.completeType] = (completeTypes[l.completeType] ?? 0) + 1;
+    }
+    if (l.cancelledAt) {
+      cancelled += 1;
+      d.cancels += 1;
+    }
+    byDest.set(l.destination, d);
+  }
+  const avg = (a: number[]) => (a.length ? Math.round((a.reduce((s, x) => s + x, 0) / a.length) * 10) / 10 : null);
+  const dayKeys: string[] = [];
+  for (let i = days - 1; i >= 0; i--) dayKeys.push(local(new Date(Date.now() - i * 86400_000).toISOString()).slice(0, 10));
+  return {
+    days,
+    tz,
+    total: legs.length,
+    completed,
+    cancelled,
+    avgWaitMin: avg(waits),
+    avgTravelMin: avg(travels),
+    daily: dayKeys.map((k) => ({ date: k, count: byDay.get(k) ?? 0 })),
+    hourly: byHour,
+    destinations: Array.from(byDest.entries())
+      .map(([destination, v]) => ({ destination, count: v.count, avgWaitMin: avg(v.waits), avgTravelMin: avg(v.travels), cancels: v.cancels }))
+      .sort((a, b) => b.count - a.count),
+    completeTypes,
+  };
+}
+
+async function assertPresetSite(user: User, siteId: string) {
+  assertStaff(user);
+  if (user.role === "HQ_ADMIN") return;
+  if (user.role === "SITE_MANAGER" && (await accessibleSiteIds(user)).includes(siteId)) return;
+  throw new ForbiddenError("이 사업장의 즐겨찾기를 바꿀 권한이 없습니다.");
+}
+
+export async function listDeliveryPresets(user: User, siteIds: string[]) {
+  assertStaff(user);
+  if (!siteIds.length) return [];
+  return getDb().select().from(schema.deliveryPresets).where(inArray(schema.deliveryPresets.siteId, siteIds)).orderBy(schema.deliveryPresets.name);
+}
+
+export async function saveDeliveryPreset(user: User, input: { siteId: string; name: string; trays: { destination: string; recipientUserIds?: string[] }[]; sort?: "fixed" | "auto"; executeTask?: boolean }) {
+  await assertPresetSite(user, input.siteId);
+  const name = input.name.trim();
+  if (!name) throw new ValidationError("즐겨찾기 이름을 입력하세요.");
+  const trays = input.trays.filter((t) => t.destination.trim()).map((t) => ({ destination: t.destination.trim(), recipientUserIds: Array.from(new Set(t.recipientUserIds ?? [])) }));
+  if (!trays.length) throw new ValidationError("목적지를 하나 이상 고르세요.");
+  if (trays.length > 5) throw new ValidationError("트레이는 최대 5개입니다.");
+  const id = newId("dps");
+  await getDb().insert(schema.deliveryPresets).values({ id, siteId: input.siteId, name, trays, sort: input.sort ?? "fixed", executeTask: input.executeTask ?? true, createdBy: user.id, createdAt: nowIso() });
+  await audit(user, { siteId: input.siteId, robotId: null, action: "DELIVERY:PRESET_SAVE", params: { name, destinations: trays.map((t) => t.destination) }, result: "OK", detail: null, vendorTraceId: null });
+  return { id };
+}
+
+export async function deleteDeliveryPreset(user: User, id: string) {
+  const db = getDb();
+  const p = await db.query.deliveryPresets.findFirst({ where: eq(schema.deliveryPresets.id, id) });
+  if (!p) return;
+  await assertPresetSite(user, p.siteId);
+  await db.delete(schema.deliveryPresets).where(eq(schema.deliveryPresets.id, id));
+  await audit(user, { siteId: p.siteId, robotId: null, action: "DELIVERY:PRESET_DELETE", params: { name: p.name }, result: "OK", detail: null, vendorTraceId: null });
+}
+
+/** 즐겨찾기로 보내기: 같은 사업장의 로봇에만. 지시 조건은 dispatchDelivery 와 같다. */
+export async function sendDeliveryPreset(user: User, presetId: string, robotId: string) {
+  const db = getDb();
+  const p = await db.query.deliveryPresets.findFirst({ where: eq(schema.deliveryPresets.id, presetId) });
+  if (!p) throw new NotFoundError("즐겨찾기를 찾을 수 없습니다.");
+  const robot = await db.query.deliveryRobots.findFirst({ where: eq(schema.deliveryRobots.id, robotId) });
+  if (!robot || robot.siteId !== p.siteId) throw new ValidationError("이 즐겨찾기는 같은 사업장의 배송로봇에만 쓸 수 있습니다.");
+  return dispatchDelivery(user, { robotId, trays: p.trays, sort: p.sort === "auto" ? "auto" : "fixed", executeTask: p.executeTask });
+}

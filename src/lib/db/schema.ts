@@ -813,3 +813,17 @@ export const deliveryOrders = pgTable(
   },
   (t) => [index("delivery_orders_robot_idx").on(t.robotId, t.requestedAt)],
 );
+
+/** 자주 쓰는 배송(즐겨찾기). 사업장 단위, 로봇을 고르지 않으면 그 사업장의 어떤 배송로봇에도 쓸 수 있다. */
+export const deliveryPresets = pgTable("delivery_presets", {
+  id: text().primaryKey(),
+  siteId: text()
+    .notNull()
+    .references(() => sites.id),
+  name: text().notNull(),
+  trays: jsonb().$type<{ destination: string; recipientUserIds: string[] }[]>().notNull().default([]),
+  sort: text().notNull().default("fixed"),
+  executeTask: boolean().notNull().default(true),
+  createdBy: text().notNull(),
+  createdAt: isoTimestamp().notNull(),
+});

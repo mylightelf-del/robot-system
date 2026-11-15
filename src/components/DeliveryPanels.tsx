@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { callDeliveryRobotAction, cancelDeliveryCallAction, deleteDeliveryRecipientsAction, deliverySyncNowAction, dispatchDeliveryAction, saveDeliveryRecipientsAction, setDeliveryRobotSiteAction } from "@/app/actions";
+import { callDeliveryRobotAction, cancelDeliveryCallAction, deleteDeliveryPresetAction, deleteDeliveryRecipientsAction, deliverySyncNowAction, dispatchDeliveryAction, saveDeliveryPresetAction, saveDeliveryRecipientsAction, sendDeliveryPresetAction, setDeliveryRobotSiteAction } from "@/app/actions";
 import { btn, ResultLine, useAction } from "./ActionButton";
 
 type Channel = "PUSH" | "EMAIL" | "KAKAO";
@@ -118,7 +118,9 @@ function RecipientRow({ siteId, users, initial, suggestions }: { siteId: string;
 }
 
 /** 배송 보내기·호출(Wide Bot 에서 지시). 트레이마다 목적지와 이 배송의 수신자(선택)를 고른다. */
-export function DispatchPanel({ robots, users }: { robots: { id: string; name: string; destinations: string[]; busy: boolean }[]; users: { id: string; name: string }[] }) {
+type Preset = { id: string; siteId: string; name: string; trays: { destination: string; recipientUserIds: string[] }[]; sort: string; executeTask: boolean };
+
+export function DispatchPanel({ robots, users, presets = [] }: { robots: { id: string; name: string; siteId: string; destinations: string[]; busy: boolean }[]; users: { id: string; name: string }[]; presets?: Preset[] }) {
   const { pending, result, run } = useAction();
   const [robotId, setRobotId] = useState(robots[0]?.id ?? "");
   const robot = robots.find((r) => r.id === robotId);
@@ -127,6 +129,9 @@ export function DispatchPanel({ robots, users }: { robots: { id: string; name: s
   const [sort, setSort] = useState<"fixed" | "auto">("fixed");
   const [executeTask, setExecuteTask] = useState(true);
   const [callDest, setCallDest] = useState("");
+  const [presetName, setPresetName] = useState("");
+  const myPresets = presets.filter((p) => p.siteId === robot?.siteId);
+  const userName = (id: string) => users.find((u) => u.id === id)?.name ?? id;
   const setTray = (i: number, patch: Partial<{ destination: string; recipientUserIds: string[] }>) => setTrays((ts) => ts.map((t, k) => (k === i ? { ...t, ...patch } : t)));
   if (!robots.length) return <p className="text-sm text-gray-500">지시할 수 있는 배송로봇이 없습니다(사업장 지정·권한 확인).</p>;
   return (
@@ -139,6 +144,21 @@ export function DispatchPanel({ robots, users }: { robots: { id: string; name: s
           ))}
         </select>
       </div>
+      {myPresets.length > 0 && (
+        <div className="rounded-lg border p-2 space-y-1">
+          <div className="font-medium text-xs">자주 쓰는 배송</div>
+          {myPresets.map((p) => (
+            <div key={p.id} className="flex flex-wrap items-center gap-2 text-xs">
+              <b>{p.name}</b>
+              <span className="text-gray-600">{p.trays.map((t) => `${t.destination}${t.recipientUserIds.length ? `(${t.recipientUserIds.map(userName).join("·")})` : ""}`).join(" → ")}{p.executeTask ? "" : " · 출발은 현장에서"}</span>
+              <span className="ml-auto flex gap-1">
+                <button type="button" className={btn.primary} disabled={pending} onClick={() => { if (confirm(`'${p.name}' 으로 ${robot?.name} 에 배송을 보냅니다. 물건을 실었는지 확인하셨나요?`)) run(() => sendDeliveryPresetAction(p.id, robotId)); }}>보내기</button>
+                <button type="button" className={btn.small} disabled={pending} onClick={() => { if (confirm(`즐겨찾기 '${p.name}' 을(를) 삭제할까요?`)) run(() => deleteDeliveryPresetAction(p.id)); }}>삭제</button>
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
       <div className="rounded-lg border p-2 space-y-2">
         <div className="font-medium text-xs">배송 보내기</div>
         {trays.map((t, i) => (
@@ -180,6 +200,10 @@ export function DispatchPanel({ robots, users }: { robots: { id: string; name: s
           >
             배송 보내기
           </button>
+        </div>
+        <div className="flex flex-wrap items-center gap-2 border-t pt-2">
+          <input className="border rounded px-2 py-1 text-xs w-40" placeholder="즐겨찾기 이름(예: 오전 우편)" value={presetName} onChange={(e) => setPresetName(e.target.value)} />
+          <button type="button" className={btn.small} disabled={pending || !presetName.trim() || !trays.some((t) => t.destination) || !robot} onClick={() => run(async () => { const r = await saveDeliveryPresetAction({ siteId: robot!.siteId, name: presetName, trays: trays.filter((t) => t.destination), sort, executeTask }); if (r.ok) setPresetName(""); return r; })}>지금 내용을 즐겨찾기로 저장</button>
         </div>
         <p className="text-xs text-gray-500">받는 사람을 고르면 도착 알림이 그 사람에게 갑니다(안 고르면 목적지 수신자). 로봇이 배송 중이면 보낼 수 없습니다.</p>
       </div>

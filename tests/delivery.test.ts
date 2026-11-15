@@ -2,7 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
 import { AgentClient } from "@/lib/delivery/agent";
 import { agentMockState, agentMockTransport, MOCK_DEVICE_ID, MOCK_ROBOT } from "@/lib/delivery/mock";
-import { callDeliveryRobot, checkStuckRobots, dispatchDelivery, getDeliveryView, ingestAgentNotify, processDeliveryEvents, saveDeliveryRecipients, sendDeliveryReminders, setDeliveryRobotSite, syncDeliveryCatalog, syncDeliveryState } from "@/lib/services/delivery";
+import { callDeliveryRobot, checkStuckRobots, deleteDeliveryPreset, dispatchDelivery, getDeliveryHealth, getDeliveryStats, getDeliveryView, listDeliveryPresets, recordDeliverySync, saveDeliveryPreset, sendDeliveryPreset, ingestAgentNotify, processDeliveryEvents, saveDeliveryRecipients, sendDeliveryReminders, setDeliveryRobotSite, syncDeliveryCatalog, syncDeliveryState } from "@/lib/services/delivery";
 import { POST as notifyPOST } from "@/app/api/webhooks/pudu-agent/route";
 import { getDb, resetAndSeed, schema, user } from "./helpers";
 
@@ -204,6 +204,55 @@ describe("배송 도착 알림(모의 에이전트)", () => {
       const logs = await db().select().from(schema.notificationLogs).where(eq(schema.notificationLogs.kind, "DELIVERY"));
       expect(logs.filter((l) => l.refId?.includes(":STUCK:")).length).toBe(1);
       expect(logs.filter((l) => l.refId?.includes(":ERROR:")).length).toBe(1);
+    });
+  });
+
+  describe("연결 상태·통계·즐겨찾기", () => {
+    it("연결 상태: 목록 성공·상태 실패를 기록하고 단계별로 보여 준다", async () => {
+      const hq = await user("u-hq");
+      await recordDeliverySync({ job: "catalog", ok: true, detail: "그룹 1 · 로봇 1" });
+      await recordDeliverySync({ job: "state", ok: false, detail: "code 10004 timeout no resp" });
+      const h = await getDeliveryHealth(hq);
+      expect(h.catalog?.lastError).toBeNull();
+      expect(h.state?.lastError).toContain("10004");
+      expect(h.state?.lastOkAt).toBeNull();
+      expect(h.eventsTotal).toBe(0);
+      await recordDeliverySync({ job: "state", ok: true, detail: "로봇 1대 중 응답 1" });
+      expect((await getDeliveryHealth(hq)).state?.lastError).toBeNull();
+      await expect(getDeliveryHealth(await user("u-cust-1"))).rejects.toThrow();
+    });
+
+    it("통계: 건수·완료·취소·평균 이동/수령 대기·목적지별", async () => {
+      const hq = await user("u-hq");
+      await syncDeliveryCatalog(client());
+      await setDeliveryRobotSite(hq, "DR-MOCKFLASH01", "site-01");
+      const t = Date.now() - 3 * 3600_000;
+      for (const [st, dt] of [["OnTheWay", 0], ["Arrived", 4 * 60_000], ["Complete", 6 * 60_000]] as const) await ingestAgentNotify(deliveryMsg(st, t + dt, "2601"));
+      for (const [st, dt] of [["OnTheWay", 10 * 60_000], ["Cancel", 11 * 60_000]] as const) await ingestAgentNotify(deliveryMsg(st, t + dt, "2602"));
+      await processDeliveryEvents();
+      const s = await getDeliveryStats(hq, { days: 7 });
+      expect(s).toMatchObject({ total: 2, completed: 1, cancelled: 1, avgTravelMin: 4, avgWaitMin: 2 });
+      expect(s.destinations.find((d) => d.destination === "2602")?.cancels).toBe(1);
+      expect(s.daily.length).toBe(7);
+      expect(s.hourly.reduce((a, b) => a + b, 0)).toBe(2);
+    });
+
+    it("즐겨찾기: 저장 → 같은 사업장 로봇으로 보내기(지시 조건 동일) → 삭제, 권한 없는 사람은 못 바꿈", async () => {
+      const hq = await user("u-hq");
+      await syncDeliveryCatalog(client());
+      await syncDeliveryState(client());
+      await setDeliveryRobotSite(hq, "DR-MOCKFLASH01", "site-01");
+      agentMockState.commands.length = 0;
+      const { id } = await saveDeliveryPreset(hq, { siteId: "site-01", name: "오전 우편", trays: [{ destination: "2601", recipientUserIds: ["u-site-a"] }, { destination: "2603" }] });
+      expect((await listDeliveryPresets(hq, ["site-01"])).map((p) => p.name)).toEqual(["오전 우편"]);
+      await expect(saveDeliveryPreset(await user("u-site-b"), { siteId: "site-01", name: "x", trays: [{ destination: "2601" }] })).rejects.toThrow(/권한/);
+      await sendDeliveryPreset(hq, id, "DR-MOCKFLASH01");
+      const body = agentMockState.commands[0].body as { trays: { destinations: { destination: string }[] }[] };
+      expect(body.trays.map((t) => t.destinations[0].destination)).toEqual(["2601", "2603"]);
+      const order = (await db().select().from(schema.deliveryOrders))[0];
+      expect(order.trays[0].recipientUserIds).toEqual(["u-site-a"]);
+      await deleteDeliveryPreset(hq, id);
+      expect(await listDeliveryPresets(hq, ["site-01"])).toEqual([]);
     });
   });
 });

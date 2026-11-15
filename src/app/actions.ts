@@ -540,6 +540,8 @@ export async function deliverySyncNowAction(): Promise<ActionResult> {
     const client = deliverySvc.createAgentClient();
     const a = await deliverySvc.syncDeliveryCatalog(client);
     const b = await deliverySvc.syncDeliveryState(client);
+    await deliverySvc.recordDeliverySync(a);
+    await deliverySvc.recordDeliverySync(b);
     revalidatePath("/delivery");
     if (!a.ok || !b.ok) throw new AppError(`${a.ok ? "" : `목록: ${a.detail} `}${b.ok ? "" : `상태: ${b.detail}`}`, "UNSUPPORTED");
     return { message: `목록: ${a.detail} / 상태: ${b.detail}` };
@@ -572,5 +574,26 @@ export async function setMyPhoneAction(phone: string): Promise<ActionResult> {
     const p = await setMyPhone(await getCurrentUser(), phone);
     revalidatePath("/account");
     return { message: p ? "휴대폰 번호를 저장했습니다(카카오 알림톡 수신)." : "휴대폰 번호를 지웠습니다." };
+  });
+}
+export async function saveDeliveryPresetAction(input: { siteId: string; name: string; trays: { destination: string; recipientUserIds?: string[] }[]; sort?: "fixed" | "auto"; executeTask?: boolean }): Promise<ActionResult> {
+  return run(async () => {
+    await deliverySvc.saveDeliveryPreset(await getCurrentUser(), input);
+    revalidatePath("/delivery");
+    return { message: `즐겨찾기 '${input.name}' 을(를) 저장했습니다.` };
+  });
+}
+export async function deleteDeliveryPresetAction(id: string): Promise<ActionResult> {
+  return run(async () => {
+    await deliverySvc.deleteDeliveryPreset(await getCurrentUser(), id);
+    revalidatePath("/delivery");
+    return { message: "즐겨찾기를 삭제했습니다." };
+  });
+}
+export async function sendDeliveryPresetAction(presetId: string, robotId: string): Promise<ActionResult> {
+  return run(async () => {
+    const r = await deliverySvc.sendDeliveryPreset(await getCurrentUser(), presetId, robotId);
+    revalidatePath("/delivery");
+    return { message: `즐겨찾기로 배송 지시 접수(${r.message}).` };
   });
 }

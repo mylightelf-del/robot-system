@@ -1,5 +1,5 @@
 import { getCurrentUser } from "@/lib/auth/session";
-import { getDeliveryView } from "@/lib/services/delivery";
+import { getDeliveryHealth, getDeliveryStats, getDeliveryView, listDeliveryPresets } from "@/lib/services/delivery";
 import { AppError } from "@/lib/util/errors";
 import { AccessDenied } from "@/components/AccessDenied";
 import { AutoRefresh } from "@/components/AutoRefresh";
@@ -22,6 +22,9 @@ export default async function DeliveryPage({ searchParams }: { searchParams: Pro
   } catch (e) {
     return <AccessDenied reason={e instanceof AppError ? e.message : "접근할 수 없습니다."} />;
   }
+  const health = await getDeliveryHealth(user);
+  const stats = await getDeliveryStats(user, { siteId: sp.site || undefined, days: 30 });
+  const presets = await listDeliveryPresets(user, v.sites.map((s) => s.id));
   const now = nowIso();
   const siteName = (id: string | null) => (id ? (v.sites.find((s) => s.id === id)?.name ?? id) : "(미지정)");
   const robotName = (id: string) => v.robots.find((r) => r.id === id)?.name ?? id;
@@ -38,6 +41,29 @@ export default async function DeliveryPage({ searchParams }: { searchParams: Pro
       <PageTitle title="배송" subtitle="배송로봇 상태 · 배송 보내기 · 배송 기록 · 도착 알림" right={v.admin ? <DeliverySyncButton /> : null} />
       {v.mode === "unconfigured" && <div className="mb-3"><Notice tone="warn">배송로봇 에이전트 연동이 꺼져 있습니다(PUDU_AGENT_MODE). 기록은 볼 수 있지만 새 도착 알림은 오지 않습니다.</Notice></div>}
       {v.mode === "mock" && <div className="mb-3"><Notice>모의(mock) 모드 — 에이전트 없이 시험 데이터로 동작합니다. 알림은 채널 설정에 따라 모의 발송될 수 있습니다.</Notice></div>}
+
+      {v.admin && v.mode !== "unconfigured" && (() => {
+        const stepOk = (s: { lastOkAt: string | null; lastError: string | null } | null) => !!s && !!s.lastOkAt && !s.lastError;
+        const steps = [
+          { label: "에이전트·PUDU 클라우드", ok: stepOk(health.catalog), detail: health.catalog ? (health.catalog.lastError ?? `정상 · ${relativeFromNow(health.catalog.lastOkAt, now)}`) : "아직 실행 기록 없음" },
+          { label: "로봇 응답(상태 조회)", ok: stepOk(health.state), detail: health.state ? (health.state.lastError ? `${health.state.lastError}${health.state.lastOkAt ? ` · 마지막 성공 ${relativeFromNow(health.state.lastOkAt, now)}` : " · 한 번도 성공 못 함"}` : `정상 · ${relativeFromNow(health.state.lastOkAt, now)}`) : "아직 실행 기록 없음" },
+          { label: "알림 수신(에이전트 → Wide Bot)", ok: health.eventsTotal > 0, detail: health.lastEventAt ? `마지막 ${relativeFromNow(health.lastEventAt, now)} · 24시간 ${health.events24h}건 · 누적 ${health.eventsTotal}건` : "아직 받은 알림 없음(배송·이동이 있어야 옴)" },
+        ];
+        const allOk = steps.every((x) => x.ok);
+        return (
+          <Card title="연결 상태" className="mb-4" right={<span className={`text-xs rounded-full px-2 py-0.5 ${allOk ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-800"}`}>{allOk ? "정상" : "확인 필요"}</span>}>
+            <ol className="space-y-1 text-sm">
+              {steps.map((x, i) => (
+                <li key={x.label} className="flex gap-2">
+                  <span className={x.ok ? "text-emerald-600" : "text-amber-600"}>{x.ok ? "●" : "○"}</span>
+                  <span className="min-w-0"><b>{i + 1}. {x.label}</b> <span className="text-xs text-gray-600 break-all">{x.detail}</span></span>
+                </li>
+              ))}
+            </ol>
+            {!steps[1].ok && <p className="text-xs text-gray-500 mt-2">「로봇 응답」이 실패하면(10004 timeout) 로봇 전원·네트워크를 먼저 확인하고, 그래도 같으면 대리점에 장치의 API 권한을 확인합니다. 반복 확인은 1분마다 자동으로 합니다.</p>}
+          </Card>
+        );
+      })()}
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
         <Stat label="배송로봇" value={`${v.robots.length}대`} />
@@ -82,7 +108,7 @@ export default async function DeliveryPage({ searchParams }: { searchParams: Pro
                 <thead><tr><th>시작</th><th>로봇</th><th>목적지</th><th>상태</th><th>도착</th><th>완료</th><th>수령 대기</th><th>알림</th></tr></thead>
                 <tbody>
                   {v.legs.map((l) => {
-                    const wait = l.arrivedAt ? ((l.completedAt ? new Date(l.completedAt) : new Date(now)).getTime() - new Date(l.arrivedAt).getTime()) / 60000 : null;
+                    const wait = l.arrivedAt ? ((l.completedAt ? new Date(l.completedAt) : l.cancelledAt ? new Date(l.cancelledAt) : new Date(now)).getTime() - new Date(l.arrivedAt).getTime()) / 60000 : null;
                     return (
                       <tr key={l.id}>
                         <td className="whitespace-nowrap">{formatDateTime(l.firstSeenAt)}</td>
@@ -106,7 +132,7 @@ export default async function DeliveryPage({ searchParams }: { searchParams: Pro
 
       <div className="grid lg:grid-cols-3 gap-4 mt-4">
         <Card title="배송 보내기 · 호출" className="lg:col-span-2">
-          <DispatchPanel robots={v.dispatchable.map((r) => ({ id: r.id, name: r.name, destinations: r.destinations.map((d) => d.name), busy: (r.lastState as { robotState?: string } | null)?.robotState === "BUSY" }))} users={v.users.map((u) => ({ id: u.id, name: u.name }))} />
+          <DispatchPanel presets={presets.map((p) => ({ id: p.id, siteId: p.siteId, name: p.name, trays: p.trays, sort: p.sort, executeTask: p.executeTask }))} robots={v.dispatchable.map((r) => ({ id: r.id, name: r.name, siteId: r.siteId!, destinations: r.destinations.map((d) => d.name), busy: (r.lastState as { robotState?: string } | null)?.robotState === "BUSY" }))} users={v.users.map((u) => ({ id: u.id, name: u.name }))} />
           {v.robots.some((r) => r.siteId && !v.dispatchable.some((x) => x.id === r.id)) && <p className="text-xs text-amber-700 mt-2">사업장의 원격 제어가 꺼져 있으면 지시할 수 없습니다(관리 설정 → 원격 제어).</p>}
         </Card>
         <Card title="최근 지시">
@@ -129,6 +155,48 @@ export default async function DeliveryPage({ searchParams }: { searchParams: Pro
           )}
         </Card>
       </div>
+
+      <Card title={`배송 통계 (최근 ${stats.days}일)`} className="mt-4">
+        {stats.total === 0 ? (
+          <Empty>통계를 낼 배송 기록이 없습니다.</Empty>
+        ) : (
+          <div className="grid lg:grid-cols-3 gap-4 text-sm">
+            <div className="space-y-1">
+              <div>배송 구간 <b>{stats.total}</b>건 · 완료 {stats.completed} · 취소 {stats.cancelled}</div>
+              <div>평균 이동 시간 <b>{stats.avgTravelMin === null ? "없음" : `${stats.avgTravelMin}분`}</b> · 평균 수령 대기 <b>{stats.avgWaitMin === null ? "없음" : `${stats.avgWaitMin}분`}</b></div>
+              <div className="text-xs text-gray-600">완료 방식: {Object.entries(stats.completeTypes).map(([k, n]) => `${COMPLETE_KO[k] ?? k} ${n}`).join(" · ") || "없음"}</div>
+              <div className="mt-2 text-xs font-medium">시간대별</div>
+              <div className="flex items-end gap-px h-16">
+                {stats.hourly.map((n, h) => {
+                  const max = Math.max(1, ...stats.hourly);
+                  return <div key={h} title={`${h}시 ${n}건`} className="flex-1 bg-blue-400/80 rounded-t" style={{ height: `${(n / max) * 100}%`, minHeight: n ? 2 : 0 }} />;
+                })}
+              </div>
+              <div className="flex justify-between text-[10px] text-gray-500"><span>0시</span><span>12시</span><span>23시</span></div>
+            </div>
+            <div>
+              <div className="text-xs font-medium mb-1">일별</div>
+              <div className="flex items-end gap-px h-24">
+                {stats.daily.map((d) => {
+                  const max = Math.max(1, ...stats.daily.map((x) => x.count));
+                  return <div key={d.date} title={`${d.date} ${d.count}건`} className="flex-1 bg-emerald-400/80 rounded-t" style={{ height: `${(d.count / max) * 100}%`, minHeight: d.count ? 2 : 0 }} />;
+                })}
+              </div>
+              <div className="flex justify-between text-[10px] text-gray-500"><span>{stats.daily[0]?.date.slice(5)}</span><span>{stats.daily[stats.daily.length - 1]?.date.slice(5)}</span></div>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="data">
+                <thead><tr><th>목적지</th><th className="text-right">건</th><th className="text-right">이동</th><th className="text-right">수령 대기</th><th className="text-right">취소</th></tr></thead>
+                <tbody>
+                  {stats.destinations.slice(0, 15).map((d) => (
+                    <tr key={d.destination}><td>{d.destination}</td><td className="text-right">{d.count}</td><td className="text-right">{d.avgTravelMin === null ? "-" : `${d.avgTravelMin}분`}</td><td className="text-right">{d.avgWaitMin === null ? "-" : `${d.avgWaitMin}분`}</td><td className="text-right">{d.cancels || "-"}</td></tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+      </Card>
 
       {v.admin ? (
         <Card title="도착 알림 수신자 (목적지별)" className="mt-4">
