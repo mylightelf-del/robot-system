@@ -39,15 +39,26 @@ export default async function DeliveryPage({ searchParams }: { searchParams: Pro
     <>
       <AutoRefresh seconds={20} />
       <PageTitle title="배송" subtitle="배송로봇 상태 · 배송 보내기 · 배송 기록 · 도착 알림" right={v.admin ? <DeliverySyncButton /> : null} />
-      {v.mode === "unconfigured" && <div className="mb-3"><Notice tone="warn">배송로봇 에이전트 연동이 꺼져 있습니다(PUDU_AGENT_MODE). 기록은 볼 수 있지만 새 도착 알림은 오지 않습니다.</Notice></div>}
+      {v.mode === "unconfigured" && !health.op.enabled && <div className="mb-3"><Notice tone="warn">배송로봇 연동이 꺼져 있습니다(구형 PUDU_AGENT_MODE · 신형 PUDU_DELIVERY_SHOP_IDS). 기록은 볼 수 있지만 새 도착 알림은 오지 않습니다.</Notice></div>}
       {v.mode === "mock" && <div className="mb-3"><Notice>모의(mock) 모드 — 에이전트 없이 시험 데이터로 동작합니다. 알림은 채널 설정에 따라 모의 발송될 수 있습니다.</Notice></div>}
 
-      {v.admin && v.mode !== "unconfigured" && (() => {
+      {v.admin && (v.mode !== "unconfigured" || health.op.enabled) && (() => {
         const stepOk = (s: { lastOkAt: string | null; lastError: string | null } | null) => !!s && !!s.lastOkAt && !s.lastError;
-        const steps = [
+        const syncDetail = (s: { lastOkAt: string | null; lastError: string | null } | null) => (s ? (s.lastError ? `${s.lastError}${s.lastOkAt ? ` · 마지막 성공 ${relativeFromNow(s.lastOkAt, now)}` : ""}` : `정상 · ${relativeFromNow(s.lastOkAt, now)}`) : "아직 실행 기록 없음");
+        const opSteps = health.op.enabled
+          ? [
+              { label: "신형: 클라우드 로봇 목록·지도", ok: stepOk(health.op.catalog), detail: `매장 ${health.op.shops}곳 · ${syncDetail(health.op.catalog)}` },
+              { label: "신형: 로봇 상태(클라우드)", ok: stepOk(health.op.state), detail: syncDetail(health.op.state) },
+            ]
+          : [];
+        const agentSteps = v.mode === "unconfigured" ? [] : [
           { label: "에이전트·PUDU 클라우드", ok: stepOk(health.catalog), detail: health.catalog ? (health.catalog.lastError ?? `정상 · ${relativeFromNow(health.catalog.lastOkAt, now)}`) : "아직 실행 기록 없음" },
           { label: "로봇 응답(상태 조회)", ok: stepOk(health.state), detail: health.state ? (health.state.lastError ? `${health.state.lastError}${health.state.lastOkAt ? ` · 마지막 성공 ${relativeFromNow(health.state.lastOkAt, now)}` : " · 한 번도 성공 못 함"}` : `정상 · ${relativeFromNow(health.state.lastOkAt, now)}`) : "아직 실행 기록 없음" },
-          { label: "알림 수신(에이전트 → Wide Bot)", ok: health.eventsTotal > 0, detail: health.lastEventAt ? `마지막 ${relativeFromNow(health.lastEventAt, now)} · 24시간 ${health.events24h}건 · 누적 ${health.eventsTotal}건` : "아직 받은 알림 없음(배송·이동이 있어야 옴)" },
+        ];
+        const steps = [
+          ...agentSteps,
+          ...opSteps,
+          { label: "알림 수신(로봇 → Wide Bot)", ok: health.eventsTotal > 0, detail: health.lastEventAt ? `마지막 ${relativeFromNow(health.lastEventAt, now)} · 24시간 ${health.events24h}건 · 누적 ${health.eventsTotal}건` : "아직 받은 알림 없음(배송·이동이 있어야 옴)" },
         ];
         const allOk = steps.every((x) => x.ok);
         return (
@@ -60,7 +71,7 @@ export default async function DeliveryPage({ searchParams }: { searchParams: Pro
                 </li>
               ))}
             </ol>
-            {!steps[1].ok && <p className="text-xs text-gray-500 mt-2">「로봇 응답」이 실패하면(10004 timeout) 로봇 전원·네트워크를 먼저 확인하고, 그래도 같으면 대리점에 장치의 API 권한을 확인합니다. 반복 확인은 1분마다 자동으로 합니다.</p>}
+            {agentSteps.length > 1 && !agentSteps[1].ok && <p className="text-xs text-gray-500 mt-2">「로봇 응답」이 실패하면(10004 timeout) 로봇 전원·네트워크를 먼저 확인하고, 그래도 같으면 대리점에 장치의 API 권한을 확인합니다. 반복 확인은 1분마다 자동으로 합니다.</p>}
           </Card>
         );
       })()}
@@ -85,6 +96,7 @@ export default async function DeliveryPage({ searchParams }: { searchParams: Pro
                   <li key={r.id} className="py-2">
                     <div className="flex items-center gap-2">
                       <b>{r.name}</b>
+                      <span className="text-[10px] rounded border px-1 text-gray-500">{r.source === "openplatform" ? "신형·클라우드" : "구형·에이전트"}</span>
                       <span className={`text-xs rounded-full px-2 ${stale ? "bg-gray-100 text-gray-500" : s.robotState === "BUSY" ? "bg-blue-50 text-blue-700" : "bg-emerald-50 text-emerald-700"}`}>{stale ? "미수신" : s.robotState === "BUSY" ? "배송 중" : "대기"}</span>
                       {typeof s.robotPower === "number" && <span className="text-xs text-gray-600">배터리 {s.robotPower}%</span>}
                     </div>

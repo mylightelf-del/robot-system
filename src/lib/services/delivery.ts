@@ -11,6 +11,9 @@ import { newId } from "@/lib/util/random";
 import { formatTime, nowIso } from "@/lib/util/time";
 import { AgentClient, AgentCommander, AgentError, agentMode, httpTransport, isAgentNotify, type AgentNotify, type DeliveryTrayDestination } from "@/lib/delivery/agent";
 import { agentMockTransport, MOCK_DEVICE_ID } from "@/lib/delivery/mock";
+import { opDestinations, opSendDelivery, opStateFromStatus, opToAgentNotify, macToRobotId } from "@/lib/delivery/openplatform";
+import { createPuduApi } from "@/lib/vendors/pudu/puduAdapter";
+import type { PuduApi } from "@/lib/vendors/pudu/api";
 import { audit } from "./audit";
 
 /**
@@ -57,7 +60,7 @@ async function robotByAgentId(agentRobotId: string) {
   return getDb().query.deliveryRobots.findFirst({ where: eq(schema.deliveryRobots.agentRobotId, agentRobotId) });
 }
 
-async function ensureRobot(agentRobotId: string, patch: { name?: string; shopName?: string; groupId?: string; deviceId?: string }) {
+async function ensureRobot(agentRobotId: string, patch: { name?: string; shopName?: string; groupId?: string; deviceId?: string; sn?: string; shopId?: string; source?: "agent" | "openplatform" }) {
   const db = getDb();
   const existing = await robotByAgentId(agentRobotId);
   if (existing) {
@@ -66,10 +69,13 @@ async function ensureRobot(agentRobotId: string, patch: { name?: string; shopNam
     if (patch.shopName && patch.shopName !== existing.shopName) set.shopName = patch.shopName;
     if (patch.groupId && patch.groupId !== existing.groupId) set.groupId = patch.groupId;
     if (patch.deviceId && patch.deviceId !== existing.deviceId) set.deviceId = patch.deviceId;
+    if (patch.sn && patch.sn !== existing.sn) set.sn = patch.sn;
+    if (patch.shopId && patch.shopId !== existing.shopId) set.shopId = patch.shopId;
+    if (patch.source && patch.source !== existing.source) set.source = patch.source;
     if (Object.keys(set).length) await db.update(schema.deliveryRobots).set(set).where(eq(schema.deliveryRobots.id, existing.id));
     return { ...existing, ...set };
   }
-  const row = { id: `DR-${agentRobotId}`, agentRobotId, groupId: patch.groupId ?? "", deviceId: patch.deviceId ?? "", siteId: null, name: patch.name || agentRobotId, shopName: patch.shopName ?? "", active: true, lastState: null, lastSeenAt: null, destinations: [], createdAt: nowIso() };
+  const row = { id: `DR-${agentRobotId}`, agentRobotId, groupId: patch.groupId ?? "", deviceId: patch.deviceId ?? "", siteId: null, name: patch.name || agentRobotId, shopName: patch.shopName ?? "", source: patch.source ?? ("agent" as const), sn: patch.sn ?? null, shopId: patch.shopId ?? null, active: true, lastState: null, lastSeenAt: null, destinations: [], createdAt: nowIso() };
   await db.insert(schema.deliveryRobots).values(row).onConflictDoNothing();
   return row;
 }
@@ -122,11 +128,99 @@ export async function syncDeliveryState(client: AgentClient = createAgentClient(
   }
 }
 
+// ---------------------------------------------------------------- 신형 경로: PUDU 오픈플랫폼(docs/23 §8)
+
+/** 배송로봇을 찾을 매장(쉼표 구분). 대리점 키는 다른 고객사 매장도 보이므로 지정한 매장만 본다. */
+export function deliveryShopIds(): string[] {
+  return String(process.env.PUDU_DELIVERY_SHOP_IDS ?? "").split(",").map((x) => x.trim()).filter(Boolean);
+}
+
+export function openPlatformEnabled(): boolean {
+  return deliveryShopIds().length > 0 && !!process.env.PUDU_API_APP_KEY;
+}
+
+/** 지정 매장의 로봇 중 청소로봇으로 등록되지 않은 것을 배송로봇으로 등록·갱신하고, 쓰는 지도의 목적지를 읽는다(10분). */
+export async function syncOpenPlatformCatalog(api: PuduApi = createPuduApi(), shopIds: string[] = deliveryShopIds()): Promise<DeliverySyncResult> {
+  try {
+    const db = getDb();
+    const cleaning = new Set((await db.select({ sn: schema.robots.vendorRobotId }).from(schema.robots).where(eq(schema.robots.vendor, "PUDU"))).map((r) => r.sn));
+    let robots = 0;
+    let destinations = 0;
+    for (const shopId of shopIds) {
+      const page = await api.listRobots({ shop_id: shopId, limit: 100 });
+      for (const r of page.list ?? page.item ?? []) {
+        if (!r.sn || cleaning.has(r.sn)) continue;
+        const id = macToRobotId(r.mac);
+        if (!id) continue;
+        const row = await ensureRobot(id, { name: r.nickname || r.sn, shopName: r.shop_name ?? "", sn: r.sn, shopId: String(r.shop_id ?? shopId), source: "openplatform" });
+        robots += 1;
+        try {
+          const m = await opDestinations(api, r.sn);
+          if (m?.destinations.length) {
+            await db.update(schema.deliveryRobots).set({ destinations: m.destinations, lastState: { ...((row.lastState ?? {}) as Record<string, unknown>), mapName: m.mapName } }).where(eq(schema.deliveryRobots.id, row.id));
+            destinations += m.destinations.length;
+          }
+        } catch {
+          /* 지도 조회 실패 — 지난 목록 유지 */
+        }
+      }
+    }
+    return { job: "op-catalog", ok: true, detail: `매장 ${shopIds.length} · 로봇 ${robots} · 목적지 ${destinations}` };
+  } catch (e) {
+    return { job: "op-catalog", ok: false, detail: (e as Error).message };
+  }
+}
+
+/** 신형 로봇 상태(상태 V2, 1분). 오프라인이면 마지막 수신 시각을 갱신하지 않는다(지시 차단 기준). */
+export async function syncOpenPlatformState(api: PuduApi = createPuduApi()): Promise<DeliverySyncResult> {
+  try {
+    const db = getDb();
+    const robots = await db.select().from(schema.deliveryRobots).where(and(eq(schema.deliveryRobots.active, true), eq(schema.deliveryRobots.source, "openplatform")));
+    let online = 0;
+    let failed = 0;
+    for (const r of robots) {
+      if (!r.sn) continue;
+      try {
+        const st = opStateFromStatus(await api.statusV2(r.sn));
+        const now = nowIso();
+        await db.update(schema.deliveryRobots).set({ lastState: { ...((r.lastState ?? {}) as Record<string, unknown>), ...st, _polledAt: now }, ...(st.online ? { lastSeenAt: now } : {}) }).where(eq(schema.deliveryRobots.id, r.id));
+        if (st.online) online += 1;
+      } catch {
+        failed += 1;
+      }
+    }
+    return { job: "op-state", ok: failed < robots.length || robots.length === 0, detail: `신형 로봇 ${robots.length}대 중 온라인 ${online}${failed ? ` · 조회 실패 ${failed}` : ""}` };
+  } catch (e) {
+    return { job: "op-state", ok: false, detail: (e as Error).message };
+  }
+}
+
+/**
+ * 오픈플랫폼 콜백(/api/webhooks/pudu 로 들어온 것) 중 등록된 배송로봇 것을 배송 알림함으로 옮긴다.
+ * 미등록 로봇(다른 고객사 로봇 포함)은 만들지 않는다. 옮겼으면 true.
+ */
+export async function routeOpenPlatformCallback(cb: { callback_type?: string; data?: Record<string, unknown> }, vendorEventId: string, receivedAt: string): Promise<boolean> {
+  const d = cb.data ?? {};
+  const sn = String(d.sn ?? "");
+  const macId = macToRobotId(d.mac as string | undefined);
+  if (!sn && !macId) return false;
+  const db = getDb();
+  const robot = await db.query.deliveryRobots.findFirst({ where: sn && macId ? sql`${schema.deliveryRobots.sn} = ${sn} or ${schema.deliveryRobots.agentRobotId} = ${macId}` : sn ? eq(schema.deliveryRobots.sn, sn) : eq(schema.deliveryRobots.agentRobotId, macId) });
+  if (!robot) return false;
+  const n = opToAgentNotify(cb, robot.agentRobotId, `op:${vendorEventId}`);
+  if (!n) return false;
+  await db
+    .insert(schema.deliveryEvents)
+    .values({ id: newId("dev"), msgId: n.msgId, msgType: n.msgType, agentRobotId: robot.agentRobotId, receivedAt, occurredAt: n.timestamp ? new Date(n.timestamp).toISOString() : null, payload: n })
+    .onConflictDoNothing({ target: schema.deliveryEvents.msgId });
+  return true;
+}
+
 const NEXT: Record<string, number> = { Await: 0, OnTheWay: 1, Arrived: 2, Complete: 3, Cancel: 3 };
 function normStatus(s: string | undefined): "Await" | "OnTheWay" | "Arrived" | "Complete" | "Cancel" | null {
   const v = String(s ?? "").toLowerCase();
   if (v === "await") return "Await";
-  if (v === "ontheway") return "OnTheWay";
+  if (v === "ontheway" || v === "on_the_way") return "OnTheWay";
   if (v === "arrived" || v === "arrive") return "Arrived";
   if (v === "complete" || v === "completed") return "Complete";
   if (v === "cancel" || v === "canceled" || v === "cancelled") return "Cancel";
@@ -184,7 +278,8 @@ async function applyAgentNotify(n: AgentNotify, occurredAt: string): Promise<voi
   else if (n.msgType === "notifyRobotPose") Object.assign(patch, { robotPose: d });
   else if (n.msgType === "notifyRobotStatus") Object.assign(patch, d);
   else return;
-  await db.update(schema.deliveryRobots).set({ lastState: { ...prev, ...patch }, lastSeenAt: nowIso() }).where(eq(schema.deliveryRobots.id, robot.id));
+  // 오프라인 알림은 '수신'으로 치지 않는다(지시 차단 기준인 마지막 수신 시각을 늘리지 않음)
+  await db.update(schema.deliveryRobots).set({ lastState: { ...prev, ...patch }, ...(patch.online === false ? {} : { lastSeenAt: nowIso() }) }).where(eq(schema.deliveryRobots.id, robot.id));
 }
 
 async function applyLeg(robot: { id: string; siteId: string | null; name: string }, trayIndex: number, dest: DeliveryTrayDestination, mode: string, occurredAt: string): Promise<void> {
@@ -462,6 +557,7 @@ async function assertCanDispatch(user: User, robotId: string, action: string, pa
   if (user.role !== "HQ_ADMIN" && !(user.role === "SITE_MANAGER" && (await accessibleSiteIds(user, db)).includes(robot.siteId!))) await deny("권한 없음", new ForbiddenError("이 사업장의 배송을 지시할 권한이 없습니다."));
   const site = await db.query.sites.findFirst({ where: eq(schema.sites.id, robot.siteId!) });
   if (!site?.remoteControlEnabled) await deny("사업장 원격 제어 꺼짐", new ForbiddenError("이 사업장은 원격 제어가 꺼져 있습니다. 본사 관리자가 관리 설정 → 원격 제어에서 켤 수 있습니다."));
+  if ((robot.lastState as { online?: boolean } | null)?.online === false) await deny("오프라인", new ValidationError("로봇이 오프라인입니다(전원·네트워크 확인)."));
   if (!robot.lastSeenAt || Date.now() - new Date(robot.lastSeenAt).getTime() > 5 * 60_000) await deny("상태 미수신", new ValidationError("로봇 상태가 5분 넘게 수신되지 않아 지시하지 않습니다(전원·네트워크·에이전트 확인)."));
   const recent = await db.select().from(schema.deliveryOrders).where(and(eq(schema.deliveryOrders.robotId, robotId), eq(schema.deliveryOrders.status, "ACCEPTED"), gte(schema.deliveryOrders.requestedAt, new Date(Date.now() - 20_000).toISOString())));
   if (recent.length) await deny("중복 요청", new ConflictError("방금 보낸 지시가 있습니다. 잠시 뒤 다시 시도하세요(중복 클릭 방지)."));
@@ -474,14 +570,15 @@ function destType(robot: { destinations: { name: string; type: string }[] }, nam
   return d.type;
 }
 
-async function recordOrder(user: User, robot: { id: string; siteId: string | null }, kind: "DELIVERY" | "CALL" | "CANCEL_CALL", trays: { destination: string; type?: string; taskRef: string; recipientUserIds: string[] }[], opts: { sort?: string; executeTask?: boolean }, send: () => Promise<{ taskId?: string }>) {
+async function recordOrder(user: User, robot: { id: string; siteId: string | null; source?: string }, kind: "DELIVERY" | "CALL" | "CANCEL_CALL", trays: { destination: string; type?: string; taskRef: string; recipientUserIds: string[] }[], opts: { sort?: string; executeTask?: boolean }, send: () => Promise<{ taskId?: string }>) {
   const id = newId("dor");
   const now = nowIso();
   let status: "ACCEPTED" | "FAILED" = "ACCEPTED";
   let message = "";
   try {
     const r = await send();
-    message = r.taskId ? `에이전트 접수(task ${r.taskId})` : "에이전트 접수";
+    const via = robot.source === "openplatform" ? "클라우드" : "에이전트";
+    message = r.taskId ? `${via} 접수(task ${r.taskId})` : `${via} 접수`;
   } catch (e) {
     status = "FAILED";
     message = e instanceof AgentError ? e.message : `전송 실패: ${(e as Error).message}`;
@@ -502,6 +599,12 @@ export async function dispatchDelivery(user: User, input: { robotId: string; tra
   if (st.robotState === "BUSY") throw new ConflictError("로봇이 배송 중이거나 누군가 화면을 조작하고 있습니다. 대기 상태가 된 뒤 보내세요.");
   const orderKey = newId("t").slice(-8);
   const rows = trays.map((t, i) => ({ destination: t.destination.trim(), type: destType(robot, t.destination.trim()), taskRef: `wb-${orderKey}-${i + 1}`, recipientUserIds: Array.from(new Set(t.recipientUserIds ?? [])) }));
+  if (robot.source === "openplatform") {
+    if (!robot.sn || !robot.shopId) throw new ValidationError("신형 로봇의 SN·매장 정보가 없습니다(목록 동기화 후 다시 시도).");
+    const mapName = String(((robot.lastState ?? {}) as { mapName?: string }).mapName ?? "") || undefined;
+    const api = createPuduApi();
+    return recordOrder(user, robot, "DELIVERY", rows, { sort: input.sort ?? "fixed", executeTask: input.executeTask ?? true }, () => opSendDelivery(api.client, { sn: robot.sn!, shopId: robot.shopId!, mapName, trays: rows.map((r) => [{ destination: r.destination, id: r.taskRef }]), sort: input.sort ?? "fixed", executeTask: input.executeTask ?? true }));
+  }
   const cmd = createAgentCommander();
   return recordOrder(user, robot, "DELIVERY", rows, { sort: input.sort ?? "fixed", executeTask: input.executeTask ?? true }, () => cmd.delivery(robot.agentRobotId, rows.map((r) => [{ destination: r.destination, id: r.taskRef }]), { sort: input.sort ?? "fixed", executeTask: input.executeTask ?? true }));
 }
@@ -510,6 +613,7 @@ export async function dispatchDelivery(user: User, input: { robotId: string; tra
 export async function callDeliveryRobot(user: User, input: { robotId: string; destination: string }) {
   const robot = await assertCanDispatch(user, input.robotId, "DELIVERY:CALL", { destination: input.destination });
   const dest = { name: input.destination, type: destType(robot, input.destination) };
+  if (robot.source === "openplatform") throw new ValidationError("신형(클라우드) 로봇의 호출은 아직 준비 중입니다. 배송 보내기를 쓰세요.");
   const cmd = createAgentCommander();
   return recordOrder(user, robot, "CALL", [{ destination: dest.name, type: dest.type, taskRef: "", recipientUserIds: [] }], {}, () => cmd.call(robot.agentRobotId, dest));
 }
@@ -522,6 +626,7 @@ export async function cancelDeliveryCall(user: User, input: { robotId: string; d
   assertStaff(user);
   if (user.role !== "HQ_ADMIN" && !(robot.siteId && (await accessibleSiteIds(user, db)).includes(robot.siteId))) throw new ForbiddenError("권한이 없습니다.");
   const dest = { name: input.destination, type: destType(robot, input.destination) };
+  if (robot.source === "openplatform") throw new ValidationError("신형(클라우드) 로봇의 호출 취소는 아직 준비 중입니다.");
   const cmd = createAgentCommander();
   return recordOrder(user, robot, "CANCEL_CALL", [{ destination: dest.name, type: dest.type, taskRef: "", recipientUserIds: [] }], {}, () => cmd.cancelCall(robot.agentRobotId, dest));
 }
@@ -550,16 +655,17 @@ export async function recordDeliverySync(r: DeliverySyncResult): Promise<void> {
 export async function getDeliveryHealth(user: User) {
   assertStaff(user);
   const db = getDb();
-  const sync = await db.select().from(schema.vendorSyncState).where(inArray(schema.vendorSyncState.id, ["PUDU:delivery-catalog", "PUDU:delivery-state"]));
+  const sync = await db.select().from(schema.vendorSyncState).where(inArray(schema.vendorSyncState.id, ["PUDU:delivery-catalog", "PUDU:delivery-state", "PUDU:delivery-op-catalog", "PUDU:delivery-op-state"]));
   const [ev] = await db
     .select({ last: sql<string | null>`max(${schema.deliveryEvents.receivedAt})`, day: sql<number>`count(*) filter (where ${schema.deliveryEvents.receivedAt} > now() - interval '24 hours')::int`, total: sql<number>`count(*)::int` })
     .from(schema.deliveryEvents);
   const pick = (job: string) => sync.find((s) => s.id === `PUDU:delivery-${job}`) ?? null;
-  const robots = await db.select({ id: schema.deliveryRobots.id, name: schema.deliveryRobots.name, lastSeenAt: schema.deliveryRobots.lastSeenAt }).from(schema.deliveryRobots);
+  const robots = await db.select({ id: schema.deliveryRobots.id, name: schema.deliveryRobots.name, lastSeenAt: schema.deliveryRobots.lastSeenAt, source: schema.deliveryRobots.source }).from(schema.deliveryRobots);
   return {
     mode: agentMode(),
     catalog: pick("catalog"),
     state: pick("state"),
+    op: { enabled: openPlatformEnabled(), shops: deliveryShopIds().length, catalog: pick("op-catalog"), state: pick("op-state") },
     lastEventAt: ev?.last ? new Date(ev.last).toISOString() : null,
     events24h: ev?.day ?? 0,
     eventsTotal: ev?.total ?? 0,

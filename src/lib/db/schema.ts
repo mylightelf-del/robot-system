@@ -707,7 +707,12 @@ export const vendorSyncState = pgTable(
 /** 배송로봇. 에이전트(PUDU SDK 마이크로서비스)의 로봇 목록에서 발견해 등록한다. 청소 로봇 테이블·집계와 섞지 않는다. */
 export const deliveryRobots = pgTable("delivery_robots", {
   id: text().primaryKey(), // `DR-<agentRobotId>`
+  /** 로봇 식별자. 에이전트 로봇 ID = MAC 소문자·콜론 제거(예: 08e9f6cf1e70). 클라우드 방식도 같은 값을 써서 한 로봇이 두 경로에서 같은 행이 된다. */
   agentRobotId: text().notNull().unique(),
+  /** 연결 방식: agent(SDK 에이전트, 구형) | openplatform(PUDU 오픈플랫폼 클라우드 API, 신형) */
+  source: text().$type<"agent" | "openplatform">().notNull().default("agent"),
+  sn: text(),
+  shopId: text(),
   groupId: text().notNull().default(""),
   deviceId: text().notNull().default(""),
   /** 배치 사업장. 처음 발견했을 때는 null(관리자가 배송 화면에서 지정). */

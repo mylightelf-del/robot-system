@@ -1,4 +1,5 @@
 import { and, eq, inArray, isNull, sql } from "drizzle-orm";
+import { routeOpenPlatformCallback } from "@/lib/services/delivery";
 import type { Incident, Robot, Schedule, Severity, Vendor } from "@/lib/domain/types";
 import { getDb, schema } from "@/lib/db/client";
 import { getNotificationSetting, getSite, getStatus, listZonesByFloor, siteAt } from "@/lib/db/repo";
@@ -442,7 +443,9 @@ export async function processPuduEvents(limit = 100): Promise<SyncResult> {
     let errors = 0;
     for (const ev of events) {
       try {
-        await applyEvent(ev.payload as PuduCallback, ev.occurredAt ?? ev.receivedAt);
+        // 등록된 배송로봇(신형, 오픈플랫폼)의 콜백은 배송 알림함으로 옮긴다(docs/23 §8). 청소 처리와 섞지 않는다.
+        const routed = await routeOpenPlatformCallback(ev.payload as { callback_type?: string; data?: Record<string, unknown> }, ev.id, ev.receivedAt);
+        if (!routed) await applyEvent(ev.payload as PuduCallback, ev.occurredAt ?? ev.receivedAt);
         await db.update(schema.vendorEvents).set({ processedAt: nowIso(), processError: null }).where(eq(schema.vendorEvents.id, ev.id));
         done += 1;
       } catch (e) {

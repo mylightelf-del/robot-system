@@ -1,6 +1,7 @@
 "use server";
 
 import { cookies, headers } from "next/headers";
+import { agentMode } from "@/lib/delivery/agent";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import type { CleanMode, CommandType, NotifyChannel, NotifyKind, ReportComments, ReportContent, Role, Severity } from "@/lib/domain/types";
@@ -537,14 +538,18 @@ export async function deliverySyncNowAction(): Promise<ActionResult> {
   return run(async () => {
     const user = await getCurrentUser();
     if (user.role !== "HQ_ADMIN") throw new ForbiddenError("본사 관리자만 실행할 수 있습니다.");
-    const client = deliverySvc.createAgentClient();
-    const a = await deliverySvc.syncDeliveryCatalog(client);
-    const b = await deliverySvc.syncDeliveryState(client);
-    await deliverySvc.recordDeliverySync(a);
-    await deliverySvc.recordDeliverySync(b);
+    const results: { job: string; ok: boolean; detail: string }[] = [];
+    if (agentMode() !== "unconfigured") {
+      const client = deliverySvc.createAgentClient();
+      results.push(await deliverySvc.syncDeliveryCatalog(client), await deliverySvc.syncDeliveryState(client));
+    }
+    if (deliverySvc.openPlatformEnabled()) results.push(await deliverySvc.syncOpenPlatformCatalog(), await deliverySvc.syncOpenPlatformState());
+    if (!results.length) throw new AppError("배송로봇 연동이 꺼져 있습니다.", "UNSUPPORTED");
+    for (const r of results) await deliverySvc.recordDeliverySync(r);
     revalidatePath("/delivery");
-    if (!a.ok || !b.ok) throw new AppError(`${a.ok ? "" : `목록: ${a.detail} `}${b.ok ? "" : `상태: ${b.detail}`}`, "UNSUPPORTED");
-    return { message: `목록: ${a.detail} / 상태: ${b.detail}` };
+    const text = results.map((r) => `${r.job}: ${r.detail}`).join(" / ");
+    if (results.some((r) => !r.ok)) throw new AppError(text, "UNSUPPORTED");
+    return { message: text };
   });
 }
 export async function dispatchDeliveryAction(input: { robotId: string; trays: { destination: string; recipientUserIds?: string[] }[]; sort?: "fixed" | "auto"; executeTask?: boolean }): Promise<ActionResult> {

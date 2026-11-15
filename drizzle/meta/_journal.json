@@ -148,6 +148,13 @@
       "when": 1794741314648,
       "tag": "0020_delivery_presets",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1794762735177,
+      "tag": "0021_delivery_openplatform",
+      "breakpoints": true
     }
   ]
 }

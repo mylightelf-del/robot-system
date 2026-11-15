@@ -13,7 +13,7 @@ import { createPuduApi } from "@/lib/vendors/pudu/puduAdapter";
 import { cenobotsDryRun, cenobotsEnabled, processCenobotsEvents, syncCenobotsCatalog, syncCenobotsErrors, syncCenobotsPlannedRuns, syncCenobotsReports, syncCenobotsStatus } from "./cenobots";
 import { createCenobotsApi } from "@/lib/vendors/cenobots/cenobotsAdapter";
 import { agentMode } from "@/lib/delivery/agent";
-import { checkStuckRobots, createAgentClient, processDeliveryEvents, recordDeliverySync, sendDeliveryReminders, syncDeliveryCatalog, syncDeliveryState } from "@/lib/services/delivery";
+import { checkStuckRobots, createAgentClient, deliveryShopIds, openPlatformEnabled, processDeliveryEvents, recordDeliverySync, sendDeliveryReminders, syncDeliveryCatalog, syncDeliveryState, syncOpenPlatformCatalog, syncOpenPlatformState } from "@/lib/services/delivery";
 import { vendorModes } from "@/lib/vendors";
 import { purgeOldVendorEvents, writeHeartbeat } from "@/lib/ops/heartbeat";
 import { autoCreateScheduledDrafts } from "@/lib/services/reports";
@@ -106,11 +106,13 @@ async function main() {
       }),
     );
   }
-  // 배송로봇(PUDU 에이전트) — 도착 알림. PUDU_AGENT_MODE=mock|live, unconfigured 면 끔(docs/23).
-  if (agentMode() !== "unconfigured") {
+  // 배송로봇 — 도착 알림(docs/23). 구형: PUDU 에이전트(PUDU_AGENT_MODE=mock|live). 신형: 오픈플랫폼(PUDU_DELIVERY_SHOP_IDS, PUDU 키 live).
+  const agentOn = agentMode() !== "unconfigured";
+  const opOn = openPlatformEnabled() && puduLiveEnabled();
+  const dlog = (r: { job: string; ok: boolean; detail: string }) => log(`DELIVERY ${r.job}: ${r.ok ? "OK" : "실패"} — ${r.detail}`);
+  if (agentOn) {
     const client = createAgentClient();
-    log(`배송 에이전트 ${agentMode()}: 목록 10m · 상태 60s · 알림 처리 3s · 재알림 30s`);
-    const dlog = (r: { job: string; ok: boolean; detail: string }) => log(`DELIVERY ${r.job}: ${r.ok ? "OK" : "실패"} — ${r.detail}`);
+    log(`배송 에이전트 ${agentMode()}: 목록 10m · 상태 60s`);
     jobs.push(
       loop("delivery-catalog", 10 * 60_000, async () => {
         const r = await syncDeliveryCatalog(client);
@@ -125,6 +127,26 @@ async function main() {
         if (!r.ok) dlog(r);
       }),
     );
+  }
+  if (opOn) {
+    log(`배송 신형(오픈플랫폼): 매장 ${deliveryShopIds().length}곳 · 목록 10m · 상태 60s`);
+    jobs.push(
+      loop("delivery-op-catalog", 10 * 60_000, async () => {
+        const r = await syncOpenPlatformCatalog();
+        await recordDeliverySync(r);
+        dlog(r);
+      }),
+    );
+    jobs.push(
+      loop("delivery-op-state", 60_000, async () => {
+        const r = await syncOpenPlatformState();
+        await recordDeliverySync(r);
+        if (!r.ok) dlog(r);
+      }),
+    );
+  }
+  if (agentOn || opOn) {
+    log("배송 알림 처리 3s · 재알림·막힘 30s");
     jobs.push(
       loop("delivery-events", 3000, async () => {
         const r = await processDeliveryEvents();
