@@ -1,0 +1,75 @@
+# 운영 작업(배포·상태 확인·점검 스크립트) — AWS 로그인 없이 실행(docs/05 2-4).
+# 자격 증명: 저장소 Secrets 의 WIDEBOT_AWS_ACCESS_KEY_ID / WIDEBOT_AWS_SECRET_ACCESS_KEY
+#   (IAM 사용자 widebot-github-ops: 운영 서버 SSM 명령 + 배포 버킷 release/* 만 허용).
+# 이 저장소는 공개라 실행 기록이 누구에게나 보인다 → 서버 출력은 그대로 찍지 않는다.
+#   deploy/health: 결과(health JSON)만, script: 스크립트가 "PUBLIC:" 로 시작해 찍은 줄만.
+name: ops
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "deploy | health | script"
+        required: true
+        default: health
+        type: choice
+        options: [deploy, health, script]
+      ref:
+        description: "배포·스크립트를 가져올 브랜치"
+        required: true
+        default: claude/sharp-bardeen-foe1tf
+      script:
+        description: "action=script 일 때 실행할 저장소 안 파일(ops/ 아래)"
+        required: false
+        default: ""
+
+concurrency:
+  group: widebot-ops
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+      - name: AWS 자격 증명(기본 프로필)
+        env:
+          KID: ${{ secrets.WIDEBOT_AWS_ACCESS_KEY_ID }}
+          KSEC: ${{ secrets.WIDEBOT_AWS_SECRET_ACCESS_KEY }}
+        run: |
+          [ -n "$KID" ] && [ -n "$KSEC" ] || { echo "저장소 Secrets 가 비어 있습니다"; exit 1; }
+          aws configure set aws_access_key_id "$KID" --profile default
+          aws configure set aws_secret_access_key "$KSEC" --profile default
+          aws configure set region ap-southeast-2 --profile default
+      - name: 배포
+        if: inputs.action == 'deploy'
+        run: |
+          set +e
+          bash scripts/deploy-remote.sh > "$RUNNER_TEMP/out.log" 2>&1
+          rc=$?
+          echo "커밋: $(git rev-parse --short HEAD)"
+          grep -A1 -- '--- health' "$RUNNER_TEMP/out.log" | tail -1
+          grep -E '^\s*(✓|✗|!)\s' "$RUNNER_TEMP/out.log" | sed -E 's/=[^ ]+/=***/g' | tail -10
+          [ $rc -eq 0 ] && echo "결과: 성공" || { echo "결과: 실패(exit $rc)"; grep -iE 'error|failed|오류' "$RUNNER_TEMP/out.log" | sed -E 's/[A-Za-z0-9_]*(KEY|SECRET|TOKEN|PASSWORD)[A-Za-z0-9_]*=[^ ]+/***/g' | tail -15; }
+          exit $rc
+      - name: 상태 확인
+        if: inputs.action == 'health'
+        run: curl -fsS --max-time 20 https://widebot.kro.kr/api/health
+      - name: 점검 스크립트
+        if: inputs.action == 'script'
+        env:
+          SCRIPT: ${{ inputs.script }}
+        run: |
+          case "$SCRIPT" in ops/*.sh) ;; *) echo "ops/ 아래 .sh 만 실행합니다"; exit 2;; esac
+          [ -f "$SCRIPT" ] || { echo "파일 없음: $SCRIPT"; exit 2; }
+          set +e
+          bash scripts/remote-run.sh -f "$SCRIPT" > "$RUNNER_TEMP/out.log" 2>&1
+          rc=$?
+          grep -E '^\s*(결과:|PUBLIC:)' "$RUNNER_TEMP/out.log" | sed -E 's/^\s*//'
+          exit $rc

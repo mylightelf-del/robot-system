@@ -1,0 +1,3 @@
+# 배송 연동 요약(공개 기록용: 수치·상태만). PUBLIC: 로 시작하는 줄만 GitHub 실행 기록에 남는다.
+cd /opt/robot-system
+docker compose exec -T db sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "select '"'"'PUBLIC: 배송로봇 '"'"' || source || '"'"' '"'"' || count(*) || '"'"'대, 최근 수신 '"'"' || coalesce(to_char(max(last_seen_at),'"'"'MM-DD HH24:MI'"'"'),'"'"'없음'"'"') from delivery_robots group by source; select '"'"'PUBLIC: 배송 알림 누적 '"'"' || count(*) || '"'"'건'"'"' from delivery_events; select '"'"'PUBLIC: '"'"' || job || '"'"' '"'"' || case when last_error is null then '"'"'정상'"'"' else '"'"'실패'"'"' end from vendor_sync_state where id like '"'"'PUDU:delivery%'"'"';"'
