@@ -3,17 +3,19 @@
 #   (IAM 사용자 widebot-github-ops: 운영 서버 SSM 명령 + 배포 버킷 release/* 만 허용).
 # 이 저장소는 공개라 실행 기록이 누구에게나 보인다 → 서버 출력은 그대로 찍지 않는다.
 #   deploy/health: 결과(health JSON)만, script: 스크립트가 "PUBLIC:" 로 시작해 찍은 줄만.
+# sync-secrets: 저장소 Secrets 중 아래 목록에 값이 있는 것만 서버 .env 에 넣고 web·worker 재시작(값은 출력하지 않음, 키 이름만).
+#   값은 SSM 명령 본문(base64)으로 전달된다 → AWS 콘솔의 Run Command 기록(계정 소유자만 열람)에 남는다.
 name: ops
 
 on:
   workflow_dispatch:
     inputs:
       action:
-        description: "deploy | health | script"
+        description: "deploy | health | script | sync-secrets"
         required: true
         default: health
         type: choice
-        options: [deploy, health, script]
+        options: [deploy, health, script, sync-secrets]
       ref:
         description: "배포·스크립트를 가져올 브랜치"
         required: true
@@ -71,5 +73,32 @@ jobs:
           set +e
           bash scripts/remote-run.sh -f "$SCRIPT" > "$RUNNER_TEMP/out.log" 2>&1
           rc=$?
+          grep -E '^\s*(결과:|PUBLIC:)' "$RUNNER_TEMP/out.log" | sed -E 's/^\s*//'
+          exit $rc
+      - name: 비밀값 서버 반영
+        if: inputs.action == 'sync-secrets'
+        env:
+          S_TEAMS_WORKFLOW_URL: ${{ secrets.TEAMS_WORKFLOW_URL }}
+          S_SOLAPI_API_KEY: ${{ secrets.SOLAPI_API_KEY }}
+          S_SOLAPI_API_SECRET: ${{ secrets.SOLAPI_API_SECRET }}
+          S_SOLAPI_PFID: ${{ secrets.SOLAPI_PFID }}
+          S_SOLAPI_SENDER: ${{ secrets.SOLAPI_SENDER }}
+          S_SOLAPI_TEMPLATES: ${{ secrets.SOLAPI_TEMPLATES }}
+        run: |
+          python3 -c 'import os
+          for k,v in os.environ.items():
+              if k.startswith("S_") and v.strip(): print(k[2:]+"="+v.strip().replace(chr(10)," "))' > "$RUNNER_TEMP/frag"
+          [ -s "$RUNNER_TEMP/frag" ] || { echo "반영할 Secrets 가 없습니다"; exit 2; }
+          echo "반영 대상: $(cut -d= -f1 "$RUNNER_TEMP/frag" | tr '\n' ' ')"
+          B64=$(base64 -w0 "$RUNNER_TEMP/frag"); rm -f "$RUNNER_TEMP/frag"
+          {
+            echo 'cd /opt/robot-system'
+            echo "echo '$B64' | base64 -d > /tmp/envfrag"
+            cat scripts/env-merge.sh
+          } > "$RUNNER_TEMP/sync.sh"
+          set +e
+          bash scripts/remote-run.sh -f "$RUNNER_TEMP/sync.sh" > "$RUNNER_TEMP/out.log" 2>&1
+          rc=$?
+          rm -f "$RUNNER_TEMP/sync.sh"
           grep -E '^\s*(결과:|PUBLIC:)' "$RUNNER_TEMP/out.log" | sed -E 's/^\s*//'
           exit $rc

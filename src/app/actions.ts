@@ -520,7 +520,7 @@ export async function setDeliveryRobotSiteAction(robotId: string, siteId: string
     return { message: siteId ? "로봇의 사업장을 지정했습니다." : "사업장 지정을 해제했습니다." };
   });
 }
-export async function saveDeliveryRecipientsAction(input: { siteId: string; destination: string; userIds: string[]; channels: ("PUSH" | "EMAIL" | "KAKAO")[]; enabled?: boolean }): Promise<ActionResult> {
+export async function saveDeliveryRecipientsAction(input: { siteId: string; destination: string; userIds: string[]; channels: ("PUSH" | "EMAIL" | "KAKAO" | "TEAMS")[]; enabled?: boolean }): Promise<ActionResult> {
   return run(async () => {
     await deliverySvc.saveDeliveryRecipients(await getCurrentUser(), input);
     revalidatePath("/delivery");

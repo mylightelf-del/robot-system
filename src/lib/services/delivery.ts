@@ -324,8 +324,8 @@ async function applyLeg(robot: { id: string; siteId: string | null; name: string
 
 // ---------------------------------------------------------------- 알림
 
-const CH_KO = { PUSH: "앱 푸시", EMAIL: "메일", KAKAO: "카카오톡" } as const;
-type Ch = "PUSH" | "EMAIL" | "KAKAO";
+const CH_KO = { PUSH: "앱 푸시", EMAIL: "메일", KAKAO: "카카오톡", TEAMS: "Teams" } as const;
+type Ch = "PUSH" | "EMAIL" | "KAKAO" | "TEAMS";
 const DEFAULT_CHANNELS: Ch[] = ["PUSH", "EMAIL"];
 
 async function recipientsFor(siteId: string | null, destination: string) {
@@ -357,9 +357,9 @@ async function sendToUsers(userIds: string[], channels: Ch[], m: Message, refId:
       if (ch === "PUSH" && !(await hasActiveDevice(u.id))) continue; // 앱을 쓰지 않는 직원
       // 카카오: 휴대폰 번호가 있고 솔라피가 설정돼 있으면 알림톡, 아니면 본인이 연결한 「나에게 보내기」
       const phone = ch === "KAKAO" && solapiConfig() ? normalizePhone(u.phone) : null;
-      const address = ch === "EMAIL" ? u.email : phone ?? `user:${u.id}`;
+      const address = ch === "EMAIL" || ch === "TEAMS" ? u.email : phone ?? `user:${u.id}`;
       const r = await deliver({ channel: ch, address }, m);
-      await db.insert(schema.notificationLogs).values({ id: newId("ntf"), incidentId: null, at: now, channel: ch, recipient: ch === "EMAIL" ? u.email : u.name, status: r.status, reason: r.reason, kind: "DELIVERY", refId });
+      await db.insert(schema.notificationLogs).values({ id: newId("ntf"), incidentId: null, at: now, channel: ch, recipient: ch === "EMAIL" || ch === "TEAMS" ? u.email : u.name, status: r.status, reason: r.reason, kind: "DELIVERY", refId });
       results.push(`${u.name} ${phone ? "알림톡" : CH_KO[ch]} ${r.status === "SENT" ? "발송" : r.status === "MOCK_SENT" ? "모의 발송" : "실패"}`);
     }
   }
@@ -387,6 +387,7 @@ export async function notifyArrival(legId: string, reminder: boolean): Promise<s
     const tz = site?.timezone ?? "Asia/Seoul";
     const m: Message = {
       subject: `[Wide Bot] ${reminder ? "배송 수령 재알림" : "배송 도착"} — ${leg.destination}`,
+      tone: reminder ? "warning" : "good",
       title: reminder ? `아직 수령하지 않은 배송이 있습니다 — ${leg.destination}` : `배송로봇이 ${leg.destination}에 도착했습니다`,
       lines: [`로봇: ${robot?.name ?? leg.robotId}`, `도착: ${formatTime(leg.arrivedAt ?? now, tz)}`, "수령 후 로봇 화면에서 확인(완료)을 눌러 주세요."],
       url: `${baseUrl()}/delivery`,
@@ -411,7 +412,7 @@ async function notifyCancel(legId: string): Promise<void> {
   const rec = await legRecipients(leg);
   if (!rec) return;
   const robot = await db.query.deliveryRobots.findFirst({ where: eq(schema.deliveryRobots.id, leg.robotId) });
-  const r = await sendToUsers(rec.userIds, rec.channels, { subject: `[Wide Bot] 배송 취소 — ${leg.destination}`, title: `${leg.destination} 배송이 취소되었습니다`, lines: [`로봇: ${robot?.name ?? leg.robotId}`, "보낸 사람에게 확인해 주세요."], url: `${baseUrl()}/delivery`, meta: { kind: "DELIVERY", refId: `${leg.id}:cancel`, siteId: leg.siteId }, alimtalk: { template: "DELIVERY_CANCEL", variables: { "#{목적지}": leg.destination, "#{로봇}": robot?.name ?? leg.robotId } } }, `${leg.id}:cancel`);
+  const r = await sendToUsers(rec.userIds, rec.channels, { tone: "warning", subject: `[Wide Bot] 배송 취소 — ${leg.destination}`, title: `${leg.destination} 배송이 취소되었습니다`, lines: [`로봇: ${robot?.name ?? leg.robotId}`, "보낸 사람에게 확인해 주세요."], url: `${baseUrl()}/delivery`, meta: { kind: "DELIVERY", refId: `${leg.id}:cancel`, siteId: leg.siteId }, alimtalk: { template: "DELIVERY_CANCEL", variables: { "#{목적지}": leg.destination, "#{로봇}": robot?.name ?? leg.robotId } } }, `${leg.id}:cancel`);
   await db.update(schema.deliveryLegs).set({ notifyResult: `${leg.notifyResult ? `${leg.notifyResult} / ` : ""}취소 알림: ${r.summary}` }).where(eq(schema.deliveryLegs.id, leg.id));
 }
 
@@ -421,7 +422,7 @@ async function notifyRobotProblem(robot: { id: string; name: string; siteId: str
   const rec = await recipientsFor(robot.siteId, "*");
   if (!rec || !rec.userIds.length) return "기본 수신자(*) 없음";
   const label = kind === "STUCK" ? "막힘(장애물)" : "운행 오류";
-  const r = await sendToUsers(rec.userIds, rec.channels as Ch[], { subject: `[Wide Bot] 배송로봇 ${label} — ${robot.name}`, title: `배송로봇 ${robot.name}: ${label}`, lines: [kind === "STUCK" ? `${stuckMinutes()}분 넘게 장애물에 막혀 있습니다.` : "운행 중 이상으로 멈췄습니다.", ...(detail ? [`내용: ${detail}`] : []), "현장 확인이 필요합니다."], url: `${baseUrl()}/delivery`, meta: { kind: "DELIVERY", refId: `robot:${robot.id}:${kind}:${since}`, siteId: robot.siteId }, alimtalk: { template: "DELIVERY_PROBLEM", variables: { "#{로봇}": robot.name, "#{내용}": kind === "STUCK" ? `${stuckMinutes()}분 넘게 장애물에 막힘` : `운행 오류${detail ? `(${detail})` : ""}`, "#{시각}": formatTime(since) } } }, `robot:${robot.id}:${kind}:${since}`);
+  const r = await sendToUsers(rec.userIds, rec.channels as Ch[], { tone: "attention", subject: `[Wide Bot] 배송로봇 ${label} — ${robot.name}`, title: `배송로봇 ${robot.name}: ${label}`, lines: [kind === "STUCK" ? `${stuckMinutes()}분 넘게 장애물에 막혀 있습니다.` : "운행 중 이상으로 멈췄습니다.", ...(detail ? [`내용: ${detail}`] : []), "현장 확인이 필요합니다."], url: `${baseUrl()}/delivery`, meta: { kind: "DELIVERY", refId: `robot:${robot.id}:${kind}:${since}`, siteId: robot.siteId }, alimtalk: { template: "DELIVERY_PROBLEM", variables: { "#{로봇}": robot.name, "#{내용}": kind === "STUCK" ? `${stuckMinutes()}분 넘게 장애물에 막힘` : `운행 오류${detail ? `(${detail})` : ""}`, "#{시각}": formatTime(since) } } }, `robot:${robot.id}:${kind}:${since}`);
   return r.summary;
 }
 
@@ -505,12 +506,12 @@ export async function setDeliveryRobotSite(user: User, robotId: string, siteId: 
   await audit(user, { siteId, robotId: null, action: "DELIVERY:ROBOT_SITE", params: { robotId, from: r.siteId, to: siteId }, result: "OK", detail: null, vendorTraceId: null });
 }
 
-export async function saveDeliveryRecipients(user: User, input: { siteId: string; destination: string; userIds: string[]; channels: ("PUSH" | "EMAIL" | "KAKAO")[]; enabled?: boolean; note?: string }): Promise<void> {
+export async function saveDeliveryRecipients(user: User, input: { siteId: string; destination: string; userIds: string[]; channels: ("PUSH" | "EMAIL" | "KAKAO" | "TEAMS")[]; enabled?: boolean; note?: string }): Promise<void> {
   assertActive(user);
   assertAdmin(user);
   const destination = input.destination.trim();
   if (!destination) throw new ValidationError("목적지를 입력하세요('*' 는 기본 수신자).");
-  const channels = input.channels.filter((c) => c === "PUSH" || c === "EMAIL" || c === "KAKAO");
+  const channels = input.channels.filter((c) => c === "PUSH" || c === "EMAIL" || c === "KAKAO" || c === "TEAMS");
   if (!channels.length) throw new ValidationError("채널을 하나 이상 고르세요.");
   const db = getDb();
   const valid = new Set((await listUsers(db)).filter((u) => u.active).map((u) => u.id));

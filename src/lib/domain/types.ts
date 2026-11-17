@@ -298,8 +298,8 @@ export interface IncidentAction {
 }
 
 /** 알림 채널. PUSH 는 앱에 로그인한 기기로 보내는 푸시(주소는 카카오와 같은 "user:<사용자 ID>"). */
-export type NotifyChannel = "EMAIL" | "KAKAO" | "PUSH";
-export const NOTIFY_CHANNEL_LABEL: Record<NotifyChannel, string> = { EMAIL: "이메일", KAKAO: "카카오톡", PUSH: "앱 푸시" };
+export type NotifyChannel = "EMAIL" | "KAKAO" | "PUSH" | "TEAMS";
+export const NOTIFY_CHANNEL_LABEL: Record<NotifyChannel, string> = { EMAIL: "이메일", KAKAO: "카카오톡", PUSH: "앱 푸시", TEAMS: "Teams" };
 
 export interface NotificationLog {
   id: string;

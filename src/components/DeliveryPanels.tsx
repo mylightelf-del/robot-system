@@ -4,8 +4,8 @@ import { useState } from "react";
 import { callDeliveryRobotAction, cancelDeliveryCallAction, deleteDeliveryPresetAction, deleteDeliveryRecipientsAction, deliverySyncNowAction, dispatchDeliveryAction, saveDeliveryPresetAction, saveDeliveryRecipientsAction, sendDeliveryPresetAction, setDeliveryRobotSiteAction } from "@/app/actions";
 import { btn, ResultLine, useAction } from "./ActionButton";
 
-type Channel = "PUSH" | "EMAIL" | "KAKAO";
-const CH_LABEL: Record<Channel, string> = { PUSH: "앱 푸시", EMAIL: "메일", KAKAO: "카카오톡" };
+type Channel = "PUSH" | "EMAIL" | "KAKAO" | "TEAMS";
+const CH_LABEL: Record<Channel, string> = { PUSH: "앱 푸시", EMAIL: "메일", KAKAO: "카카오톡", TEAMS: "Teams" };
 
 export function DeliverySyncButton() {
   const { pending, result, run } = useAction();
@@ -88,7 +88,7 @@ function RecipientRow({ siteId, users, initial, suggestions }: { siteId: string;
           </>
         )}
         <span className="text-xs text-gray-500">채널</span>
-        {(["PUSH", "EMAIL", "KAKAO"] as Channel[]).map((c) => (
+        {(["PUSH", "EMAIL", "KAKAO", "TEAMS"] as Channel[]).map((c) => (
           <label key={c} className="inline-flex items-center gap-1 text-xs">
             <input type="checkbox" checked={channels.includes(c)} onChange={() => setChannels((s) => toggle(s, c))} /> {CH_LABEL[c]}
           </label>

@@ -8,6 +8,7 @@ import { canAccessSite } from "@/lib/auth/authz";
 import { emailConfig, renderEmail, sendEmail, type EmailAttachment } from "./email";
 import { kakaoConfig, sendKakaoToUser } from "./kakao";
 import { pushConfig, sendPushToUser } from "./push";
+import { sendTeamsToPerson, teamsConfig } from "./teams";
 
 /**
  * 알림 발송 모듈(교체 가능).
@@ -17,8 +18,8 @@ import { pushConfig, sendPushToUser } from "./push";
  * - 수신자는 통보 종류(kinds)·등급·시간대로 거른다. 발송 결과는 notification_logs 에 SENT / MOCK_SENT / SUPPRESSED / FAILED 로 남는다.
  */
 export type ChannelMode = "live" | "mock";
-export function channelModes(): { EMAIL: ChannelMode; KAKAO: ChannelMode; PUSH: ChannelMode } {
-  return { EMAIL: emailConfig() ? "live" : "mock", KAKAO: kakaoConfig() ? "live" : "mock", PUSH: pushConfig() ? "live" : "mock" };
+export function channelModes(): { EMAIL: ChannelMode; KAKAO: ChannelMode; PUSH: ChannelMode; TEAMS: ChannelMode } {
+  return { EMAIL: emailConfig() ? "live" : "mock", KAKAO: kakaoConfig() ? "live" : "mock", PUSH: pushConfig() ? "live" : "mock", TEAMS: teamsConfig() ? "live" : "mock" };
 }
 
 export const KAKAO_USER_PREFIX = "user:";
@@ -34,6 +35,8 @@ export interface Message {
   meta?: { kind: NotifyKind; refId: string | null; siteId: string };
   /** 카카오 알림톡(전화번호로 보낼 때): 검수된 템플릿 키와 변수. 없으면 알림톡을 보내지 않는다(템플릿 밖 문구는 발송 불가). */
   alimtalk?: { template: string; variables: Record<string, string> };
+  /** Teams 카드 강조 색(없으면 파랑). */
+  tone?: "good" | "attention" | "warning" | "accent";
 }
 
 /** 수신자 한 명에게 실제/모의 발송. */
@@ -43,6 +46,13 @@ export async function deliver(r: Pick<NotificationRecipient, "channel" | "addres
     if (modes.EMAIL === "mock") return { status: "MOCK_SENT", reason: "모의 발송(이메일 설정 전 — 실제 전송 없음)" };
     const { text, html } = renderEmail(m.title, m.lines, m.url);
     const res = await sendEmail(r.address, m.subject, text, html, m.attachments);
+    return { status: res.ok ? "SENT" : "FAILED", reason: res.reason };
+  }
+  if (r.channel === "TEAMS") {
+    // Teams 개인 채팅(워크플로 웹훅 → Flow bot 1:1). 주소 = 받는 사람의 Teams 로그인 이메일.
+    const cfg = teamsConfig();
+    if (!cfg) return { status: "MOCK_SENT", reason: "모의 발송(Teams 워크플로 설정 전 — 실제 전송 없음)" };
+    const res = await sendTeamsToPerson(cfg, r.address, { title: m.title, lines: m.lines, url: m.url, tone: m.tone });
     return { status: res.ok ? "SENT" : "FAILED", reason: res.reason };
   }
   if (r.channel === "PUSH") {

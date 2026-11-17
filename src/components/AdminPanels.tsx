@@ -221,9 +221,10 @@ export function RecipientsPanel({ siteId, recipients, dedupeMinutes, escalateAft
           <option value="EMAIL">이메일</option>
           <option value="KAKAO">카카오톡(사용자 본인)</option>
           <option value="PUSH">앱 푸시(사용자 본인)</option>
+          <option value="TEAMS">Teams 개인 채팅</option>
         </select>
-        {channel === "EMAIL" ? (
-          <input className="border rounded px-1 py-0.5 w-48" placeholder="이메일 주소" value={address} onChange={(e) => setAddress(e.target.value)} />
+        {channel === "EMAIL" || channel === "TEAMS" ? (
+          <input className="border rounded px-1 py-0.5 w-48" placeholder={channel === "TEAMS" ? "Teams 로그인 이메일" : "이메일 주소"} value={address} onChange={(e) => setAddress(e.target.value)} />
         ) : channel === "PUSH" ? (
           <select className="border rounded px-1 py-0.5" value={kakaoUser} onChange={(e) => setKakaoUser(e.target.value)}>
             {pushUsers.map((u) => (

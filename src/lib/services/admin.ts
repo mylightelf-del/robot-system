@@ -124,7 +124,7 @@ export async function addRecipient(user: User, siteId: string, r: Omit<Notificat
   const s = await db.query.notificationSettings.findFirst({ where: eq(schema.notificationSettings.siteId, siteId) });
   if (!s) throw new NotFoundError();
   if (!r.address.trim()) throw new ValidationError("수신 주소를 입력하세요.");
-  if (r.channel === "EMAIL" && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(r.address.trim())) throw new ValidationError("이메일 주소 형식이 올바르지 않습니다.");
+  if ((r.channel === "EMAIL" || r.channel === "TEAMS") && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(r.address.trim())) throw new ValidationError("이메일 주소 형식이 올바르지 않습니다.");
   if (r.channel === "KAKAO") await assertKakaoAddress(r.address.trim());
   if (r.channel === "PUSH") await assertPushAddress(r.address.trim());
   const kinds = normalizeKinds(r.kinds);

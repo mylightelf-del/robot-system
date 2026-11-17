@@ -738,8 +738,8 @@ export const deliveryRecipients = pgTable(
       .references(() => sites.id),
     destination: text().notNull(),
     userIds: jsonb().$type<string[]>().notNull().default([]),
-    /** 보낼 채널(PUSH·EMAIL·KAKAO). 사용자별로 가능한 채널만 실제로 보낸다. */
-    channels: jsonb().$type<("PUSH" | "EMAIL" | "KAKAO")[]>().notNull().default(["PUSH", "EMAIL"]),
+    /** 보낼 채널(PUSH·EMAIL·KAKAO·TEAMS). 사용자별로 가능한 채널만 실제로 보낸다. */
+    channels: jsonb().$type<("PUSH" | "EMAIL" | "KAKAO" | "TEAMS")[]>().notNull().default(["PUSH", "EMAIL"]),
     enabled: boolean().notNull().default(true),
     note: text().notNull().default(""),
     updatedBy: text().notNull(),
