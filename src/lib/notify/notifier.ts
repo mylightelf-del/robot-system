@@ -8,7 +8,8 @@ import { canAccessSite } from "@/lib/auth/authz";
 import { emailConfig, renderEmail, sendEmail, type EmailAttachment } from "./email";
 import { kakaoConfig, sendKakaoToUser } from "./kakao";
 import { pushConfig, sendPushToUser } from "./push";
-import { sendTeamsToPerson, teamsConfig } from "./teams";
+import { sendTeamsToPerson, teamsCard, teamsConfig } from "./teams";
+import { sendBotCard, teamsBotConfig } from "./teamsBot";
 
 /**
  * 알림 발송 모듈(교체 가능).
@@ -19,7 +20,7 @@ import { sendTeamsToPerson, teamsConfig } from "./teams";
  */
 export type ChannelMode = "live" | "mock";
 export function channelModes(): { EMAIL: ChannelMode; KAKAO: ChannelMode; PUSH: ChannelMode; TEAMS: ChannelMode } {
-  return { EMAIL: emailConfig() ? "live" : "mock", KAKAO: kakaoConfig() ? "live" : "mock", PUSH: pushConfig() ? "live" : "mock", TEAMS: teamsConfig() ? "live" : "mock" };
+  return { EMAIL: emailConfig() ? "live" : "mock", KAKAO: kakaoConfig() ? "live" : "mock", PUSH: pushConfig() ? "live" : "mock", TEAMS: teamsBotConfig() || teamsConfig() ? "live" : "mock" };
 }
 
 export const KAKAO_USER_PREFIX = "user:";
@@ -49,10 +50,17 @@ export async function deliver(r: Pick<NotificationRecipient, "channel" | "addres
     return { status: res.ok ? "SENT" : "FAILED", reason: res.reason };
   }
   if (r.channel === "TEAMS") {
-    // Teams 개인 채팅(워크플로 웹훅 → Flow bot 1:1). 주소 = 받는 사람의 Teams 로그인 이메일.
+    // Teams 개인 채팅. 주소 = 받는 사람의 Teams 로그인 이메일.
+    // 1순위 봇 직접 발송(1~2초, TEAMS_BOT_*), 2순위 워크플로 웹훅(대기열 지연 가능, TEAMS_WORKFLOW_URL), 둘 다 없으면 모의.
+    const tm = { title: m.title, lines: m.lines, url: m.url, tone: m.tone };
+    const bot = teamsBotConfig();
+    if (bot) {
+      const res = await sendBotCard(bot, r.address, teamsCard(tm), m.title);
+      return { status: res.ok ? "SENT" : "FAILED", reason: res.reason };
+    }
     const cfg = teamsConfig();
-    if (!cfg) return { status: "MOCK_SENT", reason: "모의 발송(Teams 워크플로 설정 전 — 실제 전송 없음)" };
-    const res = await sendTeamsToPerson(cfg, r.address, { title: m.title, lines: m.lines, url: m.url, tone: m.tone });
+    if (!cfg) return { status: "MOCK_SENT", reason: "모의 발송(Teams 봇·워크플로 설정 전 — 실제 전송 없음)" };
+    const res = await sendTeamsToPerson(cfg, r.address, tm);
     return { status: res.ok ? "SENT" : "FAILED", reason: res.reason };
   }
   if (r.channel === "PUSH") {

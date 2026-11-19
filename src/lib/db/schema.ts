@@ -832,3 +832,24 @@ export const deliveryPresets = pgTable("delivery_presets", {
   createdBy: text().notNull(),
   createdAt: isoTimestamp().notNull(),
 });
+
+/**
+ * Teams 봇 개인 채팅 주소록(docs/24). 직원에게 Wide Bot 앱이 설치되면(관리자 일괄 설치 포함) 봇이 받은 설치 알림에서 저장한다.
+ * 알림은 이 대화로 바로 보낸다(Bot Framework 직접 발송). 이메일·UPN 은 소문자로 저장해 사용자 이메일과 맞춘다.
+ */
+export const teamsConversations = pgTable(
+  "teams_conversations",
+  {
+    aadObjectId: text().primaryKey(),
+    email: text(),
+    upn: text(),
+    name: text(),
+    tenantId: text().notNull(),
+    conversationId: text().notNull(),
+    serviceUrl: text().notNull(),
+    /** 앱 제거(uninstall) 시각. 있으면 보내지 않는다. */
+    removedAt: isoTimestamp(),
+    updatedAt: isoTimestamp().notNull(),
+  },
+  (t) => [index("teams_conversations_email_idx").on(t.email), index("teams_conversations_upn_idx").on(t.upn)],
+);
