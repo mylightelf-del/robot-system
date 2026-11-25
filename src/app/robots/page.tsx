@@ -1,4 +1,6 @@
 import Link from "next/link";
+import { RefreshNowButton } from "@/components/RefreshNowButton";
+import { lastRobotRefreshAt } from "@/lib/services/refresh";
 import { getCurrentUser } from "@/lib/auth/session";
 import { listRobots, listSites } from "@/lib/services/robots";
 import { AppError } from "@/lib/util/errors";
@@ -30,7 +32,7 @@ export default async function RobotsPage({ searchParams }: { searchParams: Promi
       <PageTitle
         title="로봇 목록"
         subtitle={statusFilter.length ? <>{statusFilter.map((k) => STATUS_FILTER_LABEL[k]).join("·")} {rows.length}대 · <Link href={`/robots${site ? `?site=${site}` : ""}`} className="underline">전체 보기</Link></> : `${rows.length}대`}
-        right={<SiteFilter sites={sites} current={site ?? ""} basePath="/robots" extra={status ? `status=${status}` : ""} />}
+        right={<div className="flex flex-wrap items-start justify-end gap-3">{user.role === "HQ_ADMIN" && <RefreshNowButton lastAt={await lastRobotRefreshAt()} />}<SiteFilter sites={sites} current={site ?? ""} basePath="/robots" extra={status ? `status=${status}` : ""} /></div>}
       />
       <Card>
         {rows.length === 0 ? (

@@ -1,4 +1,6 @@
 import Link from "next/link";
+import { RefreshNowButton } from "@/components/RefreshNowButton";
+import { lastRobotRefreshAt } from "@/lib/services/refresh";
 import { getCurrentUser } from "@/lib/auth/session";
 import { getDashboard, getTodo, LOW_CONSUMABLE_PCT, STATUS_KEYS } from "@/lib/services/dashboard";
 import { listRobots } from "@/lib/services/robots";
@@ -46,7 +48,7 @@ export default async function DashboardPage() {
   return (
     <>
       <AutoRefresh seconds={10} />
-      <PageTitle title="종합 대시보드" subtitle={`접근 가능 사업장 ${dash.sites.length}곳 · 기준 시각 ${formatDateTime(dash.now)}`} />
+      <PageTitle title="종합 대시보드" subtitle={`접근 가능 사업장 ${dash.sites.length}곳 · 기준 시각 ${formatDateTime(dash.now)}`} right={user.role === "HQ_ADMIN" ? <RefreshNowButton lastAt={await lastRobotRefreshAt()} /> : null} />
 
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 mb-4">
         <Stat label="로봇 대수" value={t.robotCount} href="/robots" />

@@ -1,4 +1,6 @@
 import Link from "next/link";
+import { RefreshNowButton } from "@/components/RefreshNowButton";
+import { lastRobotRefreshAt } from "@/lib/services/refresh";
 import { getCurrentUser } from "@/lib/auth/session";
 import { listPlannedRuns, listTasks } from "@/lib/services/tasks";
 import { listRuns } from "@/lib/services/reports";
@@ -56,7 +58,7 @@ export default async function TasksPage({ searchParams }: { searchParams: Promis
 
   return (
     <>
-      <PageTitle title="작업·일정" subtitle="등록 작업, 예약, 예정 회차와 원격 명령 이력" right={<SiteFilter sites={sites} current={site ?? ""} basePath="/tasks" extra={showAll ? "show=all" : ""} />} />
+      <PageTitle title="작업·일정" subtitle="등록 작업, 예약, 예정 회차와 원격 명령 이력" right={<div className="flex flex-wrap items-start justify-end gap-3">{user.role === "HQ_ADMIN" && <RefreshNowButton lastAt={await lastRobotRefreshAt()} />}<SiteFilter sites={sites} current={site ?? ""} basePath="/tasks" extra={showAll ? "show=all" : ""} /></div>} />
 
       {site && (
         <Card className="mb-4" title={`주간 예약 일정 — ${sites.find((s) => s.id === site)?.name ?? ""}`} right={<span className="text-xs text-gray-500">사용 중인 예약 {weekly.length}건 · 시각은 사업장 시간대</span>}>

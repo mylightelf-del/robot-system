@@ -602,3 +602,19 @@ export async function sendDeliveryPresetAction(presetId: string, robotId: string
     return { message: `즐겨찾기로 배송 지시 접수(${r.message}).` };
   });
 }
+
+// ---- 로봇 현황·일정 지금 업데이트(본사 관리자, 2026-11-25) ----
+export async function refreshRobotsNowAction(): Promise<ActionResult & { steps?: { name: string; ok: boolean; detail: string }[] }> {
+  try {
+    const { refreshRobotsAndSchedules } = await import("@/lib/services/refresh");
+    const r = await refreshRobotsAndSchedules(await getCurrentUser());
+    for (const p of ["/", "/robots", "/tasks", "/sites", "/delivery", "/admin/advanced"]) revalidatePath(p);
+    const bad = r.steps.filter((s) => !s.ok);
+    return bad.length === r.steps.length
+      ? { ok: false, error: `업데이트 실패 — ${bad.map((s) => `${s.name}: ${s.detail}`).join(" / ")}`, steps: r.steps }
+      : { ok: true, message: bad.length ? `일부만 업데이트됨(${r.steps.length - bad.length}/${r.steps.length})` : `업데이트 완료(${r.steps.length}단계)`, steps: r.steps };
+  } catch (e) {
+    if (!(e instanceof AppError)) console.error("[action] 지금 업데이트 오류:", e);
+    return { ok: false, error: errorMessage(e) };
+  }
+}
