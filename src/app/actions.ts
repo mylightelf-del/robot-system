@@ -552,7 +552,7 @@ export async function deliverySyncNowAction(): Promise<ActionResult> {
     return { message: text };
   });
 }
-export async function dispatchDeliveryAction(input: { robotId: string; trays: { destination: string; recipientUserIds?: string[] }[]; sort?: "fixed" | "auto"; executeTask?: boolean }): Promise<ActionResult> {
+export async function dispatchDeliveryAction(input: { robotId: string; trays: { destination: string; recipientUserIds?: string[]; recipientContactIds?: string[] }[]; sort?: "fixed" | "auto"; executeTask?: boolean }): Promise<ActionResult> {
   return run(async () => {
     const r = await deliverySvc.dispatchDelivery(await getCurrentUser(), input);
     revalidatePath("/delivery");
@@ -581,7 +581,7 @@ export async function setMyPhoneAction(phone: string): Promise<ActionResult> {
     return { message: p ? "휴대폰 번호를 저장했습니다(카카오 알림톡 수신)." : "휴대폰 번호를 지웠습니다." };
   });
 }
-export async function saveDeliveryPresetAction(input: { siteId: string; name: string; trays: { destination: string; recipientUserIds?: string[] }[]; sort?: "fixed" | "auto"; executeTask?: boolean }): Promise<ActionResult> {
+export async function saveDeliveryPresetAction(input: { siteId: string; name: string; trays: { destination: string; recipientUserIds?: string[]; recipientContactIds?: string[] }[]; sort?: "fixed" | "auto"; executeTask?: boolean }): Promise<ActionResult> {
   return run(async () => {
     await deliverySvc.saveDeliveryPreset(await getCurrentUser(), input);
     revalidatePath("/delivery");
@@ -617,4 +617,41 @@ export async function refreshRobotsNowAction(): Promise<ActionResult & { steps?:
     if (!(e instanceof AppError)) console.error("[action] 지금 업데이트 오류:", e);
     return { ok: false, error: errorMessage(e) };
   }
+}
+
+// ---- 배송 받는 사람 명부(엑셀 올리기·수정·이름 즐겨찾기, 2026-11-26) ----
+export async function importDeliveryContactsAction(formData: FormData): Promise<ActionResult> {
+  return run(async () => {
+    const siteId = String(formData.get("siteId") ?? "");
+    const file = formData.get("file");
+    if (!siteId) throw new AppError("사업장을 고르세요.", "VALIDATION");
+    if (!(file instanceof File) || !file.size) throw new AppError("엑셀 파일을 고르세요.", "VALIDATION");
+    if (file.size > 900 * 1024) throw new AppError("파일이 너무 큽니다(900KB 이하 — 명부 시트만 남겨 저장해 주세요).", "VALIDATION");
+    const rows = await (await import("@/lib/delivery/contactsXlsx")).readContactsXlsx(await file.arrayBuffer());
+    if (rows.length > 3000) throw new AppError("한 번에 3,000명까지 올릴 수 있습니다.", "VALIDATION");
+    const r = await deliverySvc.importDeliveryContacts(await getCurrentUser(), siteId, rows);
+    revalidatePath("/delivery");
+    return { message: `명부 반영: 추가 ${r.added}명 · 갱신 ${r.updated}명${r.skipped.length ? ` · 건너뜀 ${r.skipped.length}명(이름·휴대폰 확인)` : ""}` };
+  });
+}
+export async function updateDeliveryContactAction(id: string, patch: { destination?: string | null; active?: boolean }): Promise<ActionResult> {
+  return run(async () => {
+    await deliverySvc.updateDeliveryContact(await getCurrentUser(), id, patch);
+    revalidatePath("/delivery");
+    return { message: "저장했습니다." };
+  });
+}
+export async function deleteDeliveryContactAction(id: string): Promise<ActionResult> {
+  return run(async () => {
+    await deliverySvc.deleteDeliveryContact(await getCurrentUser(), id);
+    revalidatePath("/delivery");
+    return { message: "명부에서 지웠습니다." };
+  });
+}
+export async function addContactPresetsAction(contactIds: string[]): Promise<ActionResult> {
+  return run(async () => {
+    const r = await deliverySvc.addContactPresets(await getCurrentUser(), contactIds);
+    revalidatePath("/delivery");
+    return { message: `즐겨찾기 ${r.created}개 추가${r.skipped.length ? ` · 목적지 없는 ${r.skipped.length}명 제외(${r.skipped.slice(0, 3).join(", ")}${r.skipped.length > 3 ? " 등" : ""})` : ""}` };
+  });
 }

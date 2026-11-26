@@ -1,4 +1,4 @@
-import { sendAlimtalk, solapiConfig } from "./solapi";
+import { sendAlimtalk, sendSms, smsConfig, solapiConfig } from "./solapi";
 import type { Incident, NotificationLog, NotificationRecipient, NotificationSetting, NotifyKind } from "@/lib/domain/types";
 import { SEVERITY_LABEL, SEVERITY_ORDER } from "@/lib/domain/status";
 import { formatDateTime, localHourMinute, minutesBetween } from "@/lib/util/time";
@@ -36,6 +36,8 @@ export interface Message {
   meta?: { kind: NotifyKind; refId: string | null; siteId: string };
   /** 카카오 알림톡(전화번호로 보낼 때): 검수된 템플릿 키와 변수. 없으면 알림톡을 보내지 않는다(템플릿 밖 문구는 발송 불가). */
   alimtalk?: { template: string; variables: Record<string, string> };
+  /** 문자 본문(SMS 채널). 없으면 제목+첫 줄. */
+  sms?: string;
   /** Teams 카드 강조 색(없으면 파랑). */
   tone?: "good" | "attention" | "warning" | "accent";
 }
@@ -47,6 +49,13 @@ export async function deliver(r: Pick<NotificationRecipient, "channel" | "addres
     if (modes.EMAIL === "mock") return { status: "MOCK_SENT", reason: "모의 발송(이메일 설정 전 — 실제 전송 없음)" };
     const { text, html } = renderEmail(m.title, m.lines, m.url);
     const res = await sendEmail(r.address, m.subject, text, html, m.attachments);
+    return { status: res.ok ? "SENT" : "FAILED", reason: res.reason };
+  }
+  if (r.channel === "SMS") {
+    // 문자(솔라피). 주소 = 휴대폰 번호, 본문 = sms(없으면 제목+첫 줄)
+    const cfg = smsConfig();
+    if (!cfg) return { status: "MOCK_SENT", reason: "모의 발송(문자 — 솔라피 키·발신번호 설정 전)" };
+    const res = await sendSms(cfg, r.address, m.sms ?? [m.title, m.lines[0]].filter(Boolean).join(" "));
     return { status: res.ok ? "SENT" : "FAILED", reason: res.reason };
   }
   if (r.channel === "TEAMS") {

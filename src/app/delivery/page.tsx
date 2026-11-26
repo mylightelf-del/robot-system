@@ -4,7 +4,7 @@ import { AppError } from "@/lib/util/errors";
 import { AccessDenied } from "@/components/AccessDenied";
 import { AutoRefresh } from "@/components/AutoRefresh";
 import { Card, Empty, Notice, PageTitle, Stat } from "@/components/ui";
-import { DeliverySyncButton, DispatchPanel, RecipientsEditor, RobotSiteSelect } from "@/components/DeliveryPanels";
+import { ContactsPanel, DeliverySyncButton, DispatchPanel, RecipientsEditor, RobotSiteSelect } from "@/components/DeliveryPanels";
 import { formatDateTime, formatDurationMin, formatTime, nowIso, relativeFromNow } from "@/lib/util/time";
 
 const STATUS_KO: Record<string, string> = { Await: "대기", OnTheWay: "이동 중", Arrived: "도착", Complete: "완료", Cancel: "취소" };
@@ -143,8 +143,8 @@ export default async function DeliveryPage({ searchParams }: { searchParams: Pro
       </div>
 
       <div className="grid lg:grid-cols-3 gap-4 mt-4">
-        <Card title="배송 보내기 · 호출" className="lg:col-span-2">
-          <DispatchPanel presets={presets.map((p) => ({ id: p.id, siteId: p.siteId, name: p.name, trays: p.trays, sort: p.sort, executeTask: p.executeTask }))} robots={v.dispatchable.map((r) => ({ id: r.id, name: r.name, siteId: r.siteId!, destinations: r.destinations.map((d) => d.name), busy: (r.lastState as { robotState?: string } | null)?.robotState === "BUSY" }))} users={v.users.map((u) => ({ id: u.id, name: u.name }))} />
+        <Card title="배송 보내기 · 이동" className="lg:col-span-2">
+          <DispatchPanel presets={presets.map((p) => ({ id: p.id, siteId: p.siteId, name: p.name, trays: p.trays, sort: p.sort, executeTask: p.executeTask }))} robots={v.dispatchable.map((r) => ({ id: r.id, name: r.name, siteId: r.siteId!, destinations: r.destinations.map((d) => d.name), busy: (r.lastState as { robotState?: string } | null)?.robotState === "BUSY" }))} users={v.users.map((u) => ({ id: u.id, name: u.name }))} contacts={v.contacts} />
           {v.robots.some((r) => r.siteId && !v.dispatchable.some((x) => x.id === r.id)) && <p className="text-xs text-amber-700 mt-2">사업장의 원격 제어가 꺼져 있으면 지시할 수 없습니다(관리 설정 → 원격 제어).</p>}
         </Card>
         <Card title="최근 지시">
@@ -209,6 +209,12 @@ export default async function DeliveryPage({ searchParams }: { searchParams: Pro
           </div>
         )}
       </Card>
+
+      {v.sites.length > 0 && (
+        <Card title="받는 사람 명부 (이름으로 배송·문자 알림)" className="mt-4">
+          <ContactsPanel sites={v.sites.map((s) => ({ id: s.id, name: s.name }))} contacts={v.contacts} destinationsBySite={destinationsBySite} />
+        </Card>
+      )}
 
       {v.admin ? (
         <Card title="도착 알림 수신자 (목적지별)" className="mt-4">

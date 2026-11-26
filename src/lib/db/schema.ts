@@ -808,7 +808,7 @@ export const deliveryOrders = pgTable(
       .references(() => deliveryRobots.id),
     siteId: text().references(() => sites.id),
     kind: text().$type<"DELIVERY" | "CALL" | "CANCEL_CALL">().notNull(),
-    trays: jsonb().$type<{ destination: string; type?: string; taskRef: string; recipientUserIds: string[] }[]>().notNull().default([]),
+    trays: jsonb().$type<{ destination: string; type?: string; taskRef: string; recipientUserIds: string[]; recipientContactIds?: string[] }[]>().notNull().default([]),
     sort: text().notNull().default("fixed"),
     executeTask: boolean().notNull().default(true),
     status: text().$type<"ACCEPTED" | "FAILED">().notNull(),
@@ -826,7 +826,7 @@ export const deliveryPresets = pgTable("delivery_presets", {
     .notNull()
     .references(() => sites.id),
   name: text().notNull(),
-  trays: jsonb().$type<{ destination: string; recipientUserIds: string[] }[]>().notNull().default([]),
+  trays: jsonb().$type<{ destination: string; recipientUserIds: string[]; recipientContactIds?: string[] }[]>().notNull().default([]),
   sort: text().notNull().default("fixed"),
   executeTask: boolean().notNull().default(true),
   createdBy: text().notNull(),
@@ -852,4 +852,26 @@ export const teamsConversations = pgTable(
     updatedAt: isoTimestamp().notNull(),
   },
   (t) => [index("teams_conversations_email_idx").on(t.email), index("teams_conversations_upn_idx").on(t.upn)],
+);
+
+/**
+ * 배송 받는 사람 명부(사용자 요청 2026-11-26): Wide Bot 계정이 없는 직원도 이름으로 골라 배송하고 도착 문자를 받게 한다.
+ * 개인정보(이름·휴대폰)이므로 운영 DB 에만 둔다(저장소·문서·시험 데이터에 실명부 금지). 화면에서는 번호를 가린다.
+ * destination: 이 사람에게 보낼 때 쓰는 로봇 목적지(기본: 근무층 "8F" → "8층").
+ */
+export const deliveryContacts = pgTable(
+  "delivery_contacts",
+  {
+    id: text().primaryKey(),
+    siteId: text().notNull().references(() => sites.id),
+    name: text().notNull(),
+    floor: text(),
+    dept: text(),
+    phone: text().notNull(),
+    ext: text(),
+    destination: text(),
+    active: boolean().notNull().default(true),
+    updatedAt: isoTimestamp().notNull(),
+  },
+  (t) => [uniqueIndex("delivery_contacts_site_name_phone").on(t.siteId, t.name, t.phone), index("delivery_contacts_site_idx").on(t.siteId)],
 );

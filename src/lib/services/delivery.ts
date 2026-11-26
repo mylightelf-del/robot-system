@@ -5,7 +5,7 @@ import { getDb, schema } from "@/lib/db/client";
 import { listUsers } from "@/lib/db/repo";
 import { deliver, type Message } from "@/lib/notify/notifier";
 import { hasActiveDevice } from "@/lib/notify/push";
-import { normalizePhone, solapiConfig } from "@/lib/notify/solapi";
+import { maskPhone, normalizePhone, solapiConfig } from "@/lib/notify/solapi";
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from "@/lib/util/errors";
 import { newId } from "@/lib/util/random";
 import { formatTime, nowIso } from "@/lib/util/time";
@@ -336,14 +336,29 @@ async function recipientsFor(siteId: string | null, destination: string) {
 }
 
 /** 이 구간의 수신자: Wide Bot 에서 지시하면서 지정한 사람 → 목적지 수신자 → 사업장 기본 수신자('*'). */
-async function legRecipients(leg: { siteId: string | null; destination: string; taskRef: string | null }): Promise<{ userIds: string[]; channels: Ch[] } | null> {
+async function legRecipients(leg: { siteId: string | null; destination: string; taskRef: string | null }): Promise<{ userIds: string[]; channels: Ch[]; contactIds: string[] } | null> {
   const rec = await recipientsFor(leg.siteId, leg.destination);
   if (leg.taskRef) {
     const order = (await getDb().select().from(schema.deliveryOrders).where(sql`${schema.deliveryOrders.trays} @> ${JSON.stringify([{ taskRef: leg.taskRef }])}::jsonb`))[0];
     const t = order?.trays.find((x) => x.taskRef === leg.taskRef);
-    if (t?.recipientUserIds?.length) return { userIds: t.recipientUserIds, channels: (rec?.channels as Ch[] | undefined) ?? DEFAULT_CHANNELS };
+    // 이 배송을 보낸 사람이 고른 받는 사람(직원 계정·명부)이 있으면 그 사람들에게만
+    if (t?.recipientUserIds?.length || t?.recipientContactIds?.length) return { userIds: t.recipientUserIds ?? [], channels: (rec?.channels as Ch[] | undefined) ?? DEFAULT_CHANNELS, contactIds: t.recipientContactIds ?? [] };
   }
-  return rec && rec.userIds.length ? { userIds: rec.userIds, channels: rec.channels as Ch[] } : null;
+  return rec && rec.userIds.length ? { userIds: rec.userIds, channels: rec.channels as Ch[], contactIds: [] } : null;
+}
+
+/** 명부(계정 없는 직원)에게 문자. 반환: 요약 조각들. */
+async function sendSmsToContacts(contactIds: string[], text: (name: string) => string, refId: string): Promise<string[]> {
+  if (!contactIds.length) return [];
+  const db = getDb();
+  const rows = await db.select().from(schema.deliveryContacts).where(and(inArray(schema.deliveryContacts.id, contactIds), eq(schema.deliveryContacts.active, true)));
+  const out: string[] = [];
+  for (const c of rows) {
+    const r = await deliver({ channel: "SMS", address: c.phone }, { subject: "", title: "", lines: [], url: "", sms: text(c.name) });
+    await db.insert(schema.notificationLogs).values({ id: newId("ntf"), incidentId: null, at: nowIso(), channel: "SMS", recipient: `${c.name} ${maskPhone(c.phone)}`, status: r.status, reason: r.reason, kind: "DELIVERY", refId });
+    out.push(`${c.name} 문자 ${r.status === "SENT" ? "발송" : r.status === "MOCK_SENT" ? "모의 발송" : "실패"}`);
+  }
+  return out;
 }
 
 /** 직원들에게 보내고 알림 기록(kind DELIVERY)을 남긴다. 반환: 요약(보낸 것이 없으면 sent=false). */
@@ -394,7 +409,10 @@ export async function notifyArrival(legId: string, reminder: boolean): Promise<s
       meta: { kind: "DELIVERY", refId: leg.id, siteId: leg.siteId },
       alimtalk: { template: reminder ? "DELIVERY_REMIND" : "DELIVERY_ARRIVED", variables: { "#{목적지}": leg.destination, "#{로봇}": robot?.name ?? leg.robotId, "#{시각}": formatTime(leg.arrivedAt ?? now, tz) } },
     };
-    ({ sent, summary } = await sendToUsers(rec.userIds, rec.channels, m, leg.id));
+    const u = rec.userIds.length ? await sendToUsers(rec.userIds, rec.channels, m, leg.id) : { sent: false, summary: "" };
+    const sms = await sendSmsToContacts(rec.contactIds, (name) => (reminder ? `[Wide Bot] ${name}님, ${leg.destination}에 도착한 배송을 아직 수령하지 않으셨습니다. 로봇에서 수령해 주세요.` : `[Wide Bot] ${name}님, 배송로봇이 ${leg.destination}에 도착했습니다. 물품을 수령해 주세요.`), leg.id);
+    sent = u.sent || sms.length > 0;
+    summary = [u.summary, ...sms].filter(Boolean).join(", ") || "보낼 채널 없음";
   }
   // 실제로 보낸 경우만 notifiedAt 을 채운다(받는 사람이 없던 도착은 재알림 대상이 아니다)
   await db
@@ -412,8 +430,9 @@ async function notifyCancel(legId: string): Promise<void> {
   const rec = await legRecipients(leg);
   if (!rec) return;
   const robot = await db.query.deliveryRobots.findFirst({ where: eq(schema.deliveryRobots.id, leg.robotId) });
-  const r = await sendToUsers(rec.userIds, rec.channels, { tone: "warning", subject: `[Wide Bot] 배송 취소 — ${leg.destination}`, title: `${leg.destination} 배송이 취소되었습니다`, lines: [`로봇: ${robot?.name ?? leg.robotId}`, "보낸 사람에게 확인해 주세요."], url: `${baseUrl()}/delivery`, meta: { kind: "DELIVERY", refId: `${leg.id}:cancel`, siteId: leg.siteId }, alimtalk: { template: "DELIVERY_CANCEL", variables: { "#{목적지}": leg.destination, "#{로봇}": robot?.name ?? leg.robotId } } }, `${leg.id}:cancel`);
-  await db.update(schema.deliveryLegs).set({ notifyResult: `${leg.notifyResult ? `${leg.notifyResult} / ` : ""}취소 알림: ${r.summary}` }).where(eq(schema.deliveryLegs.id, leg.id));
+  const sms = await sendSmsToContacts(rec.contactIds, (name) => `[Wide Bot] ${name}님, ${leg.destination} 배송이 취소되었습니다. 보낸 분께 확인해 주세요.`, `${leg.id}:cancel`);
+  const r = !rec.userIds.length ? { summary: "" } : await sendToUsers(rec.userIds, rec.channels, { tone: "warning", subject: `[Wide Bot] 배송 취소 — ${leg.destination}`, title: `${leg.destination} 배송이 취소되었습니다`, lines: [`로봇: ${robot?.name ?? leg.robotId}`, "보낸 사람에게 확인해 주세요."], url: `${baseUrl()}/delivery`, meta: { kind: "DELIVERY", refId: `${leg.id}:cancel`, siteId: leg.siteId }, alimtalk: { template: "DELIVERY_CANCEL", variables: { "#{목적지}": leg.destination, "#{로봇}": robot?.name ?? leg.robotId } } }, `${leg.id}:cancel`);
+  await db.update(schema.deliveryLegs).set({ notifyResult: `${leg.notifyResult ? `${leg.notifyResult} / ` : ""}취소 알림: ${[r.summary, ...sms].filter(Boolean).join(", ")}` }).where(eq(schema.deliveryLegs.id, leg.id));
 }
 
 /** 로봇 이상(막힘·운행 오류) 알림: 사업장 기본 수신자('*')에게. 같은 이상 상황에는 한 번. */
@@ -492,7 +511,9 @@ export async function getDeliveryView(user: User, opts: { siteId?: string; days?
   // 지시 가능: 본사 관리자 또는 현장 담당자, 사업장 지정·원격 제어 켜진 로봇(최종 확인은 지시할 때 서버에서 다시)
   const remoteOn = new Set(sites.filter((s) => s.remoteControlEnabled).map((s) => s.id));
   const dispatchable = robots.filter((r) => r.active && r.siteId && remoteOn.has(r.siteId) && (admin || user.role === "SITE_MANAGER"));
-  return { mode: agentMode(), robots, legs, recipients, sites, users, remindMinutes: remindMinutes(), stuckMinutes: stuckMinutes(), admin, orders, dispatchable };
+  // 받는 사람 명부(번호는 가려서). 접근 가능한 사업장만.
+  const contacts = (await db.select().from(schema.deliveryContacts).where(inArray(schema.deliveryContacts.siteId, ids.length ? ids : ["-"])).orderBy(schema.deliveryContacts.name)).map((c) => ({ id: c.id, siteId: c.siteId, name: c.name, floor: c.floor, dept: c.dept, phoneMasked: maskPhone(c.phone), ext: c.ext, destination: c.destination, active: c.active }));
+  return { mode: agentMode(), robots, legs, recipients, sites, users, remindMinutes: remindMinutes(), stuckMinutes: stuckMinutes(), admin, orders, dispatchable, contacts };
 }
 
 export async function setDeliveryRobotSite(user: User, robotId: string, siteId: string | null): Promise<void> {
@@ -572,7 +593,7 @@ function destType(robot: { destinations: { name: string; type: string }[] }, nam
   return d.type;
 }
 
-async function recordOrder(user: User, robot: { id: string; siteId: string | null; source?: string }, kind: "DELIVERY" | "CALL" | "CANCEL_CALL", trays: { destination: string; type?: string; taskRef: string; recipientUserIds: string[] }[], opts: { sort?: string; executeTask?: boolean }, send: () => Promise<{ taskId?: string }>) {
+async function recordOrder(user: User, robot: { id: string; siteId: string | null; source?: string }, kind: "DELIVERY" | "CALL" | "CANCEL_CALL", trays: { destination: string; type?: string; taskRef: string; recipientUserIds: string[]; recipientContactIds?: string[] }[], opts: { sort?: string; executeTask?: boolean }, send: () => Promise<{ taskId?: string }>) {
   const id = newId("dor");
   const now = nowIso();
   let status: "ACCEPTED" | "FAILED" = "ACCEPTED";
@@ -592,7 +613,16 @@ async function recordOrder(user: User, robot: { id: string; siteId: string | nul
 }
 
 /** 배송 보내기: 트레이별 목적지(+ 이 배송의 수신자). 접수는 '로봇이 받았다'는 뜻이고 실제 출발·도착은 배송 기록으로 확인한다. */
-export async function dispatchDelivery(user: User, input: { robotId: string; trays: { destination: string; recipientUserIds?: string[] }[]; sort?: "fixed" | "auto"; executeTask?: boolean }) {
+type TrayInput = { destination: string; recipientUserIds?: string[]; recipientContactIds?: string[] };
+
+/** 받는 사람(명부)이 이 사업장의 사용 중인 사람인지. */
+async function assertContacts(siteId: string, ids: string[]) {
+  if (!ids.length) return;
+  const rows = await getDb().select({ id: schema.deliveryContacts.id }).from(schema.deliveryContacts).where(and(inArray(schema.deliveryContacts.id, ids), eq(schema.deliveryContacts.siteId, siteId), eq(schema.deliveryContacts.active, true)));
+  if (rows.length !== new Set(ids).size) throw new ValidationError("받는 사람 명부에 없거나 사용 중지된 사람이 있습니다.");
+}
+
+export async function dispatchDelivery(user: User, input: { robotId: string; trays: TrayInput[]; sort?: "fixed" | "auto"; executeTask?: boolean }) {
   const trays = input.trays.filter((t) => t.destination.trim());
   if (!trays.length) throw new ValidationError("목적지를 하나 이상 고르세요.");
   if (trays.length > 5) throw new ValidationError("트레이는 최대 5개입니다.");
@@ -600,7 +630,8 @@ export async function dispatchDelivery(user: User, input: { robotId: string; tra
   const st = (robot.lastState ?? {}) as { robotState?: string };
   if (st.robotState === "BUSY") throw new ConflictError("로봇이 배송 중이거나 누군가 화면을 조작하고 있습니다. 대기 상태가 된 뒤 보내세요.");
   const orderKey = newId("t").slice(-8);
-  const rows = trays.map((t, i) => ({ destination: t.destination.trim(), type: destType(robot, t.destination.trim()), taskRef: `wb-${orderKey}-${i + 1}`, recipientUserIds: Array.from(new Set(t.recipientUserIds ?? [])) }));
+  await assertContacts(robot.siteId!, trays.flatMap((t) => t.recipientContactIds ?? []));
+  const rows = trays.map((t, i) => ({ destination: t.destination.trim(), type: destType(robot, t.destination.trim()), taskRef: `wb-${orderKey}-${i + 1}`, recipientUserIds: Array.from(new Set(t.recipientUserIds ?? [])), recipientContactIds: Array.from(new Set(t.recipientContactIds ?? [])) }));
   if (robot.source === "openplatform") {
     if (!robot.sn || !robot.shopId) throw new ValidationError("신형 로봇의 SN·매장 정보가 없습니다(목록 동기화 후 다시 시도).");
     const mapName = String(((robot.lastState ?? {}) as { mapName?: string }).mapName ?? "") || undefined;
@@ -758,13 +789,14 @@ export async function listDeliveryPresets(user: User, siteIds: string[]) {
   return getDb().select().from(schema.deliveryPresets).where(inArray(schema.deliveryPresets.siteId, siteIds)).orderBy(schema.deliveryPresets.name);
 }
 
-export async function saveDeliveryPreset(user: User, input: { siteId: string; name: string; trays: { destination: string; recipientUserIds?: string[] }[]; sort?: "fixed" | "auto"; executeTask?: boolean }) {
+export async function saveDeliveryPreset(user: User, input: { siteId: string; name: string; trays: TrayInput[]; sort?: "fixed" | "auto"; executeTask?: boolean }) {
   await assertPresetSite(user, input.siteId);
   const name = input.name.trim();
   if (!name) throw new ValidationError("즐겨찾기 이름을 입력하세요.");
-  const trays = input.trays.filter((t) => t.destination.trim()).map((t) => ({ destination: t.destination.trim(), recipientUserIds: Array.from(new Set(t.recipientUserIds ?? [])) }));
+  const trays = input.trays.filter((t) => t.destination.trim()).map((t) => ({ destination: t.destination.trim(), recipientUserIds: Array.from(new Set(t.recipientUserIds ?? [])), recipientContactIds: Array.from(new Set(t.recipientContactIds ?? [])) }));
   if (!trays.length) throw new ValidationError("목적지를 하나 이상 고르세요.");
   if (trays.length > 5) throw new ValidationError("트레이는 최대 5개입니다.");
+  await assertContacts(input.siteId, trays.flatMap((t) => t.recipientContactIds));
   const id = newId("dps");
   await getDb().insert(schema.deliveryPresets).values({ id, siteId: input.siteId, name, trays, sort: input.sort ?? "fixed", executeTask: input.executeTask ?? true, createdBy: user.id, createdAt: nowIso() });
   await audit(user, { siteId: input.siteId, robotId: null, action: "DELIVERY:PRESET_SAVE", params: { name, destinations: trays.map((t) => t.destination) }, result: "OK", detail: null, vendorTraceId: null });
@@ -788,4 +820,99 @@ export async function sendDeliveryPreset(user: User, presetId: string, robotId: 
   const robot = await db.query.deliveryRobots.findFirst({ where: eq(schema.deliveryRobots.id, robotId) });
   if (!robot || robot.siteId !== p.siteId) throw new ValidationError("이 즐겨찾기는 같은 사업장의 배송로봇에만 쓸 수 있습니다.");
   return dispatchDelivery(user, { robotId, trays: p.trays, sort: p.sort === "auto" ? "auto" : "fixed", executeTask: p.executeTask });
+}
+
+
+// ---------------------------------------------------------------- 받는 사람 명부(사용자 요청 2026-11-26)
+
+/** 근무층 → 로봇 목적지: "8F"·"8층"·"8" → 로봇 목적지 중 "8층"(있을 때). 지하 "B1" → "지하1층". */
+export function floorToDestination(floor: string | null | undefined, destinations: string[]): string | null {
+  const f = String(floor ?? "").trim().toUpperCase();
+  const m = /^(B)?\s*(\d+)\s*(F|층)?$/.exec(f);
+  if (!m) return null;
+  const cand = m[1] ? [`지하${m[2]}층`, `B${m[2]}`] : [`${m[2]}층`, `${m[2]}F`, m[2]];
+  return cand.find((c) => destinations.includes(c)) ?? null;
+}
+
+export interface ContactRow {
+  name: string;
+  floor?: string | null;
+  dept?: string | null;
+  phone: string;
+  ext?: string | null;
+}
+
+/** 명부 올리기(엑셀에서 읽은 행). 같은 이름+번호는 갱신, 새 사람은 추가. 목적지는 비어 있으면 근무층으로 채운다. */
+export async function importDeliveryContacts(user: User, siteId: string, rows: ContactRow[]): Promise<{ added: number; updated: number; skipped: string[] }> {
+  await assertPresetSite(user, siteId);
+  const db = getDb();
+  const robotDests = Array.from(new Set((await db.select().from(schema.deliveryRobots).where(eq(schema.deliveryRobots.siteId, siteId))).flatMap((r) => r.destinations.map((d) => d.name))));
+  const existing = await db.select().from(schema.deliveryContacts).where(eq(schema.deliveryContacts.siteId, siteId));
+  let added = 0;
+  let updated = 0;
+  const skipped: string[] = [];
+  for (const r of rows) {
+    const name = String(r.name ?? "").trim();
+    const phone = normalizePhone(r.phone);
+    if (!name || !phone) {
+      skipped.push(name || "(이름 없음)");
+      continue;
+    }
+    const floor = r.floor ? String(r.floor).trim() : null;
+    const prev = existing.find((c) => c.name === name && c.phone === phone);
+    const destination = prev?.destination ?? floorToDestination(floor, robotDests);
+    const row = { name, floor, dept: r.dept ? String(r.dept).trim() : null, phone, ext: r.ext ? String(r.ext).trim() : null, destination, active: true, updatedAt: nowIso() };
+    if (prev) {
+      await db.update(schema.deliveryContacts).set(row).where(eq(schema.deliveryContacts.id, prev.id));
+      updated += 1;
+    } else {
+      await db.insert(schema.deliveryContacts).values({ id: newId("dct"), siteId, ...row });
+      added += 1;
+    }
+  }
+  await audit(user, { siteId, robotId: null, action: "DELIVERY:CONTACTS_IMPORT", params: { added, updated, skipped: skipped.length }, result: "OK", detail: null, vendorTraceId: null });
+  return { added, updated, skipped };
+}
+
+export async function updateDeliveryContact(user: User, id: string, patch: { destination?: string | null; active?: boolean; floor?: string | null; dept?: string | null }) {
+  const db = getDb();
+  const c = await db.query.deliveryContacts.findFirst({ where: eq(schema.deliveryContacts.id, id) });
+  if (!c) throw new NotFoundError("명부에 없는 사람입니다.");
+  await assertPresetSite(user, c.siteId);
+  const set: Partial<typeof schema.deliveryContacts.$inferInsert> = { updatedAt: nowIso() };
+  if (patch.destination !== undefined) set.destination = patch.destination?.trim() || null;
+  if (patch.active !== undefined) set.active = patch.active;
+  if (patch.floor !== undefined) set.floor = patch.floor?.trim() || null;
+  if (patch.dept !== undefined) set.dept = patch.dept?.trim() || null;
+  await db.update(schema.deliveryContacts).set(set).where(eq(schema.deliveryContacts.id, id));
+  await audit(user, { siteId: c.siteId, robotId: null, action: "DELIVERY:CONTACT_UPDATE", params: { id, fields: Object.keys(patch) }, result: "OK", detail: null, vendorTraceId: null });
+}
+
+export async function deleteDeliveryContact(user: User, id: string) {
+  const db = getDb();
+  const c = await db.query.deliveryContacts.findFirst({ where: eq(schema.deliveryContacts.id, id) });
+  if (!c) return;
+  await assertPresetSite(user, c.siteId);
+  await db.delete(schema.deliveryContacts).where(eq(schema.deliveryContacts.id, id));
+  await audit(user, { siteId: c.siteId, robotId: null, action: "DELIVERY:CONTACT_DELETE", params: { id }, result: "OK", detail: null, vendorTraceId: null });
+}
+
+/** 이름으로 즐겨찾기 만들기: 「이름(목적지)」 한 줄 즐겨찾기. 목적지가 없는 사람은 만들지 않는다. */
+export async function addContactPresets(user: User, contactIds: string[]): Promise<{ created: number; skipped: string[] }> {
+  const db = getDb();
+  const rows = contactIds.length ? await db.select().from(schema.deliveryContacts).where(inArray(schema.deliveryContacts.id, contactIds)) : [];
+  let created = 0;
+  const skipped: string[] = [];
+  for (const c of rows) {
+    if (!c.destination) {
+      skipped.push(c.name);
+      continue;
+    }
+    const name = `${c.name}(${c.destination})`;
+    const dup = await db.query.deliveryPresets.findFirst({ where: and(eq(schema.deliveryPresets.siteId, c.siteId), eq(schema.deliveryPresets.name, name)) });
+    if (dup) continue;
+    await saveDeliveryPreset(user, { siteId: c.siteId, name, trays: [{ destination: c.destination, recipientContactIds: [c.id] }], sort: "fixed", executeTask: true });
+    created += 1;
+  }
+  return { created, skipped };
 }

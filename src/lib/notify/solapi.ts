@@ -88,3 +88,48 @@ export const ALIMTALK_TEMPLATE_DRAFTS: Record<string, string> = {
   DELIVERY_CANCEL: "[Wide Bot] 배송 취소 안내\n#{목적지} 배송이 취소되었습니다.\n\n- 로봇: #{로봇}\n\n보낸 분께 확인해 주세요.",
   DELIVERY_PROBLEM: "[Wide Bot] 배송로봇 이상 안내\n배송로봇 #{로봇}에 이상이 있습니다.\n\n- 내용: #{내용}\n- 시각: #{시각}\n\n현장 확인이 필요합니다.",
 };
+
+// ---------------------------------------------------------------- 문자(SMS/LMS) — 사용자 요청 2026-11-26
+/**
+ * 문자 발송 설정: API 키·시크릿 + 솔라피에 등록·인증한 발신번호(SOLAPI_SENDER). 알림톡(pfId·템플릿)과 달리 검수가 없다.
+ * 90바이트(한글 약 45자)를 넘으면 솔라피가 LMS 로 자동 전환한다.
+ */
+export interface SmsConfig {
+  apiKey: string;
+  apiSecret: string;
+  sender: string;
+  baseUrl: string;
+}
+export function smsConfig(): SmsConfig | null {
+  const apiKey = process.env.SOLAPI_API_KEY;
+  const apiSecret = process.env.SOLAPI_API_SECRET;
+  const sender = normalizePhone(process.env.SOLAPI_SENDER) ?? (process.env.SOLAPI_SENDER || "").replace(/\D/g, "");
+  if (!apiKey || !apiSecret || !sender) return null;
+  return { apiKey, apiSecret, sender, baseUrl: (process.env.SOLAPI_BASE_URL || "https://api.solapi.com").replace(/\/$/, "") };
+}
+
+export async function sendSms(cfg: SmsConfig, to: string, text: string): Promise<{ ok: boolean; reason: string }> {
+  const phone = normalizePhone(to);
+  if (!phone) return { ok: false, reason: "휴대폰 번호 형식 오류" };
+  try {
+    const res = await (senderForTest ?? fetch)(`${cfg.baseUrl}/messages/v4/send-many/detail`, {
+      method: "POST",
+      headers: { Authorization: solapiAuthHeader(cfg.apiKey, cfg.apiSecret), "Content-Type": "application/json" },
+      body: JSON.stringify({ messages: [{ to: phone, from: cfg.sender, text }] }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    const json = (await res.json().catch(() => null)) as { failedMessageList?: { statusCode?: string; statusMessage?: string }[]; errorCode?: string; errorMessage?: string } | null;
+    if (!res.ok) return { ok: false, reason: `솔라피 HTTP ${res.status}${json?.errorCode ? ` ${json.errorCode}` : ""}${json?.errorMessage ? `: ${json.errorMessage}` : ""}` };
+    const failed = json?.failedMessageList ?? [];
+    if (failed.length) return { ok: false, reason: `솔라피 접수 실패: ${failed[0].statusCode ?? ""} ${failed[0].statusMessage ?? ""}`.trim() };
+    return { ok: true, reason: "솔라피 접수(문자)" };
+  } catch (e) {
+    return { ok: false, reason: `솔라피 연결 실패: ${(e as Error).message}` };
+  }
+}
+
+/** 화면 표시용 번호 가림: 010-****-1234 */
+export function maskPhone(raw: string | null | undefined): string {
+  const d = normalizePhone(raw);
+  return d ? `${d.slice(0, 3)}-****-${d.slice(-4)}` : "";
+}
