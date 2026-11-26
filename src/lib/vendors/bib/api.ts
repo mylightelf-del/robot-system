@@ -37,6 +37,13 @@ export interface BibPosition {
   localMapPosition: { x: number; y: number; frame: string; unit: string; originX: number; originY: number };
 }
 
+export interface BibLocalMap {
+  robotId: string;
+  mapHandle: string;
+  name: string | null;
+  image: { type: "URL" | "BASE64" | string; data: string; mimeType: string | null };
+}
+
 export class BibApi {
   constructor(readonly client: BibClient) {}
   async listRobots(): Promise<BibRobot[]> {
@@ -59,6 +66,11 @@ export class BibApi {
   }
   maps(robotId: string) {
     return this.client.get<BibMapList>(`/partner/v1/robot/${encodeURIComponent(robotId)}/localmap/list`);
+  }
+  /** 지도 그림(현재 지도: handle 생략). 실기 형식은 URL 또는 BASE64. */
+  localMap(robotId: string, handle?: string) {
+    const base = `/partner/v1/robot/${encodeURIComponent(robotId)}/localmap`;
+    return this.client.get<BibLocalMap>(handle ? `${base}/${encodeURIComponent(handle)}` : base);
   }
   position(robotId: string) {
     return this.client.get<BibPosition>(`/partner/v1/robot/${encodeURIComponent(robotId)}/position`);

@@ -133,6 +133,14 @@ export interface CzMapInfo {
   valid: boolean;
 }
 
+/** 지도 그림 + 네 모서리(좌하·좌상·우상·우하, 로봇 위치와 같은 좌표계 m). 오래된 지도는 모서리가 없을 수 있다(V1.0.12). */
+export interface CzMapPic {
+  width: number;
+  height: number;
+  vertexCoordinates?: { x: number; y: number; z?: number; yaw?: number }[] | null;
+  picUrl: string;
+}
+
 const P = "/app/openapi/v1";
 
 /** 조회 전용 API 묶음. 명령·예약 변경·설정 변경 엔드포인트는 일부러 만들지 않는다. */
@@ -164,6 +172,12 @@ export class CenobotsApi {
   }
   maps(openId: string): Promise<CzMapInfo[]> {
     return this.client.get<CzMapInfo[]>(`${P}/map`, { deviceOpenId: openId }).then((d) => d ?? []);
+  }
+  mapPic(mapVersion: string): Promise<CzMapPic> {
+    return this.client.get<CzMapPic>(`${P}/map/pic-with-points`, { mapVersion });
+  }
+  areas(openId: string, mapId: number): Promise<{ mapId: number; areaList?: { id: string; name: string; type?: string; geo?: { x: number; y: number }[] }[] }> {
+    return this.client.get(`${P}/map/area`, { mapId, deviceOpenId: openId }).then((d) => (d ?? { mapId, areaList: [] }) as { mapId: number; areaList?: { id: string; name: string; type?: string; geo?: { x: number; y: number }[] }[] });
   }
   /** 작업 이력 한 페이지(조회용 POST). startTimestamp·endTimestamp 는 ms. */
   missions(req: { deviceOpenId: string; startTimestamp: number; endTimestamp: number; pageIndex: number; pageLength: number }): Promise<CzMissionPage> {
