@@ -105,22 +105,31 @@ describe("배송 받는 사람 명부·문자 알림", () => {
     delete process.env.DELIVERY_CONTACT_SMS;
   });
 
-  it("(기본) 로봇 문자: 지시에 받는 사람 번호(국가번호 82·앞 0 뺌)를 넣고 Wide Bot 은 문자를 보내지 않는다, 트레이당 1명", async () => {
+  it("(기본) 구형(에이전트) 로봇: 번호를 로봇에 넣지 않고(에이전트가 거부), 문자 서비스가 있으면 Wide Bot 이 대신 보낸다", async () => {
     const hq = await user("u-hq");
     await syncDeliveryCatalog(new AgentClient(agentMockTransport, MOCK_DEVICE_ID));
     await syncDeliveryState(new AgentClient(agentMockTransport, MOCK_DEVICE_ID));
     await setDeliveryRobotSite(hq, `DR-${MOCK_ROBOT.id}`, "site-01");
     const { id } = await createDeliveryContact(hq, { siteId: "site-01", name: "가상삼", phone: "010-0000-0003", floor: "9F", destination: "2602" });
-    const { id: id2 } = await createDeliveryContact(hq, { siteId: "site-01", name: "가상사", phone: "01000000004" });
-    await expect(dispatchDelivery(hq, { robotId: `DR-${MOCK_ROBOT.id}`, trays: [{ destination: "2602", recipientContactIds: [id, id2] }] })).rejects.toThrow(/트레이마다 받는 사람 1명/);
     await dispatchDelivery(hq, { robotId: `DR-${MOCK_ROBOT.id}`, trays: [{ destination: "2602", recipientContactIds: [id] }] });
-    const dest = (agentMockState.commands.at(-1)!.body as { trays: { destinations: { destination: string; id: string; phoneNum?: string; phoneCode?: string }[] }[] }).trays[0].destinations[0];
-    expect(dest).toMatchObject({ destination: "2602", phoneNum: "1000000003", phoneCode: "82" });
+    const dest = (agentMockState.commands.at(-1)!.body as { trays: { destinations: Record<string, unknown>[] }[] }).trays[0].destinations[0];
+    expect(dest).not.toHaveProperty("phoneNum");
     await ingestAgentNotify({ msgId: "r-1", msgType: "notifyDeliveryTask", robotId: MOCK_ROBOT.id, timestamp: Date.now(), data: { trays: [{ destinations: [{ destination: "2602", id: dest.id, status: "Arrived", type: "remote" }] }] } });
     await processDeliveryEvents();
-    expect(sms).toHaveLength(0);
-    const leg = (await getDb().select().from(schema.deliveryLegs).where(eq(schema.deliveryLegs.taskRef, dest.id)))[0];
-    expect(leg.notifyResult).toContain("가상삼 문자: 로봇이 발송");
+    expect(sms).toHaveLength(1); // 솔라피가 설정된 시험 환경 → 대신 발송
+    expect(sms[0].text).toContain("가상삼님");
+    // 문자 서비스도 없으면 '못 보냄' 으로 기록
+    delete process.env.SOLAPI_API_KEY;
+    const { id: id2 } = await createDeliveryContact(hq, { siteId: "site-01", name: "가상사", phone: "01000000004", destination: "2603" });
+    await new Promise((r) => setTimeout(r, 0));
+    await getDb().update(schema.deliveryOrders).set({ requestedAt: new Date(Date.now() - 60_000).toISOString() });
+    await dispatchDelivery(hq, { robotId: `DR-${MOCK_ROBOT.id}`, trays: [{ destination: "2603", recipientContactIds: [id2] }] });
+    const d2 = (agentMockState.commands.at(-1)!.body as { trays: { destinations: { id: string }[] }[] }).trays[0].destinations[0];
+    await ingestAgentNotify({ msgId: "r-2", msgType: "notifyDeliveryTask", robotId: MOCK_ROBOT.id, timestamp: Date.now(), data: { trays: [{ destinations: [{ destination: "2603", id: d2.id, status: "Arrived", type: "remote" }] }] } });
+    await processDeliveryEvents();
+    const leg = (await getDb().select().from(schema.deliveryLegs).where(eq(schema.deliveryLegs.taskRef, d2.id)))[0];
+    expect(leg.notifyResult).toContain("가상사 문자 못 보냄");
+    process.env.SOLAPI_API_KEY = "test-key";
   });
 
   it("명부 한 명 추가·수정: 번호 형식·중복 거부, 번호는 바꿀 때만", async () => {

@@ -2,7 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { eq } from "drizzle-orm";
 import type { PuduApi } from "@/lib/vendors/pudu/api";
 import { macToRobotId, opTimestampMs, opToAgentNotify, pascal } from "@/lib/delivery/openplatform";
-import { dispatchDelivery, getDeliveryHealth, processDeliveryEvents, saveDeliveryRecipients, setDeliveryRobotSite, syncOpenPlatformCatalog, syncOpenPlatformState } from "@/lib/services/delivery";
+import { createDeliveryContact, dispatchDelivery, getDeliveryHealth, processDeliveryEvents, saveDeliveryRecipients, setDeliveryRobotSite, syncOpenPlatformCatalog, syncOpenPlatformState } from "@/lib/services/delivery";
 import { processPuduEvents } from "@/worker/pudu";
 import { getDb, resetAndSeed, schema, user } from "./helpers";
 
@@ -126,5 +126,14 @@ describe("배송 신형 경로 — 등록·상태·콜백·지시", () => {
     expect(call.body).toMatchObject({ sn: SN, shopId: "900001", payload: { deliverySort: "fixed", executeTask: true, trays: [{ destinations: [{ destination: "227", mapInfo: { mapName: "시험지도" } }] }] } });
     const orders = await getDb().select().from(schema.deliveryOrders);
     expect(orders[0]).toMatchObject({ status: "ACCEPTED" });
+    // 신형: 받는 사람 번호를 목적지에 넣어 로봇(PUDU)이 문자 — 국가번호 82, 앞 0 제외, 트레이당 1명
+    const { id: c1 } = await createDeliveryContact(hq, { siteId: "site-01", name: "가상육", phone: "010-0000-0006" });
+    const { id: c2 } = await createDeliveryContact(hq, { siteId: "site-01", name: "가상칠", phone: "010-0000-0007" });
+    await getDb().update(schema.deliveryOrders).set({ requestedAt: new Date(Date.now() - 60_000).toISOString() });
+    await expect(dispatchDelivery(hq, { robotId: `DR-${RID}`, trays: [{ destination: "227", recipientContactIds: [c1, c2] }] })).rejects.toThrow(/트레이마다 받는 사람 1명/);
+    fetchCalls.length = 0;
+    await dispatchDelivery(hq, { robotId: `DR-${RID}`, trays: [{ destination: "227", recipientContactIds: [c1] }] });
+    const call2 = fetchCalls.find((c) => c.url.includes("/open-platform-service/v1/delivery_task"))!;
+    expect((call2.body as { payload: { trays: { destinations: Record<string, unknown>[] }[] } }).payload.trays[0].destinations[0]).toMatchObject({ destination: "227", phoneNum: "1000000006", phoneCode: "82" });
   });
 });

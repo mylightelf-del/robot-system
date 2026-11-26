@@ -5,7 +5,7 @@ import { getDb, schema } from "@/lib/db/client";
 import { listUsers } from "@/lib/db/repo";
 import { deliver, type Message } from "@/lib/notify/notifier";
 import { hasActiveDevice } from "@/lib/notify/push";
-import { maskPhone, normalizePhone, solapiConfig } from "@/lib/notify/solapi";
+import { maskPhone, normalizePhone, smsConfig, solapiConfig } from "@/lib/notify/solapi";
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from "@/lib/util/errors";
 import { newId } from "@/lib/util/random";
 import { formatTime, nowIso } from "@/lib/util/time";
@@ -364,11 +364,15 @@ export function robotPhone(phone: string | null | undefined): { phoneNum: string
 }
 
 /** 명부(계정 없는 직원)에게 문자. 로봇 문자 모드면 보내지 않고 기록만(로봇이 보냄). 반환: 요약 조각들. */
-async function sendSmsToContacts(contactIds: string[], text: (name: string) => string, refId: string): Promise<string[]> {
+async function sendSmsToContacts(contactIds: string[], text: (name: string) => string, refId: string, robotSource: string | undefined): Promise<string[]> {
   if (!contactIds.length) return [];
   const db = getDb();
   const rows = await db.select().from(schema.deliveryContacts).where(and(inArray(schema.deliveryContacts.id, contactIds), eq(schema.deliveryContacts.active, true)));
-  if (contactSmsMode() === "robot") return rows.map((c) => `${c.name} 문자: 로봇이 발송`);
+  if (contactSmsMode() === "robot") {
+    if (robotSource === "openplatform") return rows.map((c) => `${c.name} 문자: 로봇이 발송`);
+    // 구형(에이전트)은 번호를 로봇에 넣을 수 없다 → 솔라피가 설정돼 있으면 Wide Bot 이 대신 보낸다
+    if (!smsConfig()) return rows.map((c) => `${c.name} 문자 못 보냄(구형 로봇은 번호 전달 불가·문자 서비스 미설정)`);
+  }
   const out: string[] = [];
   for (const c of rows) {
     const r = await deliver({ channel: "SMS", address: c.phone }, { subject: "", title: "", lines: [], url: "", sms: text(c.name) });
@@ -427,7 +431,7 @@ export async function notifyArrival(legId: string, reminder: boolean): Promise<s
       alimtalk: { template: reminder ? "DELIVERY_REMIND" : "DELIVERY_ARRIVED", variables: { "#{목적지}": leg.destination, "#{로봇}": robot?.name ?? leg.robotId, "#{시각}": formatTime(leg.arrivedAt ?? now, tz) } },
     };
     const u = rec.userIds.length ? await sendToUsers(rec.userIds, rec.channels, m, leg.id) : { sent: false, summary: "" };
-    const sms = await sendSmsToContacts(rec.contactIds, (name) => (reminder ? `[Wide Bot] ${name}님, ${leg.destination}에 도착한 배송을 아직 수령하지 않으셨습니다. 로봇에서 수령해 주세요.` : `[Wide Bot] ${name}님, 배송로봇이 ${leg.destination}에 도착했습니다. 물품을 수령해 주세요.`), leg.id);
+    const sms = await sendSmsToContacts(rec.contactIds, (name) => (reminder ? `[Wide Bot] ${name}님, ${leg.destination}에 도착한 배송을 아직 수령하지 않으셨습니다. 로봇에서 수령해 주세요.` : `[Wide Bot] ${name}님, 배송로봇이 ${leg.destination}에 도착했습니다. 물품을 수령해 주세요.`), leg.id, robot?.source);
     // 로봇 문자 모드의 '로봇이 발송' 은 Wide Bot 이 보낸 것이 아니지만, 도착 알림 처리 완료로 본다(재알림은 로봇 몫이라 아래에서 건너뜀)
     sent = u.sent || sms.length > 0;
     summary = [u.summary, ...sms].filter(Boolean).join(", ") || "보낼 채널 없음";
@@ -448,7 +452,7 @@ async function notifyCancel(legId: string): Promise<void> {
   const rec = await legRecipients(leg);
   if (!rec) return;
   const robot = await db.query.deliveryRobots.findFirst({ where: eq(schema.deliveryRobots.id, leg.robotId) });
-  const sms = await sendSmsToContacts(rec.contactIds, (name) => `[Wide Bot] ${name}님, ${leg.destination} 배송이 취소되었습니다. 보낸 분께 확인해 주세요.`, `${leg.id}:cancel`);
+  const sms = await sendSmsToContacts(rec.contactIds, (name) => `[Wide Bot] ${name}님, ${leg.destination} 배송이 취소되었습니다. 보낸 분께 확인해 주세요.`, `${leg.id}:cancel`, robot?.source);
   const r = !rec.userIds.length ? { summary: "" } : await sendToUsers(rec.userIds, rec.channels, { tone: "warning", subject: `[Wide Bot] 배송 취소 — ${leg.destination}`, title: `${leg.destination} 배송이 취소되었습니다`, lines: [`로봇: ${robot?.name ?? leg.robotId}`, "보낸 사람에게 확인해 주세요."], url: `${baseUrl()}/delivery`, meta: { kind: "DELIVERY", refId: `${leg.id}:cancel`, siteId: leg.siteId }, alimtalk: { template: "DELIVERY_CANCEL", variables: { "#{목적지}": leg.destination, "#{로봇}": robot?.name ?? leg.robotId } } }, `${leg.id}:cancel`);
   await db.update(schema.deliveryLegs).set({ notifyResult: `${leg.notifyResult ? `${leg.notifyResult} / ` : ""}취소 알림: ${[r.summary, ...sms].filter(Boolean).join(", ")}` }).where(eq(schema.deliveryLegs.id, leg.id));
 }
@@ -650,7 +654,8 @@ export async function dispatchDelivery(user: User, input: { robotId: string; tra
   const orderKey = newId("t").slice(-8);
   await assertContacts(robot.siteId!, trays.flatMap((t) => t.recipientContactIds ?? []));
   // 로봇 문자: 목적지(트레이)마다 번호 1개만 넣을 수 있다
-  const robotSms = contactSmsMode() === "robot";
+  // 실측(2026-11-26): 에이전트(구형)는 목적지의 phoneNum 을 거부(10005 "not allowed") → 번호 전달은 신형(클라우드)만
+  const robotSms = contactSmsMode() === "robot" && robot.source === "openplatform";
   if (robotSms && trays.some((t) => (t.recipientContactIds?.length ?? 0) > 1)) throw new ValidationError("로봇 문자는 트레이마다 받는 사람 1명만 넣을 수 있습니다. 여러 명이면 트레이를 나누세요.");
   const contactPhone = new Map<string, string>();
   const ids = trays.flatMap((t) => t.recipientContactIds ?? []);

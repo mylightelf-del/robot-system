@@ -253,7 +253,7 @@ export function DispatchPanel({ robots, users, presets = [], contacts = [] }: { 
           <input className="border rounded px-2 py-1 text-xs w-40" placeholder="즐겨찾기 이름(예: 오전 우편)" value={presetName} onChange={(e) => setPresetName(e.target.value)} />
           <button type="button" className={btn.small} disabled={pending || !presetName.trim() || !trays.some((t) => t.destination) || !robot} onClick={() => run(async () => { const r = await saveDeliveryPresetAction({ siteId: robot!.siteId, name: presetName, trays: trays.filter((t) => t.destination), sort, executeTask }); if (r.ok) setPresetName(""); return r; })}>지금 내용을 즐겨찾기로 저장</button>
         </div>
-        <p className="text-xs text-gray-500">이름으로 고른 사람(명부)의 번호는 배송 지시와 함께 로봇에 들어가 <b>로봇이 도착 문자</b>를 보냅니다(트레이마다 1명). 체크한 직원 계정에게는 앱/메일 알림이 갑니다. 아무도 안 고르면 목적지 수신자에게 갑니다. 로봇이 배송 중이면 보낼 수 없습니다.</p>
+        <p className="text-xs text-gray-500">이름으로 고른 사람(명부)에게 도착 문자가 갑니다(트레이마다 1명). 신형(클라우드) 로봇은 번호가 지시와 함께 들어가 <b>로봇이 문자</b>를 보내고, 구형(에이전트) 로봇은 번호를 받지 못해 Wide Bot 문자 서비스(설정 시)로 보냅니다. 체크한 직원 계정에게는 앱/메일 알림이 갑니다. 아무도 안 고르면 목적지 수신자에게 갑니다. 로봇이 배송 중이면 보낼 수 없습니다.</p>
       </div>
       <div className="rounded-lg border p-2 flex flex-wrap items-center gap-2">
         <span className="font-medium text-xs">이동(호출)</span>
