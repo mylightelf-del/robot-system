@@ -79,6 +79,12 @@ jobs:
         if: inputs.action == 'sync-secrets'
         env:
           S_TEAMS_WORKFLOW_URL: ${{ secrets.TEAMS_WORKFLOW_URL }}
+          S_CENOBOTS_ACCESS_KEY: ${{ secrets.CENOBOTS_ACCESS_KEY }}
+          S_CENOBOTS_SECRET_KEY: ${{ secrets.CENOBOTS_SECRET_KEY }}
+          S_CENOBOTS_WEBHOOK_SECRET: ${{ secrets.CENOBOTS_WEBHOOK_SECRET }}
+          S_TEAMS_BOT_APP_ID: ${{ secrets.TEAMS_BOT_APP_ID }}
+          S_TEAMS_BOT_APP_SECRET: ${{ secrets.TEAMS_BOT_APP_SECRET }}
+          S_TEAMS_BOT_TENANT_ID: ${{ secrets.TEAMS_BOT_TENANT_ID }}
           S_SOLAPI_API_KEY: ${{ secrets.SOLAPI_API_KEY }}
           S_SOLAPI_API_SECRET: ${{ secrets.SOLAPI_API_SECRET }}
           S_SOLAPI_PFID: ${{ secrets.SOLAPI_PFID }}
