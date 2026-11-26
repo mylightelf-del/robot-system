@@ -58,7 +58,8 @@ export async function cenobotsTestConnection(user: User): Promise<{ ok: boolean;
       mock: s.mode === "mock",
     }));
     await audit(user, { siteId: null, robotId: null, action: "VENDOR:CENOBOTS_TEST", params: { mode: s.mode, devices: all.length, allowed: allowed.length }, result: "OK", detail: null, vendorTraceId: null });
-    return { ok: true, message: `${s.mode === "mock" ? "[모의] " : ""}연결 확인: 회사 장비 ${all.length}대 중 허용 장비 ${allowed.length}대`, devices };
+    // 업체 계정에는 다른 고객사 장비도 보인다 → 화면에는 우리(허용) 장비만, 전체 대수도 감춘다(사용자 결정 2026-11-26)
+    return { ok: true, message: `${s.mode === "mock" ? "[모의] " : ""}연결 확인: 우리 장비 ${allowed.length}대`, devices };
   } catch (e) {
     const msg = (e as Error).message;
     await audit(user, { siteId: null, robotId: null, action: "VENDOR:CENOBOTS_TEST", params: { mode: s.mode }, result: "ERROR", detail: msg.slice(0, 300), vendorTraceId: null });

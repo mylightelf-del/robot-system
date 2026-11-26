@@ -17,7 +17,7 @@ docker compose exec -T worker npx tsx -e '
     // 계정에 다른 고객사 장비도 보인다 → 허용 장비만 출력(공개 기록)
     const allow = (process.env.CENOBOTS_ALLOWED_DEVICE_OPEN_IDS || "").split(",");
     const mine = devs.filter((d) => allow.includes(d.deviceOpenId) || allow.includes(d.licensePlate ?? ""));
-    console.log("PUBLIC: 장비 조회 OK — 계정 전체", devs.length + "대 중 허용", mine.length + "대:", mine.map((d) => `${d.licensePlate ?? "-"}=${d.deviceOpenId}`).join(", "));
+    console.log("PUBLIC: 장비 조회 OK — 우리 장비", mine.length + "대:", mine.map((d) => `${d.licensePlate ?? "-"}=${d.deviceOpenId}`).join(", "));
   } catch (e) { console.log("PUBLIC: 장비 조회 실패", e.message); }
   const w = await import("./src/worker/cenobots");
   const r1 = await w.syncCenobotsCatalog(api);

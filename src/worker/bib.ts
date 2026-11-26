@@ -1,4 +1,5 @@
 import { and, eq, sql } from "drizzle-orm";
+import { newId } from "@/lib/util/random";
 import type { Robot } from "@/lib/domain/types";
 import { getDb, schema } from "@/lib/db/client";
 import { nowIso } from "@/lib/util/time";
@@ -8,8 +9,9 @@ import { mapBibStatus } from "@/lib/vendors/bib/mapping";
 import { recordVendorSync, type SyncResult } from "./pudu";
 
 /**
- * BIB(라이노스 Rhiverse) 동기화 — 조회 전용(docs/22 §6). 가이드 v0.1 에는 청소 실적·장애 이력 API 가 없어
- * 지금은 로봇 연결·상태·등록 작업만 받는다(실적·장애는 문서 추가 시).
+ * BIB(라이노스 Rhiverse) 동기화 — 조회 전용(docs/22 §6). 가이드 v0.1 에는 청소 실적·장애 이력 API 가 없다.
+ * 사용자 결정(2026-11-26 「있는 대로만」): 상태 폴링에서 현재 작업이 나타났다 사라지는 것을 보고 **관측 기반 작업 기록**을 실적으로 남긴다
+ * (시작·종료는 폴링 간격(60초) 정밀도, 면적·결과는 미제공 → 면적 0, 결과 '완료'로 두고 종료 사유에 관측 기반임을 적는다). 장애 이력은 없음.
  * 주기: 상태 BIB_POLL_STATUS_SECONDS(60), 목록·작업 BIB_POLL_CATALOG_MINUTES(60). 끄기: BIB_MODE=unconfigured.
  */
 const sync = (job: string, fn: () => Promise<{ detail: string; counts?: Record<string, number> }>) => recordVendorSync("BIB", job, fn);
@@ -70,6 +72,16 @@ export async function syncBibStatus(api: BibApi = createBibApi()): Promise<SyncR
         const mapName = maps?.localMapList.find((m) => m.mapHandle === maps.activeMapHandle)?.name ?? null;
         const m = mapBibStatus(s, cur);
         const at = nowIso();
+        // 관측 기반 작업 기록: 이전 관측과 비교(작업 시작·종료)
+        const prev = await db.query.robotStatus.findFirst({ where: eq(schema.robotStatus.robotId, robot.id) });
+        const prevObs = ((prev?.rawPayload ?? {}) as { obs?: { taskId: string; startedAt: string } | null }).obs ?? null;
+        const nowTask = s.online === false ? null : (cur?.task?.taskId ?? null);
+        let obs = prevObs;
+        if (prevObs && prevObs.taskId !== nowTask) {
+          await closeObservedRun(robot, prevObs, at);
+          obs = null;
+        }
+        if (nowTask && !obs) obs = { taskId: nowTask, startedAt: at };
         const row = {
           robotId: robot.id,
           common: m.common,
@@ -83,7 +95,7 @@ export async function syncBibStatus(api: BibApi = createBibApi()): Promise<SyncR
           progressPct: null,
           lastReceivedAt: at,
           dataAt: s.timeObserved ?? s.timeReceived ?? at,
-          rawPayload: { source: "poll", status: s, currentTask: cur, activeMap: mapName },
+          rawPayload: { source: "poll", status: s, currentTask: cur, activeMap: mapName, obs },
         };
         await db.insert(schema.robotStatus).values(row).onConflictDoUpdate({ target: schema.robotStatus.robotId, set: row });
         updated += 1;
@@ -94,4 +106,38 @@ export async function syncBibStatus(api: BibApi = createBibApi()): Promise<SyncR
     }
     return { detail: `로봇 ${robots.length}대 중 갱신 ${updated}, 실패 ${failed}`, counts: { robots: robots.length, updated, failed } };
   });
+}
+
+/** 관측된 작업 하나를 실적으로 남긴다(1분 미만은 버림). 같은 작업·시작 시각은 한 번만(vendorRunId). */
+async function closeObservedRun(robot: Robot, obs: { taskId: string; startedAt: string }, endedAt: string): Promise<void> {
+  const min = (new Date(endedAt).getTime() - new Date(obs.startedAt).getTime()) / 60_000;
+  if (!(min >= 1)) return;
+  const db = getDb();
+  const task = await db.query.registeredTasks.findFirst({ where: eq(schema.registeredTasks.vendorTaskRef, obs.taskId) });
+  await db
+    .insert(schema.actualRuns)
+    .values({
+      id: newId("run"),
+      vendor: "BIB",
+      vendorRobotId: robot.vendorRobotId,
+      vendorRunId: `obs-${obs.taskId}-${obs.startedAt}`,
+      robotId: robot.id,
+      siteId: robot.siteId,
+      floorId: robot.floorId,
+      taskId: task?.id ?? null,
+      zoneIds: [],
+      startedAt: obs.startedAt,
+      endedAt,
+      result: "COMPLETED",
+      endReason: `관측 기반 기록(BIB API 에 작업 이력 없음 — 시작·종료는 1분 단위 관측, 면적·결과 미제공)${task ? ` · ${task.name}` : ""}`,
+      areaM2: 0,
+      durationMin: Math.round(min),
+      waterL: null,
+      detergentMl: null,
+      origin: "ADHOC",
+      receivedAt: endedAt,
+      rawPayload: { observed: true, taskId: obs.taskId },
+      coverage: null,
+    })
+    .onConflictDoNothing();
 }

@@ -12,7 +12,7 @@ const { privateKey, publicKey } = generateKeyPairSync("ed25519");
 const ID = "test-partner";
 const RID = "11111111-2222-4333-8444-555555555555";
 
-function fakeServer(opts: { expireFirst?: boolean } = {}) {
+function fakeServer(opts: { expireFirst?: boolean; task?: () => string | null } = {}) {
   const calls: { method: string; path: string; auth?: string }[] = [];
   let logins = 0;
   const f: BibFetch = async (url, init) => {
@@ -30,7 +30,10 @@ function fakeServer(opts: { expireFirst?: boolean } = {}) {
     if (opts.expireFirst && init.headers.Authorization === "Bearer tok-1") return json(401, { statusCode: 401, errorCode: "UNAUTHORIZED" });
     if (path === "/partner/v1/robot/list") return json(200, { robotListCountTotal: 1, robotList: [{ robotId: RID, handle1: "J40-TEST-0001", name: "CG_테스트", availableActionList: ["task:start"] }] });
     if (path.endsWith("/status")) return json(200, { robotId: RID, online: true, batteryPercent: 77, movingStatus: "MOVING", activityState: "BUSY", actionReadinessList: [], timeObserved: "2026-11-26T09:00:00.000Z", timeReceived: "2026-11-26T09:00:01.000Z", freshness: "FRESH" });
-    if (path.endsWith("/task/current")) return json(200, { supported: true, task: { taskId: "task_abc", state: "UNKNOWN" } });
+    if (path.endsWith("/task/current")) {
+      const t = opts.task ? opts.task() : "task_abc";
+      return json(200, { supported: true, task: t ? { taskId: t, state: "UNKNOWN" } : null });
+    }
     if (path.endsWith("/task/list")) return json(200, { taskList: [{ taskId: "task_abc", name: "CGP4F_전체 진공흡입" }, { taskId: "task_def", name: null }] });
     if (path.endsWith("/localmap/list")) return json(200, { robotId: RID, activeMapHandle: "m-6", localMapList: [{ mapHandle: "m-6", name: "CGP6F" }] });
     return json(404, { statusCode: 404, errorCode: "RESOURCE_NOT_FOUND" });
@@ -99,5 +102,32 @@ describe("BIB 동기화(워커)", () => {
     expect(status).toMatchObject({ common: "CLEANING", batteryPct: 77, online: true, currentMissionId: "task_abc" });
     expect(status.raw).toContain("map=CGP6F");
     expect((await getDb().select().from(schema.robots).where(eq(schema.robots.id, "PW-R-BIB-T")))[0].floorId).toBe(r.floorId);
+  });
+
+  it("관측 기반 작업 기록: 작업이 나타났다 사라지면 실적 1건(면적 0·관측 표시), 1분 미만은 버림", async () => {
+    let task: string | null = "task_abc";
+    const s = fakeServer({ task: () => task });
+    const api = new BibApi(new BibClient(cfg, s.f));
+    await syncBibCatalog(api);
+    await syncBibStatus(api);
+    const st = (await getDb().select().from(schema.robotStatus).where(eq(schema.robotStatus.robotId, "PW-R-BIB-T")))[0];
+    expect((st.rawPayload as { obs: { taskId: string } }).obs.taskId).toBe("task_abc");
+    // 25분 전에 시작한 것으로 당긴 뒤 작업 종료
+    const started = new Date(Date.now() - 25 * 60_000).toISOString();
+    await getDb().update(schema.robotStatus).set({ rawPayload: { ...(st.rawPayload as object), obs: { taskId: "task_abc", startedAt: started } } }).where(eq(schema.robotStatus.robotId, "PW-R-BIB-T"));
+    task = null;
+    await syncBibStatus(api);
+    await syncBibStatus(api); // 다시 돌려도 중복 없음
+    const runs = await getDb().select().from(schema.actualRuns).where(eq(schema.actualRuns.robotId, "PW-R-BIB-T"));
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toMatchObject({ vendor: "BIB", areaM2: 0, durationMin: 25, result: "COMPLETED", origin: "ADHOC" });
+    expect(runs[0].endReason).toContain("관측 기반");
+    expect(runs[0].endReason).toContain("CGP4F_전체 진공흡입");
+    // 1분 미만 작업은 남기지 않음
+    task = "task_def";
+    await syncBibStatus(api);
+    task = null;
+    await syncBibStatus(api);
+    expect(await getDb().select().from(schema.actualRuns).where(eq(schema.actualRuns.robotId, "PW-R-BIB-T"))).toHaveLength(1);
   });
 });
