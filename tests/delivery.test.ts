@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
-import { AgentClient } from "@/lib/delivery/agent";
+import { AgentClient, AgentCommander } from "@/lib/delivery/agent";
 import { agentMockState, agentMockTransport, MOCK_DEVICE_ID, MOCK_ROBOT } from "@/lib/delivery/mock";
 import { callDeliveryRobot, checkStuckRobots, deleteDeliveryPreset, dispatchDelivery, getDeliveryHealth, getDeliveryStats, getDeliveryView, listDeliveryPresets, recordDeliverySync, saveDeliveryPreset, sendDeliveryPreset, ingestAgentNotify, processDeliveryEvents, saveDeliveryRecipients, sendDeliveryReminders, setDeliveryRobotSite, syncDeliveryCatalog, syncDeliveryState } from "@/lib/services/delivery";
 import { POST as notifyPOST } from "@/app/api/webhooks/pudu-agent/route";
@@ -23,6 +23,16 @@ describe("배송로봇 에이전트 — 조회 전용 클라이언트", () => {
       await expect(c.call("POST", p)).rejects.toThrow(/조회 전용/);
     }
     expect(agentMockState.requests).toEqual([]);
+  });
+});
+
+describe("배송 지시 — 로봇 무응답·시간 초과 안내", () => {
+  it("10004 는 '배송 화면' 안내, 시간 초과는 연결 실패가 아니라 응답 시간 초과로 알린다", async () => {
+    const no = new AgentCommander({ send: async () => ({ status: 200, json: { code: 10004, msg: "Error: timeout no resp" } }) }, "DEV");
+    await expect(no.delivery("R1", [[{ destination: "227", id: "t1" }]], { sort: "fixed", executeTask: true })).rejects.toThrow(/배송\(임무 편집\)/);
+    await expect(no.call("R1", { name: "227", type: "table" })).rejects.toThrow(/호출에 응답하지/);
+    const slow = new AgentCommander({ send: async () => { throw Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" }); } }, "DEV");
+    await expect(slow.delivery("R1", [[{ destination: "227", id: "t1" }]], { sort: "fixed", executeTask: true })).rejects.toThrow(/응답 시간 초과/);
   });
 });
 

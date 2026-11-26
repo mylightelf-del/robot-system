@@ -189,12 +189,16 @@ export class AgentCommander {
     try {
       res = await this.transport.send({ method: "POST", path, query: {}, body: { deviceId: this.deviceId, ...body } });
     } catch (e) {
-      throw new AgentError(`에이전트 연결 실패: ${(e as Error).message}`, null);
+      // 에이전트는 로봇 응답을 약 16초 기다린 뒤 답한다(실측 2026-11-26). 그보다 오래 걸리면 시간 초과.
+      const timeout = (e as Error).name === "TimeoutError" || /aborted due to timeout/i.test((e as Error).message);
+      throw new AgentError(timeout ? "에이전트 응답 시간 초과 — 로봇이 지시를 받지 못했을 수 있습니다. 로봇 화면의 임무 목록을 확인하세요." : `에이전트 연결 실패: ${(e as Error).message}`, null);
     }
     const env = (res.json ?? {}) as { code?: unknown; msg?: unknown; mag?: unknown; data?: { success?: boolean; taskId?: string } };
     const code = env.code === undefined || env.code === null ? null : String(env.code);
     if (res.status !== 200 || (code !== null && code !== "0") || env.data?.success === false) {
       const msg = String(env.msg ?? env.mag ?? "");
+      // 10004: 로봇이 지시에 응답하지 않음. 배송은 로봇이 「배송 임무 편집」 화면일 때만 받는다(PUDU 문서).
+      if (code === "10004") throw new AgentError(path === "/api/robot/delivery/task" ? DELIVERY_NO_RESPONSE : "로봇이 호출에 응답하지 않았습니다(code 10004). 로봇 전원·네트워크와 로봇의 호출 기능이 켜져 있는지 확인하세요.", code);
       throw new AgentError(`${AGENT_COMMAND_FAIL[code ?? ""] ?? "에이전트 거부"}${code ? `(code ${code})` : ""}${msg ? ` ${msg}` : ""}`, code);
     }
     return { success: true, taskId: env.data?.taskId };
@@ -213,6 +217,9 @@ export class AgentCommander {
 }
 
 /** 문서의 오류 코드(호출 계열) */
+/** 배송 지시에 로봇이 응답하지 않을 때(10004) 안내. */
+export const DELIVERY_NO_RESPONSE = "로봇이 배송 지시를 받지 않았습니다(code 10004). 원격 배송은 로봇 화면이 「배송(임무 편집)」 화면일 때만 받습니다 — 로봇 화면에서 배송 화면을 열어 둔 뒤 다시 보내세요. 그래도 같으면 대리점에 이 장치의 배송 지시 권한을 확인합니다.";
+
 export const AGENT_COMMAND_FAIL: Record<string, string> = {
   ...AGENT_CODES,
   "20004": "호출기 오류",

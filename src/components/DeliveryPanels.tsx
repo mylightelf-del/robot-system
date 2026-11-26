@@ -184,6 +184,7 @@ export function DispatchPanel({ robots, users, presets = [] }: { robots: { id: s
           <label className="inline-flex items-center gap-1 text-xs"><input type="radio" checked={sort === "fixed"} onChange={() => setSort("fixed")} /> 적은 순서대로</label>
           <label className="inline-flex items-center gap-1 text-xs"><input type="radio" checked={sort === "auto"} onChange={() => setSort("auto")} /> 가까운 순서(로봇이 정함)</label>
           <label className="inline-flex items-center gap-1 text-xs"><input type="checkbox" checked={executeTask} onChange={(e) => setExecuteTask(e.target.checked)} /> 바로 출발</label>
+          <span className="basis-full text-xs text-amber-700">로봇 화면이 「배송(임무 편집)」 화면일 때만 원격 배송을 받습니다. 보내기 전에 로봇 화면을 배송 화면으로 열어 두세요(응답까지 최대 20초).</span>
           <button
             type="button"
             className={btn.primary}

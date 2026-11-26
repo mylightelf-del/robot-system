@@ -539,7 +539,8 @@ export async function deleteDeliveryRecipients(user: User, id: string): Promise<
 function createAgentCommander(): AgentCommander {
   const mode = agentMode();
   if (mode === "mock") return new AgentCommander(agentMockTransport, MOCK_DEVICE_ID);
-  if (mode === "live") return new AgentCommander(httpTransport(process.env.PUDU_AGENT_URL!), process.env.PUDU_AGENT_DEVICE_ID!);
+  // 지시는 에이전트가 로봇 응답을 약 16초 기다리므로 넉넉히 35초(조회 15초와 다름)
+  if (mode === "live") return new AgentCommander(httpTransport(process.env.PUDU_AGENT_URL!, 35_000), process.env.PUDU_AGENT_DEVICE_ID!);
   throw new ValidationError("배송로봇 에이전트 연동이 꺼져 있습니다.");
 }
 
