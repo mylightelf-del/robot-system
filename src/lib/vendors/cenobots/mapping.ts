@@ -14,6 +14,8 @@ export const MISSION_STATUS_MAP: Record<string, { result: RunResult; label: stri
   CANCELLED: { result: "ABORTED", label: "중단(사용자 취소)" },
   ABEND: { result: "INCOMPLETE", label: "미완료(작업 예외)" },
   ERROR: { result: "INCOMPLETE", label: "미완료(작업 예외)" },
+  // 문서 v1.0.18 의 작업 상태 목록에 있는 값(Warning). 실측 2026-11-26 과거 이력 1건 — 경고와 함께 끝난 작업이라 확인 필요로 둔다.
+  WARNING: { result: "INCOMPLETE", label: "경고로 종료(확인 필요)" },
 };
 
 /** 종료 이유(taskEndReasonEnum) 한국어. 문서 원문 설명 기준. */
