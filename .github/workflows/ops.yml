@@ -24,6 +24,10 @@ on:
         description: "action=script 일 때 실행할 저장소 안 파일(ops/ 아래)"
         required: false
         default: ""
+      payload:
+        description: "봉인된 값(서버 공개키로 암호화, base64). ops/seal-apply.sh 에만 전달"
+        required: false
+        default: ""
 
 concurrency:
   group: widebot-ops
@@ -67,11 +71,15 @@ jobs:
         if: inputs.action == 'script'
         env:
           SCRIPT: ${{ inputs.script }}
+          PAYLOAD: ${{ inputs.payload }}
         run: |
           case "$SCRIPT" in ops/*.sh) ;; *) echo "ops/ 아래 .sh 만 실행합니다"; exit 2;; esac
           [ -f "$SCRIPT" ] || { echo "파일 없음: $SCRIPT"; exit 2; }
+          # 봉인 값은 암호문(base64)만 허용
+          if [ -n "$PAYLOAD" ]; then printf '%s' "$PAYLOAD" | grep -qE '^[A-Za-z0-9+/=]+$' || { echo "payload 형식 오류"; exit 2; }; fi
+          { [ -n "$PAYLOAD" ] && echo "SEALED_PAYLOAD='$PAYLOAD'"; cat "$SCRIPT"; } > "$RUNNER_TEMP/run.sh"
           set +e
-          bash scripts/remote-run.sh -f "$SCRIPT" > "$RUNNER_TEMP/out.log" 2>&1
+          bash scripts/remote-run.sh -f "$RUNNER_TEMP/run.sh" > "$RUNNER_TEMP/out.log" 2>&1
           rc=$?
           grep -E '^\s*(결과:|PUBLIC:)' "$RUNNER_TEMP/out.log" | sed -E 's/^\s*//'
           exit $rc
