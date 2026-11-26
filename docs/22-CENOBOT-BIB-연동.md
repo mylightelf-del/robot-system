@@ -140,3 +140,15 @@
 8. **웹훅(선택)**: 업체 콘솔에서 URL `https://widebot.kro.kr/api/webhooks/cenobots` 로 구독 생성 → 시크릿을 `.env` 에 → 재시작 → [자가 점검] 통과 → 업체 콘솔에서 verify → ACTIVE.
 9. **롤백**: `.env` 의 `CENOBOTS_MODE=unconfigured` → `docker compose up -d web worker`. 코드 롤백 불필요. 로봇은 고급 설정에서 「사용 중지」.
 10. **원격 제어**: 바꾸지 않는다(포스코센터 스위치는 PUDU 용 그대로, CZ 로봇은 코드에서 항상 차단).
+
+## 5. 운영 반영 기록 — CENOBOT 실연동(live) 전환 (2026-11-26)
+- 키(Access·Secret)는 **봉인 전달**로 서버 `.env` 에만 넣었다: 서버가 만든 RSA-4096 공개키로 암호화한 값만 GitHub 작업(`ops/seal-apply.sh`, 입력 `payload`)으로 보내고 서버에서 푼다(`ops/seal-init.sh`). 평문은 저장소·기록에 없다.
+- `ops/cenobots-live.sh`: 허용 장비 `CRV9NEH7UP,8HB3ZLZU3G`(+번호판 L4-05590, L4-05408), `CENOBOTS_MODE=live`, 재시작 → 장비 조회 → 번호판 연결 → PW-R-010·011 다시 사용 → 동기화.
+- 결과: 장비 조회 OK(계정에 **다른 고객사 장비 포함 66대**가 보임 — 허용 목록으로 2대만 사용), 예약 8·소모품 12, 상태 2대 갱신(PW-R-010 충전 99%, PW-R-011 대기 100%), 최근 48시간 작업 4건 적재, 활성 오류 0.
+- 주의: 첫 실행에서 계정 전체 장비 목록(번호판·Open ID)이 공개 실행 기록에 찍혀 **해당 실행 기록을 삭제**했고, 이후 허용 장비만 출력하도록 고쳤다.
+- 남은 것: 과거 실적 적재(`scripts/cenobots-backfill.ts --from <설치일>`), 하루 모니터링(업체 콘솔과 실적 대조), 웹훅 구독(선택).
+- 끄기: `CENOBOTS_MODE=unconfigured`(또는 `mock`).
+
+## 6. BIB(라이노스 Rhiverse) — 2026-11-26 확인
+- API 주소 `https://rhiverse.rhinos.ai/rhibot/api`(NestJS 계열 응답), 로그인 아이디 `posco-cgpohang`. `/robot`, `/robot/list`, `/robot/status`, `/robot/info` 는 **403 "Token required"**(토큰 인증). 로그인·토큰 발급 경로는 흔한 이름(auth/login, token 등)에서 찾지 못함(404).
+- 메일의 "키"는 `General/PROJECT/robot/rhibot/partner/posco-cgpohang/…-202611.pem` — 라이노스 **사내 저장소 경로**이지 다운로드 링크가 아니다. 실제 `.pem` 파일과 API 문서(토큰 발급 방법·엔드포인트·응답 형식)를 받아야 개발할 수 있다.
