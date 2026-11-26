@@ -14,15 +14,19 @@ docker compose exec -T worker npx tsx -e '
   const api = createCenobotsApi();
   try {
     const devs = await api.listDevices();
-    console.log("PUBLIC: 장비 조회 OK", devs.length + "대:", devs.map((d) => `${d.licensePlate ?? "-"}=${d.deviceOpenId}`).join(", "));
+    // 계정에 다른 고객사 장비도 보인다 → 허용 장비만 출력(공개 기록)
+    const allow = (process.env.CENOBOTS_ALLOWED_DEVICE_OPEN_IDS || "").split(",");
+    const mine = devs.filter((d) => allow.includes(d.deviceOpenId) || allow.includes(d.licensePlate ?? ""));
+    console.log("PUBLIC: 장비 조회 OK — 계정 전체", devs.length + "대 중 허용", mine.length + "대:", mine.map((d) => `${d.licensePlate ?? "-"}=${d.deviceOpenId}`).join(", "));
   } catch (e) { console.log("PUBLIC: 장비 조회 실패", e.message); }
   const w = await import("./src/worker/cenobots");
   const r1 = await w.syncCenobotsCatalog(api);
   console.log("PUBLIC: 번호판 연결", r1.ok ? "OK" : "실패", "—", r1.detail);
-  // 실제 Open ID 로 연결된 로봇만 다시 사용(docs/22 4.7)
+  // 실제 Open ID 로 연결된 로봇만 다시 사용(docs/22 4.7) — JSON 키 이름은 인자로 넘겨 따옴표 문제를 피한다
   const { getDb, schema } = await import("./src/lib/db/client");
-  const { and, eq, sql } = await import("drizzle-orm");
-  const on = await getDb().update(schema.robots).set({ active: true }).where(and(eq(schema.robots.vendor, "CENOBOTS"), sql`${schema.robots.vendorMeta}->>'boundMode' = 'live'`, sql`${schema.robots.vendorMeta}->>'deviceOpenId' is not null`)).returning({ id: schema.robots.id });
+  const { and, eq, isNotNull, sql } = await import("drizzle-orm");
+  const k = (name) => sql`${schema.robots.vendorMeta} ->> ${name}`;
+  const on = await getDb().update(schema.robots).set({ active: true }).where(and(eq(schema.robots.vendor, "CENOBOTS"), sql`${k("boundMode")} = ${"live"}`, isNotNull(k("deviceOpenId")))).returning({ id: schema.robots.id });
   console.log("PUBLIC: 다시 사용", on.map((x) => x.id).join(", ") || "없음");
   for (const [n, f] of [["장비·작업·예약", () => w.syncCenobotsCatalog(api)], ["상태", () => w.syncCenobotsStatus()], ["작업 이력(48시간)", () => w.syncCenobotsReports(api)], ["오류", () => w.syncCenobotsErrors(api)]]) {
     const r = await f(); console.log("PUBLIC:", n, r.ok ? "OK" : "실패", "—", r.detail);
