@@ -205,7 +205,8 @@ export class AgentCommander {
   }
 
   /** 배송 임무 전송. executeTask=false 면 로봇 화면에 임무만 넣고 출발은 사람이 누른다. */
-  delivery(robotId: string, trays: { destination: string; id: string }[][], opts: { sort: "fixed" | "auto"; executeTask: boolean }) {
+  /** 목적지에 phoneNum·phoneCode 가 있으면 로봇(PUDU)이 그 번호로 도착 문자를 보낸다(사용자 결정 2026-11-26). */
+  delivery(robotId: string, trays: { destination: string; id: string; phoneNum?: string; phoneCode?: string }[][], opts: { sort: "fixed" | "auto"; executeTask: boolean }) {
     return this.post("/api/robot/delivery/task", { robotId, type: "new", deliverySort: opts.sort, executeTask: opts.executeTask, trays: trays.map((ds) => ({ destinations: ds })) });
   }
   call(robotId: string, destination: { name: string; type: string }) {

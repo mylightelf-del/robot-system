@@ -634,7 +634,14 @@ export async function importDeliveryContactsAction(formData: FormData): Promise<
     return { message: `명부 반영: 추가 ${r.added}명 · 갱신 ${r.updated}명${r.skipped.length ? ` · 건너뜀 ${r.skipped.length}명(이름·휴대폰 확인)` : ""}` };
   });
 }
-export async function updateDeliveryContactAction(id: string, patch: { destination?: string | null; active?: boolean }): Promise<ActionResult> {
+export async function createDeliveryContactAction(input: { siteId: string; name: string; phone: string; floor?: string; dept?: string; ext?: string; destination?: string }): Promise<ActionResult> {
+  return run(async () => {
+    await deliverySvc.createDeliveryContact(await getCurrentUser(), input);
+    revalidatePath("/delivery");
+    return { message: `${input.name.trim()} 을(를) 명부에 추가했습니다.` };
+  });
+}
+export async function updateDeliveryContactAction(id: string, patch: { destination?: string | null; active?: boolean; name?: string; phone?: string; floor?: string | null; dept?: string | null; ext?: string | null }): Promise<ActionResult> {
   return run(async () => {
     await deliverySvc.updateDeliveryContact(await getCurrentUser(), id, patch);
     revalidatePath("/delivery");

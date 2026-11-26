@@ -134,6 +134,9 @@ export async function opDestinations(api: PuduApi, sn: string): Promise<{ mapNam
 export interface OpDeliveryTray {
   destination: string;
   id: string;
+  /** 받는 사람 번호 — 로봇(PUDU)이 도착 문자를 보낸다 */
+  phoneNum?: string;
+  phoneCode?: string;
 }
 export async function opSendDelivery(client: PuduClient, input: { sn: string; shopId: string; mapName?: string; trays: OpDeliveryTray[][]; sort: string; executeTask: boolean }): Promise<{ taskId?: string; traceId: string | null }> {
   const body = {
@@ -143,7 +146,7 @@ export async function opSendDelivery(client: PuduClient, input: { sn: string; sh
       type: process.env.PUDU_OP_DELIVERY_TYPE || "new",
       deliverySort: input.sort,
       executeTask: input.executeTask,
-      trays: input.trays.map((t) => ({ destinations: t.map((d) => ({ destination: d.destination, id: d.id, ...(input.mapName ? { mapInfo: { mapName: input.mapName } } : {}) })) })),
+      trays: input.trays.map((t) => ({ destinations: t.map((d) => ({ destination: d.destination, id: d.id, ...(d.phoneNum ? { phoneNum: d.phoneNum, phoneCode: d.phoneCode } : {}), ...(input.mapName ? { mapInfo: { mapName: input.mapName } } : {}) })) })),
     },
   };
   const res = await client.post<{ code?: number | string; message?: string; taskId?: string }>("/open-platform-service/v1/delivery_task", body);

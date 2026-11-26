@@ -5,7 +5,7 @@ import { AgentClient } from "@/lib/delivery/agent";
 import { agentMockState, agentMockTransport, MOCK_DEVICE_ID, MOCK_ROBOT } from "@/lib/delivery/mock";
 import { readContactsXlsx } from "@/lib/delivery/contactsXlsx";
 import { setSolapiFetchForTest } from "@/lib/notify/solapi";
-import { addContactPresets, dispatchDelivery, floorToDestination, getDeliveryView, importDeliveryContacts, ingestAgentNotify, listDeliveryPresets, processDeliveryEvents, sendDeliveryReminders, setDeliveryRobotSite, syncDeliveryCatalog, syncDeliveryState, updateDeliveryContact } from "@/lib/services/delivery";
+import { addContactPresets, createDeliveryContact, dispatchDelivery, floorToDestination, getDeliveryView, importDeliveryContacts, ingestAgentNotify, listDeliveryPresets, processDeliveryEvents, sendDeliveryReminders, setDeliveryRobotSite, syncDeliveryCatalog, syncDeliveryState, updateDeliveryContact } from "@/lib/services/delivery";
 import { getDb, resetAndSeed, schema, user } from "./helpers";
 
 /** 받는 사람 명부·이름 배송·문자 알림. 시험 데이터는 가상의 이름·번호(실명부를 쓰지 않는다). */
@@ -62,7 +62,8 @@ describe("배송 받는 사람 명부·문자 알림", () => {
     await expect(readContactsXlsx((await bad.xlsx.writeBuffer()) as ArrayBuffer)).rejects.toThrow(/머리글/);
   });
 
-  it("명부 올리기·이름으로 배송 → 그 사람에게 도착 문자·미수령 문자, 화면에는 번호를 가림", async () => {
+  it("명부 올리기·이름으로 배송 → (솔라피 방식) 그 사람에게 도착 문자·미수령 문자, 화면에는 번호를 가림", async () => {
+    process.env.DELIVERY_CONTACT_SMS = "solapi";
     const hq = await user("u-hq");
     await syncDeliveryCatalog(new AgentClient(agentMockTransport, MOCK_DEVICE_ID));
     await syncDeliveryState(new AgentClient(agentMockTransport, MOCK_DEVICE_ID));
@@ -101,6 +102,40 @@ describe("배송 받는 사람 명부·문자 알림", () => {
     expect(await sendDeliveryReminders()).toBe(1);
     expect(sms).toHaveLength(2);
     expect(sms[1].text).toContain("아직 수령");
+    delete process.env.DELIVERY_CONTACT_SMS;
+  });
+
+  it("(기본) 로봇 문자: 지시에 받는 사람 번호(국가번호 82·앞 0 뺌)를 넣고 Wide Bot 은 문자를 보내지 않는다, 트레이당 1명", async () => {
+    const hq = await user("u-hq");
+    await syncDeliveryCatalog(new AgentClient(agentMockTransport, MOCK_DEVICE_ID));
+    await syncDeliveryState(new AgentClient(agentMockTransport, MOCK_DEVICE_ID));
+    await setDeliveryRobotSite(hq, `DR-${MOCK_ROBOT.id}`, "site-01");
+    const { id } = await createDeliveryContact(hq, { siteId: "site-01", name: "가상삼", phone: "010-0000-0003", floor: "9F", destination: "2602" });
+    const { id: id2 } = await createDeliveryContact(hq, { siteId: "site-01", name: "가상사", phone: "01000000004" });
+    await expect(dispatchDelivery(hq, { robotId: `DR-${MOCK_ROBOT.id}`, trays: [{ destination: "2602", recipientContactIds: [id, id2] }] })).rejects.toThrow(/트레이마다 받는 사람 1명/);
+    await dispatchDelivery(hq, { robotId: `DR-${MOCK_ROBOT.id}`, trays: [{ destination: "2602", recipientContactIds: [id] }] });
+    const dest = (agentMockState.commands.at(-1)!.body as { trays: { destinations: { destination: string; id: string; phoneNum?: string; phoneCode?: string }[] }[] }).trays[0].destinations[0];
+    expect(dest).toMatchObject({ destination: "2602", phoneNum: "1000000003", phoneCode: "82" });
+    await ingestAgentNotify({ msgId: "r-1", msgType: "notifyDeliveryTask", robotId: MOCK_ROBOT.id, timestamp: Date.now(), data: { trays: [{ destinations: [{ destination: "2602", id: dest.id, status: "Arrived", type: "remote" }] }] } });
+    await processDeliveryEvents();
+    expect(sms).toHaveLength(0);
+    const leg = (await getDb().select().from(schema.deliveryLegs).where(eq(schema.deliveryLegs.taskRef, dest.id)))[0];
+    expect(leg.notifyResult).toContain("가상삼 문자: 로봇이 발송");
+  });
+
+  it("명부 한 명 추가·수정: 번호 형식·중복 거부, 번호는 바꿀 때만", async () => {
+    const hq = await user("u-hq");
+    await expect(createDeliveryContact(hq, { siteId: "site-01", name: "가상오", phone: "1234" })).rejects.toThrow(/형식/);
+    const { id } = await createDeliveryContact(hq, { siteId: "site-01", name: "가상오", phone: "010-0000-0005", floor: "7F", dept: "시험부" });
+    await expect(createDeliveryContact(hq, { siteId: "site-01", name: "가상오", phone: "01000000005" })).rejects.toThrow(/이미 명부/);
+    await updateDeliveryContact(hq, id, { name: "가상오수정", dept: "새부서", ext: "1234" });
+    let c = (await getDb().select().from(schema.deliveryContacts).where(eq(schema.deliveryContacts.id, id)))[0];
+    expect(c).toMatchObject({ name: "가상오수정", dept: "새부서", ext: "1234", phone: "01000000005" });
+    await updateDeliveryContact(hq, id, { phone: "010-0000-0055" });
+    c = (await getDb().select().from(schema.deliveryContacts).where(eq(schema.deliveryContacts.id, id)))[0];
+    expect(c.phone).toBe("01000000055");
+    await expect(updateDeliveryContact(hq, id, { phone: "12" })).rejects.toThrow(/형식/);
+    await expect(createDeliveryContact(await user("u-site-b"), { siteId: "site-01", name: "x", phone: "01000000006" })).rejects.toThrow(/권한/);
   });
 
   it("다른 사업장·사용 중지 명부로는 보낼 수 없다", async () => {

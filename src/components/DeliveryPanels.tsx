@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { addContactPresetsAction, callDeliveryRobotAction, cancelDeliveryCallAction, deleteDeliveryContactAction, importDeliveryContactsAction, updateDeliveryContactAction, deleteDeliveryPresetAction, deleteDeliveryRecipientsAction, deliverySyncNowAction, dispatchDeliveryAction, saveDeliveryPresetAction, saveDeliveryRecipientsAction, sendDeliveryPresetAction, setDeliveryRobotSiteAction } from "@/app/actions";
+import { addContactPresetsAction, createDeliveryContactAction, callDeliveryRobotAction, cancelDeliveryCallAction, deleteDeliveryContactAction, importDeliveryContactsAction, updateDeliveryContactAction, deleteDeliveryPresetAction, deleteDeliveryRecipientsAction, deliverySyncNowAction, dispatchDeliveryAction, saveDeliveryPresetAction, saveDeliveryRecipientsAction, sendDeliveryPresetAction, setDeliveryRobotSiteAction } from "@/app/actions";
 import { btn, ResultLine, useAction } from "./ActionButton";
 
 type Channel = "PUSH" | "EMAIL" | "KAKAO" | "TEAMS";
@@ -124,7 +124,7 @@ type Tray = { destination: string; recipientUserIds: string[]; recipientContactI
 const EMPTY_TRAY: Tray = { destination: "", recipientUserIds: [], recipientContactIds: [] };
 
 /** 이름으로 받는 사람 찾기(명부). 고르면 그 사람의 목적지가 비어 있는 트레이에 채워진다. */
-function ContactPicker({ contacts, chosen, onPick, onRemove }: { contacts: ContactLite[]; chosen: string[]; onPick: (c: ContactLite) => void; onRemove: (id: string) => void }) {
+function ContactPicker({ contacts, chosen, onPick, onRemove, max = 99 }: { contacts: ContactLite[]; chosen: string[]; onPick: (c: ContactLite) => void; onRemove: (id: string) => void; max?: number }) {
   const [q, setQ] = useState("");
   const hits = q.trim() ? contacts.filter((c) => c.active && !chosen.includes(c.id) && (c.name.includes(q.trim()) || (c.dept ?? "").includes(q.trim()))).slice(0, 6) : [];
   const nameOf = (id: string) => contacts.find((c) => c.id === id)?.name ?? id;
@@ -136,7 +136,7 @@ function ContactPicker({ contacts, chosen, onPick, onRemove }: { contacts: Conta
           <button type="button" aria-label={`${nameOf(id)} 빼기`} onClick={() => onRemove(id)}>×</button>
         </span>
       ))}
-      {contacts.length > 0 && (
+      {contacts.length > 0 && chosen.length < max && (
         <span className="relative">
           <input className="border rounded px-2 py-1 text-xs w-32" placeholder="이름·부서 검색" value={q} onChange={(e) => setQ(e.target.value)} />
           {hits.length > 0 && (
@@ -214,6 +214,7 @@ export function DispatchPanel({ robots, users, presets = [], contacts = [] }: { 
             <ContactPicker
               contacts={siteContacts}
               chosen={t.recipientContactIds}
+              max={1}
               onPick={(c) => setTray(i, { recipientContactIds: [...t.recipientContactIds, c.id], ...(t.destination || !c.destination || !dests.includes(c.destination) ? {} : { destination: c.destination }) })}
               onRemove={(id) => setTray(i, { recipientContactIds: t.recipientContactIds.filter((x) => x !== id) })}
             />
@@ -252,7 +253,7 @@ export function DispatchPanel({ robots, users, presets = [], contacts = [] }: { 
           <input className="border rounded px-2 py-1 text-xs w-40" placeholder="즐겨찾기 이름(예: 오전 우편)" value={presetName} onChange={(e) => setPresetName(e.target.value)} />
           <button type="button" className={btn.small} disabled={pending || !presetName.trim() || !trays.some((t) => t.destination) || !robot} onClick={() => run(async () => { const r = await saveDeliveryPresetAction({ siteId: robot!.siteId, name: presetName, trays: trays.filter((t) => t.destination), sort, executeTask }); if (r.ok) setPresetName(""); return r; })}>지금 내용을 즐겨찾기로 저장</button>
         </div>
-        <p className="text-xs text-gray-500">이름으로 고른 사람(명부)에게는 도착·미수령·취소 문자가, 체크한 직원 계정에게는 앱/메일 알림이 갑니다. 아무도 안 고르면 목적지 수신자에게 갑니다. 로봇이 배송 중이면 보낼 수 없습니다.</p>
+        <p className="text-xs text-gray-500">이름으로 고른 사람(명부)의 번호는 배송 지시와 함께 로봇에 들어가 <b>로봇이 도착 문자</b>를 보냅니다(트레이마다 1명). 체크한 직원 계정에게는 앱/메일 알림이 갑니다. 아무도 안 고르면 목적지 수신자에게 갑니다. 로봇이 배송 중이면 보낼 수 없습니다.</p>
       </div>
       <div className="rounded-lg border p-2 flex flex-wrap items-center gap-2">
         <span className="font-medium text-xs">이동(호출)</span>
@@ -281,6 +282,15 @@ export function ContactsPanel({ sites, contacts, destinationsBySite }: { sites: 
   const all = contacts.filter((c) => c.siteId === siteId);
   const list = all.filter((c) => (!q.trim() || c.name.includes(q.trim()) || (c.dept ?? "").includes(q.trim()) || (c.floor ?? "").includes(q.trim())) && (!onlyNoDest || !c.destination));
   const dests = destinationsBySite[siteId] ?? [];
+  const blank = { name: "", phone: "", floor: "", dept: "", ext: "", destination: "" };
+  const [add, setAdd] = useState(blank);
+  const [editId, setEditId] = useState<string | null>(null);
+  const [edit, setEdit] = useState(blank);
+  const startEdit = (c: ContactLite & { ext: string | null }) => {
+    setEditId(c.id);
+    setEdit({ name: c.name, phone: "", floor: c.floor ?? "", dept: c.dept ?? "", ext: c.ext ?? "", destination: c.destination ?? "" });
+  };
+  const field = "border rounded px-1.5 py-0.5 text-xs";
   return (
     <div className="space-y-3 text-sm">
       <form
@@ -295,6 +305,31 @@ export function ContactsPanel({ sites, contacts, destinationsBySite }: { sites: 
         <input type="file" name="file" accept=".xlsx" className="text-xs" required />
         <button type="submit" className={btn.secondary} disabled={pending}>엑셀 올리기</button>
         <span className="text-xs text-gray-500">머리글: 성명·근무층·부서명·전화번호·내선번호. 같은 이름+번호는 갱신됩니다. 근무층(예: 8F)은 로봇 목적지(8층)로 자동 연결됩니다.</span>
+      </form>
+      <form
+        className="flex flex-wrap items-center gap-1.5 rounded border p-2"
+        onSubmit={(e) => {
+          e.preventDefault();
+          run(async () => {
+            const r = await createDeliveryContactAction({ siteId, ...add });
+            if (r.ok) setAdd(blank);
+            return r;
+          });
+        }}
+      >
+        <span className="text-xs font-medium mr-1">한 명 추가</span>
+        <input id="dct-add-name" className={`${field} w-24`} placeholder="이름*" value={add.name} onChange={(e) => setAdd({ ...add, name: e.target.value })} required />
+        <input id="dct-add-phone" className={`${field} w-32`} placeholder="휴대폰* 010-…" value={add.phone} onChange={(e) => setAdd({ ...add, phone: e.target.value })} required inputMode="tel" />
+        <input id="dct-add-floor" className={`${field} w-16`} placeholder="근무층(8F)" value={add.floor} onChange={(e) => setAdd({ ...add, floor: e.target.value })} />
+        <input id="dct-add-dept" className={`${field} w-28`} placeholder="부서" value={add.dept} onChange={(e) => setAdd({ ...add, dept: e.target.value })} />
+        <input id="dct-add-ext" className={`${field} w-28`} placeholder="내선" value={add.ext} onChange={(e) => setAdd({ ...add, ext: e.target.value })} />
+        <select id="dct-add-dest" className={field} value={add.destination} onChange={(e) => setAdd({ ...add, destination: e.target.value })}>
+          <option value="">목적지(근무층으로 자동)</option>
+          {dests.map((d) => (
+            <option key={d} value={d}>{d}</option>
+          ))}
+        </select>
+        <button type="submit" className={btn.small} disabled={pending || !siteId}>추가</button>
       </form>
       <div className="flex flex-wrap items-center gap-2">
         <input className="border rounded px-2 py-1 text-xs w-44" placeholder="이름·부서·층 검색" value={q} onChange={(e) => setQ(e.target.value)} />
@@ -312,7 +347,41 @@ export function ContactsPanel({ sites, contacts, destinationsBySite }: { sites: 
               <tr><th>이름</th><th>근무층</th><th>부서</th><th>휴대폰</th><th>내선</th><th>목적지</th><th>사용</th><th></th></tr>
             </thead>
             <tbody>
-              {list.slice(0, 300).map((c) => (
+              {list.slice(0, 300).map((c) =>
+                editId === c.id ? (
+                  <tr key={c.id} className="bg-blue-50/50">
+                    <td><input className={`${field} w-20`} value={edit.name} onChange={(e) => setEdit({ ...edit, name: e.target.value })} aria-label="이름" /></td>
+                    <td><input className={`${field} w-14`} value={edit.floor} onChange={(e) => setEdit({ ...edit, floor: e.target.value })} aria-label="근무층" /></td>
+                    <td><input className={`${field} w-24`} value={edit.dept} onChange={(e) => setEdit({ ...edit, dept: e.target.value })} aria-label="부서" /></td>
+                    <td><input className={`${field} w-28`} placeholder={`${c.phoneMasked} (바꿀 때만)`} value={edit.phone} onChange={(e) => setEdit({ ...edit, phone: e.target.value })} aria-label="새 휴대폰 번호" inputMode="tel" /></td>
+                    <td><input className={`${field} w-24`} value={edit.ext} onChange={(e) => setEdit({ ...edit, ext: e.target.value })} aria-label="내선" /></td>
+                    <td>
+                      <select className={field} value={edit.destination} onChange={(e) => setEdit({ ...edit, destination: e.target.value })} aria-label="목적지">
+                        <option value="">미지정</option>
+                        {Array.from(new Set([...(edit.destination ? [edit.destination] : []), ...dests])).map((d) => (
+                          <option key={d} value={d}>{d}</option>
+                        ))}
+                      </select>
+                    </td>
+                    <td colSpan={2} className="whitespace-nowrap">
+                      <button
+                        type="button"
+                        className={btn.small}
+                        disabled={pending}
+                        onClick={() =>
+                          run(async () => {
+                            const r = await updateDeliveryContactAction(c.id, { name: edit.name, floor: edit.floor || null, dept: edit.dept || null, ext: edit.ext || null, destination: edit.destination || null, ...(edit.phone.trim() ? { phone: edit.phone } : {}) });
+                            if (r.ok) setEditId(null);
+                            return r;
+                          })
+                        }
+                      >
+                        저장
+                      </button>{" "}
+                      <button type="button" className={btn.small} onClick={() => setEditId(null)}>취소</button>
+                    </td>
+                  </tr>
+                ) : (
                 <tr key={c.id} className={c.active ? "" : "opacity-50"}>
                   <td className="whitespace-nowrap font-medium">{c.name}</td>
                   <td>{c.floor ?? "-"}</td>
@@ -329,11 +398,13 @@ export function ContactsPanel({ sites, contacts, destinationsBySite }: { sites: 
                   </td>
                   <td><input type="checkbox" checked={c.active} disabled={pending} onChange={(e) => run(() => updateDeliveryContactAction(c.id, { active: e.target.checked }))} aria-label={`${c.name} 사용`} /></td>
                   <td className="whitespace-nowrap">
+                    <button type="button" className={btn.small} disabled={pending} onClick={() => startEdit(c)}>수정</button>{" "}
                     <button type="button" className={btn.small} disabled={pending || !c.destination} onClick={() => run(() => addContactPresetsAction([c.id]))}>★ 즐겨찾기</button>{" "}
                     <button type="button" className={btn.small} disabled={pending} onClick={() => { if (confirm(`${c.name} 을(를) 명부에서 지울까요?`)) run(() => deleteDeliveryContactAction(c.id)); }}>삭제</button>
                   </td>
                 </tr>
-              ))}
+                ),
+              )}
             </tbody>
           </table>
           {list.length > 300 && <p className="text-xs text-gray-500 mt-1">앞 300명만 보입니다. 검색으로 좁히세요.</p>}
