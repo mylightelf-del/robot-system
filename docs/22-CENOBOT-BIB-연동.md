@@ -152,3 +152,5 @@
 ## 6. BIB(라이노스 Rhiverse) — 2026-11-26 확인
 - API 주소 `https://rhiverse.rhinos.ai/rhibot/api`(NestJS 계열 응답), 로그인 아이디 `posco-cgpohang`. `/robot`, `/robot/list`, `/robot/status`, `/robot/info` 는 **403 "Token required"**(토큰 인증). 로그인·토큰 발급 경로는 흔한 이름(auth/login, token 등)에서 찾지 못함(404).
 - 메일의 "키"는 `General/PROJECT/robot/rhibot/partner/posco-cgpohang/…-202611.pem` — 라이노스 **사내 저장소 경로**이지 다운로드 링크가 아니다. 실제 `.pem` 파일과 API 문서(토큰 발급 방법·엔드포인트·응답 형식)를 받아야 개발할 수 있다.
+- (2026-11-26 오후) `.pem` 수령: **Ed25519 개인키**. 서버 `.env` 에 봉인 전달로 보관(`BIB_API_BASE_URL`, `BIB_LOGIN_ID`, `BIB_PRIVATE_KEY_B64`, 코드 미사용).
+- 조회 시험: `Authorization: Bearer <이 키로 서명한 JWT(EdDSA, sub/iss=로그인 아이디)>` → **401 "authorization required"**(별도 오류 형식 — `Authorization` 헤더를 읽는 인증 계층은 맞음), `token`/`x-token` 헤더 → 403 "Token required". 즉 Authorization 헤더 방식이지만 토큰 형식(서명 대상·클레임·발급 절차)이 다르다. **문서 없이 더 추측하지 않는다** — 라이노스에 인증 방식 문서 요청.
