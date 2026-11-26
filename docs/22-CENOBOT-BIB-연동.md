@@ -154,3 +154,10 @@
 - 메일의 "키"는 `General/PROJECT/robot/rhibot/partner/posco-cgpohang/…-202611.pem` — 라이노스 **사내 저장소 경로**이지 다운로드 링크가 아니다. 실제 `.pem` 파일과 API 문서(토큰 발급 방법·엔드포인트·응답 형식)를 받아야 개발할 수 있다.
 - (2026-11-26 오후) `.pem` 수령: **Ed25519 개인키**. 서버 `.env` 에 봉인 전달로 보관(`BIB_API_BASE_URL`, `BIB_LOGIN_ID`, `BIB_PRIVATE_KEY_B64`, 코드 미사용).
 - 조회 시험: `Authorization: Bearer <이 키로 서명한 JWT(EdDSA, sub/iss=로그인 아이디)>` → **401 "authorization required"**(별도 오류 형식 — `Authorization` 헤더를 읽는 인증 계층은 맞음), `token`/`x-token` 헤더 → 403 "Token required". 즉 Authorization 헤더 방식이지만 토큰 형식(서명 대상·클레임·발급 절차)이 다르다. **문서 없이 더 추측하지 않는다** — 라이노스에 인증 방식 문서 요청.
+
+### 6-1. BIB 연동 구현(2026-11-26, 「파트너 로봇 API 연동 가이드 v0.1」 기준) — 조회 전용
+- **인증**: `POST /partner/v1/auth/service` { serviceKey, timestamp(초, ±180s), nonceB64, signatureB64 = Ed25519(serviceKey+timestamp+nonceB64) } → 201 accessToken(24시간). 실기 확인: 로그인 성공, 계정 로봇 2대(CG_습식 `J40-20-CP-SZ342740-0006`, CG_건식 `J40-23-CP-352935-2584`). 토큰은 메모리에만, 만료 30초 전 재로그인, 조회 401 은 1회만 재로그인.
+- **코드**: `src/lib/vendors/bib/{client,api,mapping,bibAdapter}.ts`, 워커 `src/worker/bib.ts`(목록·등록 작업 60분, 상태 60초), 「지금 업데이트」 버튼에도 포함. 모드: 접속 정보가 있으면 live(끄기 `BIB_MODE=unconfigured`).
+- **받는 것**: 로봇 연결(일련번호=handle1 → PW-R-012·013, 다시 사용), 상태(온라인·배터리·활동: WORKING/작업 있는 BUSY=청소 중, 작업 없는 BUSY=대기, PAUSED, OFFLINE)·현재 작업·현재 지도 이름(원시값), 등록 작업 목록.
+- **안 하는 것**: 제어(작업 시작·일시정지·재개·중지 — 계정에는 권한이 있으나 Wide Bot 은 요청 전에 막음), 로봇 층 자동 변경(현재 지도 CGP7F 등은 원시값에만).
+- **가이드에 없는 것(TODO)**: 청소 실적·작업 이력·장애(오류) 이력 API → 실적·장애·보고서 반영 불가. 라이노스에 이력 API 유무 문의. 지도 이미지(`localmap/{handle}`)·위치(image/pixel 좌표)는 지원 — 층 지도 표시는 다음 단계.

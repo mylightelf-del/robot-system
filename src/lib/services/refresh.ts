@@ -30,7 +30,7 @@ export async function lastRobotRefreshAt(): Promise<string | null> {
   const rows = await getDb()
     .select({ lastOkAt: schema.vendorSyncState.lastOkAt })
     .from(schema.vendorSyncState)
-    .where(inArray(schema.vendorSyncState.id, ["PUDU:status", "CENOBOTS:status", "PUDU:delivery-op-state"]));
+    .where(inArray(schema.vendorSyncState.id, ["PUDU:status", "CENOBOTS:status", "BIB:status", "PUDU:delivery-op-state"]));
   const ts = rows.map((r) => r.lastOkAt).filter((x): x is string => !!x).sort();
   return ts.at(-1) ?? null;
 }
@@ -68,6 +68,11 @@ export async function refreshRobotsAndSchedules(user?: User): Promise<RefreshRes
       await step(steps, `CENOBOT 로봇 상태${tag}`, () => cz.syncCenobotsStatus());
       await step(steps, `CENOBOT 작업·일정${tag}`, () => cz.syncCenobotsCatalog(api));
       await step(steps, `CENOBOT 예정 회차${tag}`, () => cz.syncCenobotsPlannedRuns());
+    }
+    const bib = await import("@/worker/bib");
+    if (bib.bibEnabled()) {
+      await step(steps, "BIB 로봇·작업", () => bib.syncBibCatalog());
+      await step(steps, "BIB 로봇 상태", () => bib.syncBibStatus());
     }
     const delivery = await import("@/lib/services/delivery");
     if (delivery.openPlatformEnabled() && pudu.puduLiveEnabled()) {

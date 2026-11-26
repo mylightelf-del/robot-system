@@ -6,6 +6,7 @@
  * 실행: npm run worker  (DATABASE_URL 필요)
  */
 import { closeDb } from "@/lib/db/client";
+import { bibEnabled, syncBibCatalog, syncBibStatus } from "./bib";
 import { purgeExpiredSessions } from "@/lib/auth/session";
 import { simulationTick } from "./simulation";
 import { processPuduEvents, puduLiveEnabled, PUDU_WINDOW_HOURS, syncPuduCatalog, syncPuduErrors, syncPuduPlannedRuns, syncPuduReports, syncPuduStatus } from "./pudu";
@@ -81,6 +82,20 @@ async function main() {
     );
   } else if (vendorMode !== "sample") {
     log("live 모드이지만 PUDU 키가 설정되지 않았습니다(PUDU_API_APP_KEY/SECRET/CLUSTER).");
+  }
+  // BIB(라이노스 Rhiverse) — 조회 전용(docs/22 §6). 접속 정보가 없거나 BIB_MODE=unconfigured 면 끔.
+  if (bibEnabled()) {
+    const bStatusSec = Number(process.env.BIB_POLL_STATUS_SECONDS ?? 60);
+    const bCatalogMin = Number(process.env.BIB_POLL_CATALOG_MINUTES ?? 60);
+    log(`BIB live: 상태 ${bStatusSec}s · 로봇 목록/등록 작업 ${bCatalogMin}m`);
+    const reportB = (r: { job: string; ok: boolean; detail: string }) => log(`BIB ${r.job}: ${r.ok ? "OK" : "실패"} — ${r.detail}`);
+    jobs.push(loop("bib-catalog", bCatalogMin * 60_000, async () => reportB(await syncBibCatalog())));
+    jobs.push(
+      loop("bib-status", bStatusSec * 1000, async () => {
+        const r = await syncBibStatus();
+        if (!r.ok) reportB(r);
+      }),
+    );
   }
   // CENOBOTS(CZ Robots) — 조회 전용. CENOBOTS_MODE=mock 이면 픽스처(운영 서버에서는 dry-run), unconfigured 면 끔.
   if (cenobotsEnabled()) {
