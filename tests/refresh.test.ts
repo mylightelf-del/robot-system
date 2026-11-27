@@ -22,7 +22,7 @@ describe("로봇 현황·일정 지금 업데이트", () => {
 
   it("켜진 연동(CENOBOT 모의)의 상태·작업/일정·예정 회차를 돌리고, 감사 기록·마지막 업데이트 시각을 남긴다", async () => {
     const r = await refreshRobotsAndSchedules(await user("u-hq"));
-    expect(r.steps.map((s) => s.name)).toEqual(["CENOBOT 로봇 상태", "CENOBOT 작업·일정", "CENOBOT 예정 회차"]);
+    expect(r.steps.map((s) => s.name)).toEqual(["CENOBOT 로봇 상태", "CENOBOT 작업·일정", "CENOBOT 예정 회차", "CENOBOT 층 지도"]);
     expect(r.steps.every((s) => s.ok)).toBe(true);
     const logs = await getDb().select().from(schema.auditLogs).where(eq(schema.auditLogs.action, "SYNC:MANUAL_REFRESH"));
     expect(logs).toHaveLength(1);

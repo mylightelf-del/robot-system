@@ -5,6 +5,8 @@ import { getSite, getStatus, siteAt } from "@/lib/db/repo";
 import { storeRunImage } from "@/lib/services/coverage";
 import { snapshotMaintenance } from "@/lib/services/maintenance";
 import { nowIso } from "@/lib/util/time";
+import { cornersToPixel, type MapCorners } from "@/lib/domain/types";
+import { importExternalMap, syncVendorFloorMaps } from "@/lib/services/vendorMaps";
 import { vendorMode } from "@/lib/vendors";
 import { allMissions, type CenobotsApi } from "@/lib/vendors/cenobots/api";
 import { CenobotsAdapter, cenobotsSettings, createCenobotsApi, isAllowedDevice, openIdOf } from "@/lib/vendors/cenobots/cenobotsAdapter";
@@ -127,6 +129,54 @@ export async function syncCenobotsCatalog(api: CenobotsApi = createCenobotsApi()
     }
     return { detail: `허용 장비 ${devices.length}대 · 연결 ${bound} · 예약 ${schedules} · 소모품 ${components}`, counts: { devices: devices.length, bound, schedules, components } };
   });
+}
+
+/**
+ * 층 지도 맞추기(조회만): 로봇의 지도들(유효한 것)을 이름으로 사업장 층에 짝지어, 지도 그림(pic-with-points)·네 모서리·구역을 가져온다.
+ * 규칙은 services/vendorMaps(층 지도만 바꿈, 다른 회사 지도는 그대로, 같은 이름의 새 판만 다시).
+ */
+export async function syncCenobotsMaps(api: CenobotsApi = createCenobotsApi()): Promise<SyncResult> {
+  return sync("maps", async (): Promise<{ detail: string; counts: Record<string, number> }> => {
+    if (cenobotsDryRun()) return { detail: "모의(dry-run): 지도 가져오기 안 함", counts: { dryRun: 1 } };
+    const robots = await cenobotsRobots();
+    const list = [];
+    const mapIds = new Map<string, number>();
+    for (const robot of robots) {
+      const openId = openIdOf(robot)!;
+      const maps = await api.maps(openId).catch(() => []);
+      for (const m of maps) mapIds.set(`${openId}|${m.mapVersion}`, m.mapId);
+      list.push({ robot, maps: maps.filter((m) => m.valid !== false && m.mapVersion).map((m) => ({ name: m.mapName, version: m.mapVersion, inUse: !!m.inUse })) });
+    }
+    return syncVendorFloorMaps("CENOBOTS", list, async (floorId, robot, ref) => {
+      const openId = openIdOf(robot)!;
+      const pic = await api.mapPic(ref.version);
+      if (!pic?.picUrl || !pic.width || !pic.height) throw new Error("지도 그림 응답이 비어 있음");
+      const v = pic.vertexCoordinates;
+      const corners: MapCorners | null = v && v.length === 4 ? { bl: [v[0].x, v[0].y], tl: [v[1].x, v[1].y], tr: [v[2].x, v[2].y], br: [v[3].x, v[3].y] } : null;
+      const zones = [];
+      const mapId = mapIds.get(`${openId}|${ref.version}`);
+      if (corners && mapId) {
+        const shape = { widthPx: pic.width, heightPx: pic.height, corners };
+        const ar = await api.areas(openId, mapId).catch(() => null);
+        for (const a of ar?.areaList ?? []) {
+          const geo = (a.geo ?? []).filter((g) => Number.isFinite(g.x) && Number.isFinite(g.y));
+          const poly = geo.map((g) => cornersToPixel(shape, g.x, g.y)).filter((p): p is { x: number; y: number } => !!p).map((p) => [Math.round(p.x), Math.round(p.y)] as [number, number]);
+          if (poly.length >= 3) zones.push({ name: a.name, polygonPx: poly, areaM2: shoelaceM2(geo), vendorId: a.id });
+        }
+      }
+      const r = await importExternalMap({ floorId, vendor: "CENOBOTS", mapName: ref.name, mapVersion: ref.version, widthPx: pic.width, heightPx: pic.height, corners, image: { url: pic.picUrl }, zones });
+      return `「${ref.name}」 가져옴 v${r.version}(${robot.id}) · 모서리 ${corners ? "있음" : "없음(위치 표시 불가)"} · 구역 ${r.zones}개 · 그림 ${r.imageStored ? "보관" : `실패(${r.imageError})`}`;
+    });
+  });
+}
+
+function shoelaceM2(pts: { x: number; y: number }[]): number {
+  let s = 0;
+  for (let i = 0; i < pts.length; i++) {
+    const a = pts[i], b = pts[(i + 1) % pts.length];
+    s += a.x * b.y - b.x * a.y;
+  }
+  return Math.round((Math.abs(s) / 2) * 10) / 10;
 }
 
 /** 상태 폴링 → robot_status. 조회 실패는 '미수신'(상태를 지어내지 않음). */

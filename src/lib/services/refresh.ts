@@ -68,10 +68,12 @@ export async function refreshRobotsAndSchedules(user?: User): Promise<RefreshRes
       await step(steps, `CENOBOT 로봇 상태${tag}`, () => cz.syncCenobotsStatus());
       await step(steps, `CENOBOT 작업·일정${tag}`, () => cz.syncCenobotsCatalog(api));
       await step(steps, `CENOBOT 예정 회차${tag}`, () => cz.syncCenobotsPlannedRuns());
+      await step(steps, `CENOBOT 층 지도${tag}`, () => cz.syncCenobotsMaps(api));
     }
     const bib = await import("@/worker/bib");
     if (bib.bibEnabled()) {
       await step(steps, "BIB 로봇·작업", () => bib.syncBibCatalog());
+      await step(steps, "BIB 층 지도", () => bib.syncBibMaps());
       await step(steps, "BIB 로봇 상태", () => bib.syncBibStatus());
     }
     const delivery = await import("@/lib/services/delivery");

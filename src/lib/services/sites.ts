@@ -367,7 +367,6 @@ export const mapImagePath = (mapVersionId: string) => `/api/maps/${encodeURIComp
 
 /** 원본 URL 에서 이미지를 내려받아 DB(map_images)에 두고 지도 버전의 imageUrl 을 우리 경로로 바꾼다. */
 export async function storeMapImage(mapVersionId: string, sourceUrl: string): Promise<{ ok: true; size: number } | { ok: false; error: string }> {
-  const db = getDb();
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), Number(process.env.MAP_IMAGE_FETCH_TIMEOUT_MS ?? 30000));
@@ -379,23 +378,35 @@ export async function storeMapImage(mapVersionId: string, sourceUrl: string): Pr
     }
     if (!res.ok) return { ok: false, error: `이미지 응답 HTTP ${res.status}` };
     const buf = Buffer.from(await res.arrayBuffer());
-    if (buf.length === 0) return { ok: false, error: "빈 응답" };
-    // 실기: PUDU S3 는 Content-Type 을 binary/octet-stream 으로 준다 → 파일 머리(매직 바이트)로 형식을 정한다
     const headerType = (res.headers.get("content-type") ?? "").split(";")[0].trim();
-    const contentType = sniffImageType(buf) ?? (headerType.startsWith("image/") ? headerType : null);
-    if (!contentType) return { ok: false, error: `이미지가 아닌 응답(${headerType || "형식 불명"})` };
-    if (buf.length > MAP_IMAGE_MAX_BYTES) return { ok: false, error: `이미지가 너무 큼(${Math.round(buf.length / 1024 / 1024)}MB > 15MB)` };
-    await db.transaction(async (tx) => {
-      await tx
-        .insert(schema.mapImages)
-        .values({ mapVersionId, contentType, bytes: buf, size: buf.length, sourceUrl, fetchedAt: nowIso() })
-        .onConflictDoUpdate({ target: schema.mapImages.mapVersionId, set: { contentType, bytes: buf, size: buf.length, sourceUrl, fetchedAt: nowIso() } });
-      await tx.update(schema.mapVersions).set({ imageUrl: mapImagePath(mapVersionId) }).where(eq(schema.mapVersions.id, mapVersionId));
-    });
-    return { ok: true, size: buf.length };
+    return await storeMapImageBytes(mapVersionId, buf, sourceUrl, headerType);
   } catch (e) {
     return { ok: false, error: (e as Error).name === "AbortError" ? "이미지 내려받기 시간 초과" : `이미지 내려받기 실패: ${(e as Error).message}` };
   }
+}
+
+/** 받은 이미지 바이트를 보관(BIB 는 BASE64 로 직접 준다). sourceUrl 은 다시 받기용(BASE64 면 "bib:<robotId>/<handle>" 같은 표시). */
+export async function storeMapImageBytes(mapVersionId: string, buf: Buffer, sourceUrl: string, headerType = ""): Promise<{ ok: true; size: number } | { ok: false; error: string }> {
+  if (buf.length === 0) return { ok: false, error: "빈 응답" };
+  // 실기: PUDU S3 는 Content-Type 을 binary/octet-stream 으로 준다 → 파일 머리(매직 바이트)로 형식을 정한다
+  const contentType = sniffImageType(buf) ?? (headerType.startsWith("image/") ? headerType : null);
+  if (!contentType) return { ok: false, error: `이미지가 아닌 응답(${headerType || "형식 불명"})` };
+  if (buf.length > MAP_IMAGE_MAX_BYTES) return { ok: false, error: `이미지가 너무 큼(${Math.round(buf.length / 1024 / 1024)}MB > 15MB)` };
+  await getDb().transaction(async (tx) => {
+    await tx
+      .insert(schema.mapImages)
+      .values({ mapVersionId, contentType, bytes: buf, size: buf.length, sourceUrl, fetchedAt: nowIso() })
+      .onConflictDoUpdate({ target: schema.mapImages.mapVersionId, set: { contentType, bytes: buf, size: buf.length, sourceUrl, fetchedAt: nowIso() } });
+    await tx.update(schema.mapVersions).set({ imageUrl: mapImagePath(mapVersionId) }).where(eq(schema.mapVersions.id, mapVersionId));
+  });
+  return { ok: true, size: buf.length };
+}
+
+/** PNG/GIF/JPEG/WebP 머리에서 크기(px) 읽기 — PNG·GIF 만(지도는 PNG). 모르면 null. */
+export function imageSize(buf: Buffer): { width: number; height: number } | null {
+  if (buf.length >= 24 && buf[0] === 0x89 && buf[1] === 0x50) return { width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) };
+  if (buf.length >= 10 && buf.subarray(0, 4).toString("ascii") === "GIF8") return { width: buf.readUInt16LE(6), height: buf.readUInt16LE(8) };
+  return null;
 }
 
 /** 현재 지도 버전의 지점(충전소 등)·금지 구역만 제조사에서 다시 받아 채운다(새 버전을 만들지 않음, 구역·이미지는 그대로). */
@@ -438,7 +449,17 @@ export async function refetchMapImage(user: User, mapVersionId: string): Promise
   const stored = await db.query.mapImages.findFirst({ where: eq(schema.mapImages.mapVersionId, mapVersionId) });
   const source = stored?.sourceUrl ?? (map.imageUrl && !map.imageUrl.startsWith("/api/") ? map.imageUrl : null);
   if (!source) throw new ValidationError("원본 이미지 URL 이 없습니다(제조사 지도를 다시 가져오세요).");
-  const r = await storeMapImage(mapVersionId, source);
+  let r: Awaited<ReturnType<typeof storeMapImage>>;
+  const bib = /^bib:([^/]+)\/(.+)$/.exec(source);
+  if (bib) {
+    // BIB 는 그림을 BASE64·URL 로 그때그때 준다 → 같은 지도(handle)를 다시 조회
+    const m = await (await import("@/lib/vendors/bib/api")).createBibApi().localMap(bib[1], bib[2]);
+    if (m.image.type === "BASE64") r = await storeMapImageBytes(mapVersionId, Buffer.from(m.image.data, "base64"), source, m.image.mimeType ?? "");
+    else if (m.image.type === "URL") {
+      r = await storeMapImage(mapVersionId, m.image.data);
+      if (r.ok) await db.update(schema.mapImages).set({ sourceUrl: source }).where(eq(schema.mapImages.mapVersionId, mapVersionId));
+    } else throw new ValidationError(`알 수 없는 그림 형식(${m.image.type})`);
+  } else r = await storeMapImage(mapVersionId, source);
   if (!r.ok) throw new ValidationError(r.error);
   await audit(user, { siteId: null, robotId: null, action: "FLOOR:REFETCH_MAP_IMAGE", params: { mapVersionId, size: r.size }, result: "OK", detail: null, vendorTraceId: null });
   return { size: r.size };

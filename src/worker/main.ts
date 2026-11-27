@@ -6,12 +6,12 @@
  * 실행: npm run worker  (DATABASE_URL 필요)
  */
 import { closeDb } from "@/lib/db/client";
-import { bibEnabled, syncBibCatalog, syncBibStatus } from "./bib";
+import { bibEnabled, syncBibCatalog, syncBibMaps, syncBibStatus } from "./bib";
 import { purgeExpiredSessions } from "@/lib/auth/session";
 import { simulationTick } from "./simulation";
 import { processPuduEvents, puduLiveEnabled, PUDU_WINDOW_HOURS, syncPuduCatalog, syncPuduErrors, syncPuduPlannedRuns, syncPuduReports, syncPuduStatus } from "./pudu";
 import { createPuduApi } from "@/lib/vendors/pudu/puduAdapter";
-import { cenobotsDryRun, cenobotsEnabled, processCenobotsEvents, syncCenobotsCatalog, syncCenobotsErrors, syncCenobotsPlannedRuns, syncCenobotsReports, syncCenobotsStatus } from "./cenobots";
+import { cenobotsDryRun, cenobotsEnabled, processCenobotsEvents, syncCenobotsCatalog, syncCenobotsErrors, syncCenobotsMaps, syncCenobotsPlannedRuns, syncCenobotsReports, syncCenobotsStatus } from "./cenobots";
 import { createCenobotsApi } from "@/lib/vendors/cenobots/cenobotsAdapter";
 import { agentMode } from "@/lib/delivery/agent";
 import { checkStuckRobots, createAgentClient, deliveryShopIds, openPlatformEnabled, processDeliveryEvents, recordDeliverySync, sendDeliveryReminders, syncDeliveryCatalog, syncDeliveryState, syncOpenPlatformCatalog, syncOpenPlatformState } from "@/lib/services/delivery";
@@ -89,7 +89,12 @@ async function main() {
     const bCatalogMin = Number(process.env.BIB_POLL_CATALOG_MINUTES ?? 60);
     log(`BIB live: 상태 ${bStatusSec}s · 로봇 목록/등록 작업 ${bCatalogMin}m`);
     const reportB = (r: { job: string; ok: boolean; detail: string }) => log(`BIB ${r.job}: ${r.ok ? "OK" : "실패"} — ${r.detail}`);
-    jobs.push(loop("bib-catalog", bCatalogMin * 60_000, async () => reportB(await syncBibCatalog())));
+    jobs.push(
+      loop("bib-catalog", bCatalogMin * 60_000, async () => {
+        reportB(await syncBibCatalog());
+        reportB(await syncBibMaps());
+      }),
+    );
     jobs.push(
       loop("bib-status", bStatusSec * 1000, async () => {
         const r = await syncBibStatus();
@@ -105,7 +110,12 @@ async function main() {
     const catalogMin = Number(process.env.CENOBOTS_POLL_CATALOG_MINUTES ?? 60);
     log(`CENOBOTS ${vendorModes().CENOBOTS}${cenobotsDryRun() ? "(dry-run: 운영 DB 적재 안 함)" : ""}: 상태 ${statusSec}s · 작업 이력/장애 ${reportsMin}m · 장비/예약/소모품 ${catalogMin}m · 웹훅 처리 5s`);
     const report = (r: { job: string; ok: boolean; detail: string }) => log(`CENOBOTS ${r.job}: ${r.ok ? "OK" : "실패"} — ${r.detail}`);
-    jobs.push(loop("cenobots-catalog", catalogMin * 60_000, async () => report(await syncCenobotsCatalog(api))));
+    jobs.push(
+      loop("cenobots-catalog", catalogMin * 60_000, async () => {
+        report(await syncCenobotsCatalog(api));
+        report(await syncCenobotsMaps(api));
+      }),
+    );
     jobs.push(loop("cenobots-status", statusSec * 1000, async () => report(await syncCenobotsStatus())));
     jobs.push(
       loop("cenobots-reports", reportsMin * 60_000, async () => {

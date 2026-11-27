@@ -1,4 +1,5 @@
-import type { ActualRun, MaintenanceItem, Robot, RobotStatus } from "@/lib/domain/types";
+import { cornersToPixel, headingOnMap, type ActualRun, type MaintenanceItem, type Robot, type RobotStatus } from "@/lib/domain/types";
+import { siteMapFor } from "@/lib/services/vendorMaps";
 import type { SendResult, VendorAdapter } from "@/lib/vendors/adapter";
 import { AppError } from "@/lib/util/errors";
 import { nowIso } from "@/lib/util/time";
@@ -55,6 +56,12 @@ export class CenobotsAdapter implements VendorAdapter {
     const receivedAt = nowIso();
     const s = await this.api.status(openId);
     const m = mapDeviceStatus(s);
+    const map = await siteMapFor(robot, "CENOBOTS", s.currentMapVersion);
+    let pose: RobotStatus["pose"] = null;
+    if (map?.corners && s.pose && Number.isFinite(s.pose.x) && Number.isFinite(s.pose.y)) {
+      const px = cornersToPixel(map, s.pose.x, s.pose.y);
+      if (px) pose = { x: Math.round(px.x), y: Math.round(px.y), headingDeg: headingOnMap(map, s.pose.x, s.pose.y, Number(s.pose.yaw) || 0) };
+    }
     const pos = s.pose ? ` pos=(${s.pose.x.toFixed(1)}, ${s.pose.y.toFixed(1)})m map=${s.currentMapName ?? "-"}` : "";
     return {
       robotId: robot.id,
@@ -62,10 +69,10 @@ export class CenobotsAdapter implements VendorAdapter {
       raw: `${m.raw}${pos}`,
       online: !!s.online,
       batteryPct: typeof s.soc === "number" ? s.soc : null,
-      // 층 지도(제조사 지도·모서리 좌표) 가져오기 전에는 위치를 그리지 않는다(미터를 px 로 오인하지 않도록). 원시값에 좌표만 남긴다.
-      pose: null,
-      poseIsLastKnown: true,
-      mapVersionId: null,
+      // 층 지도가 로봇이 쓰는 그 지도(같은 판·네 모서리)일 때만 위치를 그린다. 아니면 원시값에 좌표만 남긴다(미터를 px 로 오인하지 않도록).
+      pose,
+      poseIsLastKnown: !s.online || !pose,
+      mapVersionId: map?.id ?? null,
       currentMissionId: m.missionId,
       progressPct: m.progressPct,
       lastReceivedAt: receivedAt,

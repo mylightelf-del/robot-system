@@ -94,12 +94,38 @@ export interface MapVersion {
   /** 제조사 지도에서 가져온 경우. 샘플 지도는 모두 없음. */
   vendor?: Vendor | null;
   vendorMapName?: string | null; // 예: PUDU "1#2#포스코센터1층_"
+  vendorMapVersion?: string | null; // CENOBOT mapVersion · BIB mapHandle
   imageUrl?: string | null;
   resolution?: number | null; // m/px
   origin?: [number, number] | null; // 이미지 좌하단 픽셀의 월드 좌표(m) — ROS 지도 관례
   /** 제조사 지도의 지점(충전소 등)과 금지 구역. 없으면 표시하지 않는다. */
   points?: MapPoint[] | null;
   forbidden?: [number, number][][] | null;
+}
+
+/**
+ * 네 모서리(월드 좌표) 기준 월드 → 이미지 픽셀(CENOBOT pic-with-points: 좌하·좌상·우상·우하).
+ * 좌하를 기준으로 (우하−좌하)·(좌상−좌하) 두 축으로 풀어 비율을 구한다(회전된 지도도 처리). 축이 겹치면 null.
+ */
+export function cornersToPixel(map: Pick<MapVersion, "widthPx" | "heightPx" | "corners">, x: number, y: number): { x: number; y: number } | null {
+  const c = map.corners;
+  if (!c) return null;
+  const ax = c.br[0] - c.bl[0], ay = c.br[1] - c.bl[1]; // 가로 축(좌→우)
+  const bx = c.tl[0] - c.bl[0], by = c.tl[1] - c.bl[1]; // 세로 축(아래→위)
+  const det = ax * by - ay * bx;
+  if (Math.abs(det) < 1e-9) return null;
+  const dx = x - c.bl[0], dy = y - c.bl[1];
+  const u = (dx * by - dy * bx) / det;
+  const v = (ax * dy - ay * dx) / det;
+  return { x: u * map.widthPx, y: (1 - v) * map.heightPx };
+}
+
+/** 월드 방향(yaw, 라디안, x축에서 반시계) → 화면 화살표 각도(도, 위쪽 0·시계 방향). 모서리 변환으로 구해 회전·뒤집힌 지도도 맞춘다. */
+export function headingOnMap(map: Pick<MapVersion, "widthPx" | "heightPx" | "corners">, x: number, y: number, yawRad: number): number {
+  const a = cornersToPixel(map, x, y);
+  const b = cornersToPixel(map, x + Math.cos(yawRad), y + Math.sin(yawRad));
+  if (!a || !b) return 0;
+  return Math.round(((Math.atan2(b.x - a.x, -(b.y - a.y)) * 180) / Math.PI + 360) % 360);
 }
 
 /** 월드 좌표(m) → 이미지 픽셀. ROS/PUDU 관례: u=(x-ox)/res, v=height-(y-oy)/res */

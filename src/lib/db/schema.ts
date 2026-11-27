@@ -98,6 +98,8 @@ export const mapVersions = pgTable("map_versions", {
   // 제조사 지도(실기: PUDU GetMapDetailV2) — 이미지 URL, 해상도(m/px), 원점(이미지 좌하단의 월드 좌표 m). 샘플 지도는 모두 null.
   vendor: text().$type<Vendor>(),
   vendorMapName: text(),
+  /** 제조사 지도 판(CENOBOT mapVersion, BIB mapHandle). 같은 이름이라도 판이 바뀌면 다시 가져온다. */
+  vendorMapVersion: text(),
   imageUrl: text(),
   resolution: doublePrecision(),
   origin: jsonb().$type<[number, number] | null>(),

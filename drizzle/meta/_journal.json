@@ -169,6 +169,13 @@
       "when": 1795665691643,
       "tag": "0023_delivery_contacts",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1795737336179,
+      "tag": "0024_map_vendor_version",
+      "breakpoints": true
     }
   ]
 }

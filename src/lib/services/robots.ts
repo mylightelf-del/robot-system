@@ -78,7 +78,12 @@ export async function getSiteView(user: User, siteId: string, floorId?: string):
   if (!map) throw new NotFoundError("지도 정보가 없습니다.");
   const zones = await listZonesByFloor(selectedFloor.id, db);
   const mapVersions = (await db.select().from(schema.mapVersions).where(eq(schema.mapVersions.floorId, selectedFloor.id))).map((m) => ({ ...m, corners: m.corners ?? null }));
-  const robots = (await listRobots(user, siteId)).filter((r) => r.floor.id === selectedFloor.id);
+  // 로봇이 지금 쓰는 지도가 다른 층의 현재 지도면 그 층에 보인다(CENOBOT·BIB 는 한 대가 여러 층을 오간다). 로봇의 등록 층은 바꾸지 않는다.
+  const floorOfMap = new Map(floors.map((f) => [f.currentMapVersionId, f.id]));
+  const robots = (await listRobots(user, siteId)).filter((r) => {
+    const onMap = r.status.mapVersionId ? floorOfMap.get(r.status.mapVersionId) : undefined;
+    return onMap ? onMap === selectedFloor.id : r.floor.id === selectedFloor.id;
+  });
   return { site, floors, selectedFloor, map, mapVersions, zones, robots, now: nowIso() };
 }
 
