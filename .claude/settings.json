@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(./docs/screenshots/**)",
+      "Read(./drizzle/meta/**)",
+      "Read(./package-lock.json)",
+      "Read(./mobile/package-lock.json)"
+    ]
+  }
+}
